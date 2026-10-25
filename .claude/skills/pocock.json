@@ -1,5 +1,5 @@
 {
-  "_about": "His skills copied byte for byte from `upstream` at `commit` (#397 decision 1): per copy its upstream path and the git blob hash of every file; `not_copied` his skills left out and why. Written by `python -m orch_it skills update`; a skill folder this file does not name is ours.",
+  "_about": "His skills copied byte for byte from `upstream` at `commit` (#397 decision 1): per copy its upstream path and the git blob hash of every file; `not_copied` his skills left out and why. Written with the copies by `orch_it.skills.copies.write`; a skill folder this file does not name is ours.",
   "upstream": "https://github.com/mattpocock/skills",
   "commit": "49dd158d1076134a641b33efb035946536778336",
   "skills": {

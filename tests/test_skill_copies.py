@@ -196,6 +196,99 @@ def test_a_bad_or_half_written_manifest_is_refused_with_its_code(tmp_path, text,
     assert e.value.code == code
 
 
+def test_a_write_cut_part_way_is_named_by_verify_and_finished_by_the_same_write(tmp_path, monkeypatch):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+    tree = copies.read_tree(root, commit)
+    repo = tmp_path / "repo"
+    manifest = Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={})
+    real, calls = copies._replace_bytes, []
+
+    def cut(path, data):
+        calls.append(path)
+        if len(calls) == 3:
+            raise OSError("disk gone")
+        real(path, data)
+
+    monkeypatch.setattr(copies, "_replace_bytes", cut)
+    with pytest.raises(OSError):
+        copies.write(repo, tree, manifest)
+    monkeypatch.setattr(copies, "_replace_bytes", real)
+    assert Manifest.load(repo) is None
+    copies.write(repo, tree, Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={}))
+    assert copies.verify(repo) == []
+    assert not (repo / ".claude" / "skills" / "pocock.pending.json").exists()
+
+
+def test_verify_names_a_cut_write(tmp_path):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+    tree = copies.read_tree(root, commit)
+    copies.write(tmp_path, tree, Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={}))
+    (tmp_path / ".claude" / "skills" / "pocock.pending.json").write_text('["alpha"]', "utf-8")
+    assert copies.verify(tmp_path) == ["pocock.pending.json: a write was cut part-way"]
+
+
+def test_a_path_that_turns_from_a_file_into_a_folder_and_back_is_rewritten(tmp_path):
+    repo = tmp_path / "repo"
+    as_file = {"skills/x/a": {"SKILL.md": b"a\n", "refs": b"one file\n"}}
+    as_folder = {"skills/x/a": {"SKILL.md": b"a\n", "refs/x.md": b"in a folder\n"}}
+    for tree in (as_file, as_folder, as_file):
+        copies.write(repo, tree, Manifest.build(tree, upstream=UPSTREAM, commit="1" * 40, not_copied={}))
+        assert copies.verify(repo) == []
+    assert (repo / ".claude" / "skills" / "a" / "refs").read_bytes() == b"one file\n"
+
+
+@pytest.mark.parametrize("path", [
+    "skills/x/Upper/SKILL.md",          # a name the manifest cannot hold
+    "skills/x/con/SKILL.md",            # a name Windows cannot hold
+    "skills/x/a/aux.md",
+    "skills/x/a/q?.md",
+    "skills/x/a/a:b.md",
+    "skills/x/a/trail.",
+    "skills/x/a/space ",
+])
+def test_a_name_no_manifest_or_windows_folder_holds_is_refused_before_any_write(tmp_path, path):
+    root, commit = commit_of_blobs(tmp_path, ["skills/x/a/SKILL.md", path])
+    with pytest.raises(SkillsError) as e:
+        copies.read_tree(root, commit)
+    assert e.value.code == "unsupported_entry"
+
+
+def commit_of_blobs(tmp_path, paths):
+    """A commit built from blobs alone: names a Windows work tree could never hold reach the tree."""
+
+    root = tmp_path / "upstream"
+    root.mkdir()
+    git(root, "init", "-q")
+    run = {"cwd": root, "capture_output": True, "check": True, "creationflags": NO_WINDOW}
+    sha = subprocess.run(["git", "hash-object", "-w", "--stdin"], input=b"x\n", **run).stdout.decode().strip()
+    index = "".join(f"100644 {sha}\t{path}\n" for path in paths).encode()
+    subprocess.run(["git", "-c", "core.protectNTFS=false", "update-index", "--add", "--index-info"],
+                   input=index, **run)
+    tree_sha = git(root, "write-tree").decode().strip()
+    return root, git(root, "commit-tree", tree_sha, "-m", "odd").decode().strip()
+
+
+def test_two_files_differing_only_in_case_are_refused(tmp_path):
+    root, commit = commit_of_blobs(tmp_path, ["skills/x/a/SKILL.md", "skills/x/a/Ref.md", "skills/x/a/ref.md"])
+    with pytest.raises(SkillsError) as e:
+        copies.read_tree(root, commit)
+    assert e.value.code == "unsupported_entry"
+
+
+def test_a_stray_skill_file_at_the_skills_root_is_no_skill(tmp_path):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES | {"skills/SKILL.md": b"stray\n"})
+    assert len(copies.read_tree(root, commit)) == 3
+
+
+def test_a_deeply_nested_manifest_is_unreadable_not_a_crash(tmp_path):
+    skills = tmp_path / ".claude" / "skills"
+    skills.mkdir(parents=True)
+    (skills / "pocock.json").write_text("[" * 100_000, "utf-8")
+    with pytest.raises(SkillsError) as e:
+        Manifest.load(tmp_path)
+    assert e.value.code == "manifest_unreadable"
+
+
 def test_no_manifest_reads_as_no_copies(tmp_path):
     assert Manifest.load(tmp_path) is None
     assert copies.verify(tmp_path) == ["pocock.json: missing"]
