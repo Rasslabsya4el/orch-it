@@ -164,6 +164,7 @@ def test_the_root_folder_counts_only_at_the_start_of_a_path():
     "/Us" + "ers/Shared/x",
     "~/ho" + "me/x",
     "${HOME}/ho" + "me/x",
+    "$(pwd)/ro" + "ot/x",
     "/mn" + "t/c/Us" + "ers/Public",
     "a/ro" + "ot/x",
 ])

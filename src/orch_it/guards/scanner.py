@@ -40,9 +40,9 @@ _SEP = r"(?:\\\\|\\|/)"
 _HOME_END = r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])"
 _BOUNDARY = r"(?<![A-Za-z0-9_-])"
 # A POSIX home folder starts a path: nothing of a path or a name stands right before its slash
-# (`app/home/x`, `host/Users/list`, `~/home/x` and `${HOME}/home/x` are not home folders), unless
-# it is the path of a `file://` URL.
-_PATH_START = r"(?:(?<![A-Za-z0-9_/.\\~}-])|(?<=file://))"
+# (`app/home/x`, `host/Users/list`, `~/home/x`, `${HOME}/home/x` and `$(pwd)/home/x` are not home
+# folders), unless it is the path of a `file://` URL.
+_PATH_START = r"(?:(?<![A-Za-z0-9_/.\\~})-])|(?<=file://))"
 # the folders every machine has, which belong to no one
 _NOT_A_PERSON = r"(?!(?i:public|default user|default|shared|runneradmin|runner|all users)(?![A-Za-z0-9._-]))"
 
