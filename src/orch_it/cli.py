@@ -1,4 +1,5 @@
-"""The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9).
+"""The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9) and
+`python -m orch_it tests run` (#394 decision 9).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -9,15 +10,22 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 from orch_it import settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
+from orch_it.testruns.config import TestSettings
+from orch_it.testruns.runner import RunError, run_tests
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
+# `tests run` exits 0 on passed, 1 on failed, 3 on any other outcome (no result, refused, lost,
+# stopped): a script tells "red" from "no answer" without reading the line
+TESTS_EXIT = {"passed": 0, "failed": 1}
+TESTS_EXIT_OTHER = 3
 
 
 _INTEGER = re.compile(r"-?(0|[1-9][0-9]*)")
@@ -26,7 +34,7 @@ _DECIMAL = re.compile(r"-?(0|[1-9][0-9]*)\.[0-9]+")
 
 class CommandError(Exception):
     """A command given a value it cannot use. `code`: `bad_pct` (a weekly percent outside
-    0-100)."""
+    0-100), `repo_unknown` (no `--repo` and no GitHub origin in the work tree)."""
 
     def __init__(self, code: str, detail: str = ""):
         self.code = code
@@ -97,6 +105,15 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--ticket", type=int)
     p.add_argument("--session")
     p.add_argument("--quiet-minutes", type=float, default=30)
+
+    tests = commands.add_parser("tests", help="test runs").add_subparsers(dest="command", required=True)
+    p = tests.add_parser("run", parents=[common], help="run the repo's tests at a test place")
+    p.add_argument("--ids-file", metavar="PATH", help="run only the tests named in this file")
+    p.add_argument("--place", help="force a place (own, machine:<id>, github); default: the place rule")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+    p.add_argument("--ticket", type=int)
+    p.add_argument("--role", default="script")
     return root
 
 
@@ -112,6 +129,35 @@ def render(result: QueryResult) -> str:
 
 def _store(args) -> Store:
     return Store.open(args.store)
+
+
+_ORIGIN = re.compile(r"(?:github\.com[:/])([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
+
+
+def _repo_of(work_tree: str) -> str:
+    """`owner/name` of the work tree's `origin` on GitHub, or `CommandError("repo_unknown")`."""
+
+    try:
+        done = subprocess.run(["git", "-C", work_tree, "remote", "get-url", "origin"],
+                              capture_output=True, text=True, timeout=30,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        raise CommandError("repo_unknown", work_tree) from None
+    found = _ORIGIN.search(done.stdout.strip()) if done.returncode == 0 else None
+    if not found:
+        raise CommandError("repo_unknown", f"{work_tree}: give --repo")
+    return found.group(1)
+
+
+def _tests_run(args) -> tuple[str, int]:
+    repo = args.repo or _repo_of(args.work_tree)
+    test_settings = TestSettings.from_settings(settings.load(), repo)
+    done = run_tests(_store(args), work_tree=Path(args.work_tree), repo=repo, settings=test_settings,
+                     ids_file=Path(args.ids_file) if args.ids_file else None, place=args.place,
+                     role=args.role, ticket=args.ticket)
+    line = (f"run={done.run} place={done.place} outcome={done.outcome} reason={done.reason or '-'}"
+            f" collected={done.collected} failed={done.failed}\n")
+    return line, TESTS_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
 
 
 def _run(args) -> str:
@@ -158,10 +204,13 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else EXIT_ERROR
     try:
-        text = _run(args)
+        if args.group == "tests":
+            text, code = _tests_run(args)
+        else:
+            text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, CommandError) as e:
+            queries.QueryError, CommandError, RunError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     sys.stdout.write(text)
-    return 0
+    return code
