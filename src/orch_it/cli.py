@@ -108,6 +108,8 @@ def _parser() -> argparse.ArgumentParser:
 
     tests = commands.add_parser("tests", help="test runs").add_subparsers(dest="command", required=True)
     p = tests.add_parser("run", parents=[common], help="run the repo's tests at a test place")
+    p.add_argument("--os", default="any", choices=["any", "linux", "windows", "macos"],
+                   help="the OS the run needs (default: any)")
     p.add_argument("--ids-file", metavar="PATH", help="run only the tests named in this file")
     p.add_argument("--place", help="force a place (own, machine:<id>, github); default: the place rule")
     p.add_argument("--work-tree", default=".", metavar="PATH")
@@ -149,7 +151,7 @@ def _tests_run(args) -> tuple[str, int]:
     test_settings = TestSettings.from_settings(settings.load(), repo)
     done = run_tests(_store(args), work_tree=Path(args.work_tree), repo=repo, settings=test_settings,
                      ids_file=Path(args.ids_file) if args.ids_file else None, place=args.place,
-                     role=args.role, ticket=args.ticket)
+                     need_os=args.os, role=args.role, ticket=args.ticket)
     line = (f"run={done.run} place={done.place} outcome={done.outcome} reason={done.reason or '-'}"
             f" collected={done.collected} failed={done.failed}\n")
     return line, TESTS_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
