@@ -38,7 +38,8 @@ _DECIMAL = re.compile(r"-?(0|[1-9][0-9]*)\.[0-9]+")
 
 class CommandError(Exception):
     """A command given a value it cannot use. `code`: `bad_pct` (a weekly percent outside
-    0-100), `repo_unknown` (no `--repo` and no GitHub origin in the work tree)."""
+    0-100), `repo_unknown` (no `--repo` and no GitHub origin in the work tree), `bad_options`
+    (`guards scan` options that do not go together)."""
 
     def __init__(self, code: str, detail: str = ""):
         self.code = code

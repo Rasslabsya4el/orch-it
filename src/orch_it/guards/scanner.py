@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import os
 import re
 import socket
 import subprocess
 import tempfile
+import threading
+import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +28,10 @@ from orch_it import settings
 
 KINDS = ("home_path", "host_name", "github_token", "anthropic_key", "openai_key", "aws_key",
          "private_key", "email", "private_word")
+WHERES = ("content", "path", "message", "author", "committer")
+SCAN_ERROR_CODES = ("words_unreadable", "git_failed", "bad_rev", "git_timeout")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# a git that says nothing for this long is hung: it is killed and the scan fails
 GIT_TIMEOUT_SECONDS = 120
 
 _NAME = r"[A-Za-z0-9_][A-Za-z0-9._-]*"
@@ -33,15 +39,21 @@ _SEP = r"(?:\\\\|\\|/)"
 # what may follow a home folder: not the rest of a longer name (a trailing dot ends a sentence)
 _HOME_END = r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])"
 _BOUNDARY = r"(?<![A-Za-z0-9_-])"
+# A POSIX home folder starts a path: nothing of a path or a name stands right before its slash
+# (`app/home/x`, `host/Users/list`, `~/home/x` and `${HOME}/home/x` are not home folders), unless
+# it is the path of a `file://` URL.
+_PATH_START = r"(?:(?<![A-Za-z0-9_/.\\~}-])|(?<=file://))"
+# the folders every machine has, which belong to no one
+_NOT_A_PERSON = r"(?!(?i:public|default user|default|shared|runneradmin|runner|all users)(?![A-Za-z0-9._-]))"
 
 # Any user's home folder in the spellings a path takes in logs and tracebacks. `<name>` is a
 # real name: a placeholder (`<name>`, `$USER`, `%USERNAME%`) never starts with a name character.
 _ANY_HOME = re.compile(
-    rf"(?<![A-Za-z])[A-Za-z]:{_SEP}(?i:users){_SEP}{_NAME}"
-    rf"|/(?:(?:cygdrive|mnt)/)?[A-Za-z]/(?i:users)/{_NAME}"
-    rf"|/home/{_NAME}"
-    rf"|/Users/{_NAME}"
-    r"""|(?<![^\s"'=(:,\[])/root(?![A-Za-z0-9._-])""")
+    rf"(?<![A-Za-z])[A-Za-z]:{_SEP}(?i:users){_SEP}{_NOT_A_PERSON}{_NAME}"
+    rf"|{_PATH_START}/(?:(?:cygdrive|mnt)/)?[A-Za-z]/(?i:users)/{_NOT_A_PERSON}{_NAME}"
+    rf"|{_PATH_START}/home/{_NOT_A_PERSON}{_NAME}"
+    rf"|{_PATH_START}/Users/{_NOT_A_PERSON}{_NAME}"
+    rf"|{_PATH_START}/root(?![A-Za-z0-9._-])")
 
 # The secrets by their published shapes, each with a left boundary.
 _SECRET = re.compile(
@@ -50,7 +62,7 @@ _SECRET = re.compile(
     r"|(?P<anthropic_key>sk-ant-[A-Za-z0-9_-]{16,})"
     r"|(?P<openai_key>sk-(?!ant-)[A-Za-z0-9_-]{20,})"
     r"|(?P<aws_key>AKIA[0-9A-Z]{16}(?![A-Za-z0-9_-]))"
-    r"|(?P<private_key>-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----)"
+    r"|(?P<private_key>-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----)"
     r")")
 
 _LOCAL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._%+-")
@@ -61,22 +73,28 @@ _DOMAIN_LONGEST = 255
 _RESERVED_DOMAINS = ("example.com", "example.org", "example.net")
 _RESERVED_ENDINGS = ("example", "test", "invalid", "localhost")
 _NO_PERSON_LOCALS = ("noreply", "no-reply", "git")
+# `logo@2x.png` is an asset name, not an address
+_FILE_ENDINGS = ("png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "css", "js", "map", "json", "md",
+                 "txt", "lock")
 
 
 class ScanError(Exception):
-    """A scan that cannot run. `code`: `words_unreadable` (the private words file exists and
-    cannot be read), `git_failed` (a git command failed; the detail is git's own message),
-    `bad_rev` (a range or revision git does not know)."""
+    """A scan that cannot run. `code` is one of `SCAN_ERROR_CODES`: `words_unreadable` (the
+    private words file exists and cannot be read), `git_failed` (a git command failed; the
+    detail is git's own message), `bad_rev` (a range or revision git does not know),
+    `git_timeout` (a git said nothing for `GIT_TIMEOUT_SECONDS` and was killed)."""
 
     def __init__(self, code: str, detail: str = ""):
+        if code not in SCAN_ERROR_CODES:
+            raise ValueError(f"unknown scan error code: {code!r}")
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
 
 
 @dataclass(frozen=True)
 class Hit:
-    """One private value found. `where`: `content`, `path`, `message`, `author` or `committer`;
-    `commit`: the full sha; `file`: the path (content and path hits) with any value found in it
+    """One private value found. `where`: one of `WHERES` (`content`, `path`, `message`, `author`
+    or `committer`); `commit`: the full sha; `file`: the path (content and path hits) with any value found in it
     replaced by `<kind>`, else None; `line`: the line in the new file (content) or in the
     message (message), else None. The value itself is in no field."""
 
@@ -114,6 +132,8 @@ def _private_email(local: str, domain: str, allowed: frozenset[str]) -> bool:
 
     domain = domain.lower()
     if local.lower() in _NO_PERSON_LOCALS or domain == "users.noreply.github.com":
+        return False
+    if domain.rsplit(".", 1)[-1] in _FILE_ENDINGS:
         return False
     if any(domain == d or domain.endswith("." + d) for d in _RESERVED_DOMAINS):
         return False
@@ -218,13 +238,19 @@ class Patterns:
         return [kind for kind in KINDS if kind in found]
 
     def redact(self, text: str) -> str:
-        """`text` with every value found in it replaced by `<kind>`."""
+        """`text` with every value found in it replaced by `<kind>`; values that overlap or touch
+        are one replaced stretch, so no remainder of a value is left."""
 
-        out, end = [], 0
+        merged: list[list] = []
         for kind, start, stop in self._spans(text):
-            if start >= end:
-                out += [text[end:start], f"<{kind}>"]
-                end = stop
+            if merged and start <= merged[-1][2]:
+                merged[-1][2] = max(merged[-1][2], stop)
+            else:
+                merged.append([kind, start, stop])
+        out, end = [], 0
+        for kind, start, stop in merged:
+            out += [text[end:start], f"<{kind}>"]
+            end = stop
         return "".join(out) + text[end:]
 
 
@@ -250,7 +276,16 @@ def _read_words(words_file: Path | None) -> tuple[str, ...]:
 
 # a log shows no signature lines and quotes no non-ASCII path; a diff has the prefixes the
 # header reader expects, no renames, no external diff and no text conversion
-_GIT = ("git", "-c", "core.quotePath=false", "-c", "log.showSignature=false")
+_GIT_COMMAND = ("git",)
+_GIT_CONFIG = ("-c", "core.quotePath=false", "-c", "log.showSignature=false")
+# git looks where the work tree says, not where the caller's environment points (a hook runs
+# with GIT_DIR set), and says its errors in one language
+_GIT_ENV_DROPPED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+_BAD_REVISION = re.compile(
+    r"bad revision|unknown revision|ambiguous argument|needed a single revision|not a valid object"
+    r"|must come before non-option",
+    re.IGNORECASE)
 _SHOW = ("show", "--format=%x00COMMIT%x00%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x00ENDMSG",
          "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
          "--src-prefix=a/", "--dst-prefix=b/")
@@ -266,39 +301,111 @@ def _failure(errors) -> ScanError:
     return ScanError("git_failed", message[0][:300] if message else "git failed")
 
 
+def _git_env() -> dict[str, str]:
+    env = {name: value for name, value in os.environ.items() if name not in _GIT_ENV_DROPPED}
+    return env | {"LC_ALL": "C"}
+
+
+class _Running:
+    """A running git, read through methods that note each bit of progress: the watchdog kills
+    a git that makes none for `GIT_TIMEOUT_SECONDS`."""
+
+    def __init__(self, proc: subprocess.Popen):
+        self.proc = proc
+        self.stdin = proc.stdin
+        self.stdout = proc.stdout
+        self.last_progress = time.monotonic()
+        self.timed_out = False
+
+    def touch(self):
+        self.last_progress = time.monotonic()
+
+    def lines(self) -> Iterator[bytes]:
+        for line in self.stdout:
+            self.last_progress = time.monotonic()
+            yield line
+
+    def readline(self) -> bytes:
+        line = self.stdout.readline()
+        self.touch()
+        return line
+
+    def read(self, size: int) -> bytes:
+        data = self.stdout.read(size)
+        self.touch()
+        return data
+
+    def read_all(self) -> bytes:
+        chunks = []
+        while chunk := self.stdout.read1(65536):
+            chunks.append(chunk)
+            self.touch()
+        return b"".join(chunks)
+
+
+def _watch(running: _Running, done: threading.Event):
+    while not done.wait(max(GIT_TIMEOUT_SECONDS / 4, 0.05)):
+        if time.monotonic() - running.last_progress > GIT_TIMEOUT_SECONDS:
+            running.timed_out = True
+            running.proc.kill()
+            return
+
+
 @contextlib.contextmanager
 def _process(work_tree: Path, *args: str, feed: bool = False):
-    """A running `git -C <work_tree> <args>`: its `stdout` (and `stdin` when `feed`) for the
-    caller to use; on a clean leave git must have exited 0, else `ScanError("git_failed")`."""
+    """A running `git -C <work_tree> <args>` for the caller to read (and write when `feed`). A git
+    that makes no progress for `GIT_TIMEOUT_SECONDS` is killed (`ScanError("git_timeout")`); on
+    a clean leave git must have exited 0, else `ScanError("git_failed")`."""
 
     with tempfile.TemporaryFile() as errors:
         try:
-            proc = subprocess.Popen([*_GIT[:1], "-C", str(work_tree), *_GIT[1:], *args],
+            proc = subprocess.Popen([*_GIT_COMMAND, "-C", str(work_tree), *_GIT_CONFIG, *args],
                                     stdin=subprocess.PIPE if feed else subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=errors, creationflags=NO_WINDOW)
+                                    stdout=subprocess.PIPE, stderr=errors, env=_git_env(),
+                                    creationflags=NO_WINDOW)
         except OSError:
             raise ScanError("git_failed", "git cannot be run") from None
+        running = _Running(proc)
+        done = threading.Event()
+        watchdog = threading.Thread(target=_watch, args=(running, done), daemon=True)
+        watchdog.start()
+        timeout = ScanError("git_timeout", f"git made no progress for {GIT_TIMEOUT_SECONDS} seconds")
         try:
-            yield proc
+            yield running
             if proc.stdin:
                 proc.stdin.close()
-            proc.stdout.read()
+            running.read_all()
             code = proc.wait()
         except BaseException:
             proc.kill()
             proc.wait()
+            if running.timed_out:
+                raise timeout from None
             raise
         finally:
+            done.set()
+            watchdog.join()
             for stream in (proc.stdin, proc.stdout):
                 if stream:
-                    stream.close()
+                    with contextlib.suppress(OSError, ValueError):
+                        stream.close()
+        if running.timed_out:
+            raise timeout
         if code != 0:
             raise _failure(errors)
 
 
 def _git_output(work_tree: Path, *args: str) -> bytes:
-    with _process(work_tree, *args) as proc:
-        return proc.stdout.read()
+    with _process(work_tree, *args) as running:
+        return running.read_all()
+
+
+def _unknown_rev(error: ScanError, what: str) -> ScanError:
+    """`bad_rev` when git said it does not know the revision; any other failure as it was."""
+
+    if error.code == "git_failed" and _BAD_REVISION.search(str(error)):
+        return ScanError("bad_rev", f"{what} is not one git knows")
+    return error
 
 
 def commits_of_range(work_tree: Path, rev_range: str) -> list[str]:
@@ -307,9 +414,7 @@ def commits_of_range(work_tree: Path, rev_range: str) -> list[str]:
     try:
         out = _git_output(work_tree, "rev-list", "--reverse", "--end-of-options", rev_range)
     except ScanError as e:
-        if "not a git repository" in str(e):
-            raise
-        raise ScanError("bad_rev", "the range is not one git knows") from None
+        raise _unknown_rev(e, "the range") from None
     return out.decode("ascii", "replace").split()
 
 
@@ -444,8 +549,8 @@ def scan_commits(work_tree: Path, commits: Iterable[str], patterns: Patterns) ->
     hits: list[Hit] = []
     for start in range(0, len(shas), _BATCH):
         scan = _CommitScan(patterns)
-        with _process(work_tree, *_SHOW, "--end-of-options", *shas[start:start + _BATCH]) as proc:
-            for raw in proc.stdout:
+        with _process(work_tree, *_SHOW, "--end-of-options", *shas[start:start + _BATCH]) as git:
+            for raw in git.lines():
                 scan.feed(raw)
         hits += scan.finish()
     return hits
@@ -459,9 +564,7 @@ def scan_tree(work_tree: Path, patterns: Patterns, rev: str = "HEAD") -> list[Hi
         sha = _git_output(work_tree, "rev-parse", "--verify", "--end-of-options",
                           f"{rev}^{{commit}}").decode("ascii", "replace").strip()
     except ScanError as e:
-        if "not a git repository" in str(e):
-            raise
-        raise ScanError("bad_rev", "the revision is not one git knows") from None
+        raise _unknown_rev(e, "the revision") from None
     listing = _git_output(work_tree, "ls-tree", "-r", "-z", "--full-tree", sha)
     files = []
     for entry in filter(None, listing.split(b"\x00")):
@@ -475,17 +578,17 @@ def scan_tree(work_tree: Path, patterns: Patterns, rev: str = "HEAD") -> list[Hi
         for kind in patterns.find(text):
             hits.append(Hit(kind, where, sha, file, line))
 
-    with _process(work_tree, "cat-file", "--batch", feed=True) as proc:
+    with _process(work_tree, "cat-file", "--batch", feed=True) as git:
         for start in range(0, len(files), _BATCH):
             chunk = files[start:start + _BATCH]
-            proc.stdin.write("".join(f"{oid}\n" for oid, _ in chunk).encode("ascii"))
-            proc.stdin.flush()
+            git.stdin.write("".join(f"{oid}\n" for oid, _ in chunk).encode("ascii"))
+            git.stdin.flush()
             for oid, path in chunk:
-                header = proc.stdout.readline().split()
+                header = git.readline().split()
                 if len(header) != 3 or header[1] != b"blob":
                     raise ScanError("git_failed", f"object {oid} cannot be read")
-                data = proc.stdout.read(int(header[2]))
-                proc.stdout.read(1)
+                data = git.read(int(header[2]))
+                git.read(1)
                 shown = patterns.redact(path)
                 add(path, "path", shown)
                 if b"\x00" in data[:_BINARY_PROBE]:

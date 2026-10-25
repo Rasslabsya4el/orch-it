@@ -19,7 +19,7 @@ import pytest
 
 from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo
 
-ROOT =Path(__file__).parents[1]
+ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")

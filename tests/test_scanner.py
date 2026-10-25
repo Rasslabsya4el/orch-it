@@ -97,6 +97,7 @@ def test_an_anthropic_key_is_not_also_an_openai_key():
     "-----" + "BEGIN PRIVATE" + " KEY-----",
     "-----" + "BEGIN OPENSSH PRIVATE" + " KEY-----",
     "-----" + "BEGIN ENCRYPTED PRIVATE" + " KEY-----",
+    "-----" + "BEGIN PGP PRIVATE" + " KEY BLOCK-----",
 ])
 def test_private_key_headers_of_every_form_are_found(text):
     assert kinds(text) == ["private_key"]
@@ -149,6 +150,70 @@ def test_the_root_folder_counts_only_at_the_start_of_a_path():
     assert kinds(f"[{root}]") == ["home_path"]
     assert kinds(f"a{root}") == []
     assert kinds(f"a-{root}") == []
+
+
+@pytest.mark.parametrize("text", [
+    "app/ho" + "me/index.html",
+    "x/Us" + "ers/y",
+    "https://example.org/Us" + "ers/list",
+    "/ho" + "me/runner/work/repo",
+    "/ho" + "me/runneradmin/x",
+    "C:" + "\\Us" + "ers\\Public\\x",
+    "C:" + "\\Us" + "ers\\Default User\\x",
+    "C:" + "\\Us" + "ers\\All Users\\x",
+    "/Us" + "ers/Shared/x",
+    "~/ho" + "me/x",
+    "${HOME}/ho" + "me/x",
+    "/mn" + "t/c/Us" + "ers/Public",
+    "a/ro" + "ot/x",
+])
+def test_paths_that_only_look_like_a_home_folder_are_no_hit(text):
+    assert kinds(text) == [], text
+
+
+@pytest.mark.parametrize("text", [
+    "/ho" + "me/bob",
+    'File "/ho' + 'me/bob/x.py", line 3',
+    '"/ho' + 'me/bob/x"',
+    "<a href=/ho" + "me/bob>",
+    "x>/ho" + "me/bob",
+    "a;/Us" + "ers/bob/x",
+    "file:///ho" + "me/bob/x",
+    "C:" + "\\Us" + "ers\\Publicity\\x",
+    "/ho" + "me/runners/x",
+])
+def test_a_home_folder_after_a_character_that_ends_a_name_is_found(text):
+    assert kinds(text) == ["home_path"], text
+
+
+@pytest.mark.parametrize("before", [">", ";", "<", "(", "[", ":", ",", "=", '"', "'", " ", "|"])
+def test_the_root_folder_follows_any_character_that_is_not_part_of_a_path(before):
+    assert kinds(f"x{before}" + "/ro" + "ot/y") == ["home_path"]
+
+
+def test_a_value_that_overlaps_another_is_redacted_whole():
+    text = "see C:" + "\\Us" + "ers\\john.smith" + "@" + "corp.example.io now"
+    shown = Patterns.machine_independent().redact(text)
+    assert shown == "see <home_path> now"
+    assert "corp" not in shown and "john" not in shown
+    shown = Patterns.machine_independent().redact(GITHUB_TOKEN + "@" + "corp.example.io")
+    assert "corp" not in shown and "ghp" not in shown
+
+
+def test_asset_names_with_a_density_suffix_are_no_email_and_a_real_address_still_is():
+    for name in ("logo@2x.png", "icon@3x.jpg", "a/b@2x.svg", "x@1.5x.webp", "s@2x.css", "d@2x.json"):
+        assert kinds(name) == [], name
+    assert kinds("a.b" + "@" + "corp.io") == ["email"]
+    assert kinds("a.b" + "@" + "corp.io.png") == []
+
+
+def test_the_errors_and_the_places_of_a_hit_are_closed_sets():
+    assert scanner.SCAN_ERROR_CODES == ("words_unreadable", "git_failed", "bad_rev", "git_timeout")
+    assert scanner.WHERES == ("content", "path", "message", "author", "committer")
+    for code in scanner.SCAN_ERROR_CODES:
+        assert ScanError(code, "detail").code == code
+    with pytest.raises(ValueError):
+        ScanError("made_up")
 
 
 def test_the_machine_home_outside_the_usual_folders_is_found_in_every_spelling():
@@ -402,12 +467,17 @@ def test_the_look_alikes_are_no_hit_in_a_commit(repo):
 @pytest.mark.parametrize("kind", sorted(LINES))
 def test_each_kind_is_found_in_the_path_of_a_file_a_commit_adds(repo, kind):
     value = LINES[kind][1]
-    name = f"docs{value}/f.txt" if kind == "home_path" else f"docs/x {value}.txt"
+    name = f"docs={value}/f.txt" if kind == "home_path" else f"docs/x {value}.dat"
     sha = repo.commit({name: "clean\n"})
     hits = scan(repo)
     assert hits == [Hit(kind, "path", sha, hits[0].file, None)]
     assert hits[0].file.startswith("docs") and f"<{kind}>" in hits[0].file
     assert not everywhere(hits, value)
+
+
+def test_a_home_folder_in_a_path_is_found_where_a_name_ends_before_it(repo):
+    sha = repo.commit({f"dir={SOMEONE_HOME}/f.txt": "clean\n", f"app{SOMEONE_HOME}/g.txt": "clean\n"})
+    assert scan(repo) == [Hit("home_path", "path", sha, "dir=<home_path>/f.txt", None)]
 
 
 def test_the_path_of_a_changed_file_is_scanned_and_that_of_a_removed_one_is_not(repo):
@@ -745,12 +815,74 @@ def test_the_reports_as_part_2_committed_them_held_a_home_path_on_17_lines():
                      f"{JUNIT}/pytest/red.xml": [5], f"{JUNIT}/pytest/green.xml": [1]}
 
 
+# --- git that hangs, and a git environment that is not ours ------------------------------------
+
+def a_git_that_says(monkeypatch, script, seconds=1):
+    """Stand in for the git program with a Python one-liner, and bound a wait to `seconds`."""
+
+    monkeypatch.setattr(scanner, "_GIT_COMMAND", (sys.executable, "-c", script))
+    monkeypatch.setattr(scanner, "GIT_TIMEOUT_SECONDS", seconds)
+
+
+def test_a_git_that_hangs_is_killed_within_the_bound_and_is_a_git_timeout(repo, monkeypatch):
+    repo.commit({"a.txt": "x\n"})
+    a_git_that_says(monkeypatch, "import time; time.sleep(120)")
+    started = time.monotonic()
+    for call in (lambda: scanner.commits_of_range(repo.path, "HEAD"),
+                 lambda: scanner.scan_commits(repo.path, ["0" * 40], Patterns.machine_independent()),
+                 lambda: scanner.scan_tree(repo.path, Patterns.machine_independent())):
+        with pytest.raises(ScanError) as caught:
+            call()
+        assert caught.value.code == "git_timeout"
+    assert time.monotonic() - started < 40
+
+
+def test_a_git_that_stops_midway_in_a_stream_is_a_git_timeout(repo, monkeypatch):
+    header = "'\\x00COMMIT\\x00' + '\\x00'.join(['a' * 40, 'n', 'e@users.noreply.github.com', 'n', 'e', 'subject'])"
+    a_git_that_says(monkeypatch, f"import time; print({header}, flush=True); time.sleep(120)")
+    started = time.monotonic()
+    with pytest.raises(ScanError) as caught:
+        scanner.scan_commits(repo.path, ["a" * 40], Patterns.machine_independent())
+    assert caught.value.code == "git_timeout"
+    assert time.monotonic() - started < 20
+
+
+def test_a_git_that_keeps_talking_is_not_cut_off_by_a_bound_on_silence(repo, monkeypatch):
+    a_git_that_says(monkeypatch, "import time\nfor n in range(8):\n    print('%040d' % n, flush=True)\n"
+                                 "    time.sleep(0.4)")
+    assert len(scanner.commits_of_range(repo.path, "HEAD")) == 8
+
+
+def test_git_runs_in_an_environment_without_a_repository_of_someone_elses_and_in_the_c_locale(monkeypatch):
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
+        monkeypatch.setenv(name, "elsewhere")
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    monkeypatch.setenv("KEEP_ME", "1")
+    env = scanner._git_env()
+    assert not {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"} & set(env)
+    assert env["LC_ALL"] == "C" and env["KEEP_ME"] == "1"
+
+
+def test_a_git_dir_in_the_environment_does_not_move_the_scan_to_another_repository(
+        repo, tmp_path, monkeypatch, capsys):
+    sha = repo.commit({"a.txt": f"{GITHUB_TOKEN}\n"})
+    other = Repo(tmp_path / "other")
+    other.commit({"b.txt": "clean\n"})
+    monkeypatch.setenv("GIT_DIR", str(other.path / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other.path))
+    assert scan(repo) == [Hit("github_token", "content", sha, "a.txt", 1)]
+    assert scanner.scan_tree(repo.path, Patterns.machine_independent()) == [
+        Hit("github_token", "content", sha, "a.txt", 1)]
+    code, out, _ = guard(capsys, repo, "--all", "--machine-independent")
+    assert (code, out) == (1, f"{sha[:12]} content a.txt:1 github_token\nhits=1 commits=1\n")
+
+
 # --- the files of a tree --------------------------------------------------------------------
 
 @pytest.mark.parametrize("kind", sorted(LINES))
 def test_scan_tree_finds_each_kind_in_a_tracked_file_and_its_path(repo, kind):
     line, value = LINES[kind]
-    name = f"docs{value}/f.txt" if kind == "home_path" else f"docs/x {value}.txt"
+    name = f"docs={value}/f.txt" if kind == "home_path" else f"docs/x {value}.dat"
     sha = repo.commit({name: f"clean\n{line}\n", "ok.txt": "fine\n"})
     hits = scanner.scan_tree(repo.path, Patterns.machine_independent())
     shown = hits[0].file
