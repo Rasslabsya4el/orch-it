@@ -13,6 +13,8 @@ from pathlib import Path
 
 
 class SettingsError(ValueError):
+    """`code`: `settings_unreadable` (the settings file is no JSON object of settings)."""
+
     def __init__(self, code: str, detail: str = ""):
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
@@ -37,12 +39,14 @@ def settings_path() -> Path:
 def load() -> dict:
     path = settings_path()
     try:
-        text = path.read_text("utf-8")
+        text = path.read_text("utf-8-sig")
     except FileNotFoundError:
         return {}
+    except (OSError, UnicodeDecodeError) as e:
+        raise SettingsError("settings_unreadable", f"{path}: {e}") from None
     try:
         settings = json.loads(text)
-    except json.JSONDecodeError as e:
+    except ValueError as e:
         raise SettingsError("settings_unreadable", f"{path}: {e}") from None
     if not isinstance(settings, dict):
         raise SettingsError("settings_unreadable", f"{path}: not an object")
@@ -67,4 +71,6 @@ def store_path() -> Path:
     `<data folder>/events`."""
 
     chosen = os.environ.get("ORCH_IT_STORE") or load().get("store")
+    if chosen is not None and not isinstance(chosen, str):
+        raise SettingsError("settings_unreadable", f"store: {chosen!r} is no path")
     return Path(chosen) if chosen else data_folder() / "events"

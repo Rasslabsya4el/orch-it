@@ -4,6 +4,7 @@ under them, leave 8000 events in the index, 0 torn lines and 0 duplicate ids."""
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from orch_it.events.store import Store
@@ -21,9 +22,10 @@ def test_eight_writers_at_once_lose_and_tear_nothing(tmp_path):
                          creationflags=NO_WINDOW)
         for n in range(WRITERS)
     ]
+    deadline = time.monotonic() + 120
     try:
         start.touch()
-        while any(p.poll() is None for p in processes):
+        while any(p.poll() is None for p in processes) and time.monotonic() < deadline:
             store.refresh()  # reads under the writers: half-written lines wait
     finally:
         codes = [p.wait(timeout=120) for p in processes]

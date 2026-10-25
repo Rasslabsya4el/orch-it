@@ -196,3 +196,160 @@ def test_live_ids_are_time_ordered_and_import_ids_repeat():
     assert len({live_id() for _ in range(10_000)}) == 10_000
     assert import_id("claude-code", "msg_1", "turn.used") == import_id("claude-code", "msg_1", "turn.used")
     assert import_id("claude-code", "msg_1", "turn.used") != import_id("claude-code", "msg_1", "tool.called")
+
+
+def test_user_sql_cannot_attach_or_create_a_database(tmp_path):
+    store = Store.open(tmp_path / "events")
+    target = tmp_path / "x.db"
+    with pytest.raises(StoreError) as caught:
+        store.query(f"ATTACH DATABASE '{target.as_posix()}' AS x")
+    assert caught.value.code == "query_failed"
+    assert not target.exists()
+
+
+def test_an_event_written_after_a_torn_line_is_not_lost(tmp_path):
+    store = Store.open(tmp_path)
+    (tmp_path / "2026-10-25").mkdir()
+    after_torn = envelope(id="after-torn", at="2026-10-25T10:00:00Z", machine="m", os="o",
+                          layer_version="0")
+    (tmp_path / "2026-10-25" / "w-crashed.jsonl").write_bytes(
+        b'{"id":"torn","kind":"value.mea' + json.dumps(after_torn).encode() + b"\n")
+    report = store.refresh()
+    assert store.query("SELECT id FROM events").rows == [("after-torn",)]
+    assert report.bad_lines == 1
+
+
+def test_a_writer_whose_write_failed_starts_its_next_event_on_a_fresh_line(tmp_path):
+    store = Store.open(tmp_path)
+
+    class FailsOnce:
+        def __init__(self, real):
+            self.real, self.failed = real, False
+
+        def write(self, data):
+            if not self.failed:
+                self.failed = True
+                self.real.write(bytes(data)[:20])
+                raise OSError("disk full")
+            return self.real.write(data)
+
+        def close(self):
+            self.real.close()
+
+    with store.writer() as writer:
+        writer.write(envelope(note="first"))
+        writer._file = FailsOnce(writer._file)
+        with pytest.raises(OSError):
+            writer.write(envelope(note="lost"))
+        writer.write(envelope(note="kept"))
+    notes = store.query("SELECT note FROM events ORDER BY note").rows
+    assert notes == [("first",), ("kept",)]
+
+
+def test_live_ids_are_uuid_version_7():
+    import uuid
+    from orch_it.events.ids import live_id
+    value = uuid.UUID(live_id())
+    assert (value.version, value.variant) == (7, uuid.RFC_4122)
+
+
+def write_event_line(path, **over):
+    e = envelope(id=over.pop("id"), at="2026-10-25T10:00:00Z", machine="m", os="o",
+                 layer_version="0", **over)
+    return json.dumps(e).encode() + b"\n"
+
+
+def test_a_file_replaced_by_another_copy_is_read_again_whole(tmp_path):
+    store = Store.open(tmp_path)
+    day = tmp_path / "2026-10-25"
+    day.mkdir()
+    path = day / "w-1.jsonl"
+    path.write_bytes(write_event_line(path, id="old-a") + write_event_line(path, id="old-b"))
+    assert store.refresh().added == 2
+    path.write_bytes(write_event_line(path, id="new-1") + write_event_line(path, id="new-2")
+                     + write_event_line(path, id="new-3", note="longer than before"))
+    report = store.refresh()
+    assert report.rebuilt and report.bad_lines == 0
+    assert store.query("SELECT id FROM events ORDER BY id").rows == [("new-1",), ("new-2",), ("new-3",)]
+
+
+def test_a_vanished_or_truncated_file_takes_its_events_with_it(tmp_path):
+    store = Store.open(tmp_path)
+    day = tmp_path / "2026-10-25"
+    day.mkdir()
+    (day / "w-1.jsonl").write_bytes(write_event_line(day, id="a") + b"junk\n")
+    (day / "w-2.jsonl").write_bytes(write_event_line(day, id="b"))
+    assert store.refresh().bad_lines == 1
+    (day / "w-1.jsonl").write_bytes(b"")
+    (day / "w-2.jsonl").unlink()
+    report = store.refresh()
+    assert (report.bad_lines, store.query("SELECT count(*) FROM events").rows) == (0, [(0,)])
+
+
+def test_a_byte_order_mark_does_not_cost_the_first_event(tmp_path):
+    store = Store.open(tmp_path)
+    (tmp_path / "2026-10-25").mkdir()
+    (tmp_path / "2026-10-25" / "w-bom.jsonl").write_bytes(b"\xef\xbb\xbf" + write_event_line(tmp_path, id="first"))
+    assert store.query("SELECT id FROM events").rows == [("first",)]
+
+
+def test_one_id_in_two_files_keeps_the_same_row_whatever_the_reading_order(tmp_path):
+    store = Store.open(tmp_path)
+    day = tmp_path / "2026-10-25"
+    day.mkdir()
+    (day / "m2.jsonl").write_bytes(write_event_line(day, id="same", note="from m2"))
+    assert store.query("SELECT note FROM events").rows == [("from m2",)]
+    (day / "a0.jsonl").write_bytes(write_event_line(day, id="same", note="from a0"))
+    incremental = store.query("SELECT note FROM events").rows
+    store.index_path.unlink()
+    assert incremental == store.query("SELECT note FROM events").rows == [("from a0",)]
+
+
+def test_a_huge_number_is_a_bad_line_not_a_stuck_index(tmp_path):
+    store = Store.open(tmp_path)
+    (tmp_path / "2026-10-25").mkdir()
+    (tmp_path / "2026-10-25" / "w-1.jsonl").write_bytes(
+        b'{"x": ' + b"9" * 5000 + b"}\n" + write_event_line(tmp_path, id="fine"))
+    assert store.query("SELECT id FROM events").rows == [("fine",)]
+
+
+def test_a_garbage_index_is_rebuilt_from_the_files(tmp_path):
+    store = Store.open(tmp_path)
+    with store.writer() as writer:
+        e = writer.write(envelope())
+    store.index_path.write_bytes(b"this is no database" * 10)
+    assert store.query("SELECT id FROM events").rows == [(e["id"],)]
+
+
+def test_user_sql_cannot_vacuum_into_a_file(tmp_path):
+    store = Store.open(tmp_path / "events")
+    with pytest.raises(StoreError) as caught:
+        store.query(f"VACUUM INTO '{(tmp_path / 'copy.db').as_posix()}'")
+    assert caught.value.code == "query_failed" and not (tmp_path / "copy.db").exists()
+
+
+def test_bad_store_paths_are_refused_with_a_code(tmp_path):
+    (tmp_path / "a-file").write_text("x")
+    for path, code in (("", "store_path_empty"), (tmp_path / "a-file", "store_not_a_folder")):
+        with pytest.raises(StoreError) as caught:
+            Store.open(path)
+        assert caught.value.code == code
+
+
+def test_junk_settings_are_refused_with_a_code(tmp_path, monkeypatch):
+    from orch_it import settings
+    monkeypatch.delenv("ORCH_IT_STORE", raising=False)
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    for junk in (b"[1]", b'{"store": 5}', b"\xff\xfe", b"{"):
+        (tmp_path / "settings.json").write_bytes(junk)
+        with pytest.raises(settings.SettingsError) as caught:
+            settings.store_path()
+        assert caught.value.code == "settings_unreadable", junk
+
+
+def test_the_store_folder_goes_missing_before_the_first_write(tmp_path):
+    store = Store.open(tmp_path / "events")
+    (tmp_path / "events").rmdir()
+    with store.writer() as writer:
+        writer.write(envelope())
+    assert len(lines_of(tmp_path / "events")) == 1
