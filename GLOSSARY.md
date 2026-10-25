@@ -46,3 +46,25 @@ _Avoid_: producer, emitter, logger
 **Index**:
 The queryable copy of a store, derived from it alone.
 _Avoid_: cache table, read model
+
+## Test runs
+
+**Test run**:
+One call of a repo's test command at one test place on one commit, judged from the report it writes.
+_Avoid_: test job, suite run, CI run, build
+
+**Test place**:
+Where a test run goes: this machine, another machine named in the settings, or GitHub.
+_Avoid_: runner, host, target, executor
+
+**Place rule**:
+The one rule that picks a test run's place from the runs live and the times measured in the store.
+_Avoid_: scheduler, routing, placement policy
+
+**Clean environment**:
+What a test run's process sees of its environment: the OS's base variables and the repo's own test settings, nothing of whoever started it.
+_Avoid_: sandbox, isolated environment
+
+**Bound**:
+The longest a test run may take, set per repo; a run that reaches it is cut, which is never a failed run.
+_Avoid_: timeout, limit, deadline

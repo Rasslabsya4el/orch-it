@@ -1,6 +1,8 @@
 """The JUnit XML reader (#394 decision 1): every test case of a report of any runner, or a coded
 refusal, never a partial list."""
 
+import time
+
 import pytest
 
 from orch_it.testruns import junit
@@ -109,3 +111,17 @@ def test_a_missing_report_is_refused_as_missing(tmp_path):
     with pytest.raises(junit.ReportUnreadable) as refused:
         junit.read(tmp_path / "gone.xml")
     assert refused.value.code == "missing"
+
+
+@pytest.mark.slow  # nightly only: it writes and reads a report of some 40 MB
+def test_a_report_of_half_a_million_cases_is_read_whole_in_under_a_minute(tmp_path):
+    path = tmp_path / "huge.xml"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("<testsuites><testsuite>")
+        for i in range(500_000):
+            f.write(f'<testcase classname="pkg.mod{i % 997}" name="test_{i}" time="0.001"/>')
+        f.write('<testcase name="last"><failure/></testcase></testsuite></testsuites>')
+    started = time.monotonic()
+    cases = junit.read(path)
+    assert len(cases) == 500_001 and cases[-1].outcome == "failed"
+    assert time.monotonic() - started < 60
