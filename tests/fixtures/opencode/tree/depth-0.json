@@ -1,0 +1,100 @@
+{
+ "root": "run",
+ "sessions": {
+  "run": {
+   "children": [],
+   "messages": [
+    {
+     "info": {
+      "id": "run-m0",
+      "role": "user"
+     },
+     "parts": [
+      {
+       "type": "text",
+       "text": "go"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "run-m1",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 17853,
+       "input": 4000,
+       "output": 300,
+       "reasoning": 50,
+       "cache": {
+        "read": 13333,
+        "write": 170
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 0"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "run-m2",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 17854,
+       "input": 4000,
+       "output": 300,
+       "reasoning": 50,
+       "cache": {
+        "read": 13333,
+        "write": 171
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 1"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "run-m3",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 17855,
+       "input": 4000,
+       "output": 300,
+       "reasoning": 50,
+       "cache": {
+        "read": 13334,
+        "write": 171
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 2"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
