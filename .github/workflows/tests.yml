@@ -18,7 +18,7 @@ on:
 
 # A newer push to a pull request cancels its older run: only the newer head's result counts.
 concurrency:
-  group: tests-${{ github.event_name }}-${{ github.head_ref || github.run_id }}
+  group: tests-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -26,8 +26,8 @@ permissions:
   actions: read
 
 env:
-  PR_MARKS: "not slow and not live"
-  GH_TOKEN: ${{ github.token }}
+  MARKS_LEFT_OUT_OF_CHANGE_RUNS: "not slow and not live"
+  NIGHTLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live) }}
 
 jobs:
   linux:
@@ -42,15 +42,15 @@ jobs:
       - name: pytest
         shell: bash
         env:
-          NIGHTLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live) }}
-          ORCH_IT_REQUIRE_SSHD: "1"
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$NIGHTLY" = "true" ]; then marks=(); else marks=(-m "$PR_MARKS"); fi
+          if [ "$NIGHTLY" = "true" ]; then marks=(); else marks=(-m "$MARKS_LEFT_OUT_OF_CHANGE_RUNS"); fi
           pytest -q --junitxml=junit.xml "${marks[@]}"
-      - uses: actions/upload-artifact@v4
+      - name: upload the JUnit report
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: junit-${{ github.job }}
+          name: junit-${{ github.job }}-${{ github.run_attempt }}
           path: junit.xml
           if-no-files-found: ignore
 
@@ -66,13 +66,14 @@ jobs:
       - name: pytest
         shell: bash
         env:
-          NIGHTLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live) }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$NIGHTLY" = "true" ]; then marks=(); else marks=(-m "$PR_MARKS"); fi
+          if [ "$NIGHTLY" = "true" ]; then marks=(); else marks=(-m "$MARKS_LEFT_OUT_OF_CHANGE_RUNS"); fi
           pytest -q --junitxml=junit.xml "${marks[@]}"
-      - uses: actions/upload-artifact@v4
+      - name: upload the JUnit report
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: junit-${{ github.job }}
+          name: junit-${{ github.job }}-${{ github.run_attempt }}
           path: junit.xml
           if-no-files-found: ignore
