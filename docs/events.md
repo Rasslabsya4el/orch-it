@@ -169,3 +169,15 @@ no `step`), `bad_at`, `at_without_zone`, `bad_repo` (not `owner/name`), `bad_cod
 else `bad_type`; `ticket` is a positive integer; `at` is `YYYY-MM-DDTHH:MM:SS[.ffffff]` with `Z` or `±HH:MM` (a leap second
 is refused). A code written `<prefix>:<id>` in a list (`machine:<id>`) takes any value
 after its prefix.
+
+## Commands
+
+`python -m orch_it [--store PATH] events <command>`; the store is `--store`, else the `store` setting, else the per-user data folder. An error prints `error: <code>` to stderr and exits 2.
+
+- `query "<sql>" [--param name=value ...]`: read-only SQL over the table `events`, printed as a text table.
+- `ticket-cost --repo R --ticket N`: the cost of a ticket from its ready edit to its close per role, direct or shared, with `% week`.
+- `session-cost [--session ID] [--repo R] [--since ISO] [--until ISO]`: dollars, `% week`, tokens and minutes per session and model, subagents under their parent, totals.
+- `limit-rate`: dollars at API prices per 1 % of the weekly limit between consecutive `weekly_limit_pct` readings.
+- `measure-limit <pct> [--repo R] [--role owner] [--note TEXT]`: record a reading of the usage card as `value.measured`.
+- `set-limit-rate <usd_per_pct> --plan NAME --measured DATE`: save the setting `weekly_limit_usd_per_pct`.
+- `import <transcript folder> --repo R [--role worker] [--subagent-role ROLE] [--ticket N] [--session ID] [--quiet-minutes 30]`: write the events of Claude Code transcripts.
