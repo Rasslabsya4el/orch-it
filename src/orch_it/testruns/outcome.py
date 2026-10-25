@@ -109,60 +109,56 @@ def judge(report_path: Path | None, *, requested_ids: list[str] | None = None,
 
 
 def _not_collected(requested: list[str], cases: tuple[junit.Case, ...]) -> tuple[str, ...]:
+    """The requested ids no case answers. The id rule is the `orch_it_ids` plugin's (which
+    selects the tests of a pytest run), kept apart because the plugin runs where orch-it is not
+    installed; a test runs every id form through both."""
+
     ids = {case.test_id for case in cases}
+    names: dict[str, set[str]] = {}
+    for case in cases:
+        names.setdefault(case.classname, set()).add(case.name)
     prefixes = set()  # every classname and each dotted head of it: `a.b.c` gives a, a.b, a.b.c
-    for classname in {case.classname for case in cases}:
+    for classname in names:
         parts = classname.split(".")
         prefixes.update(".".join(parts[:n]) for n in range(1, len(parts) + 1))
+
+    def answered(wanted: str) -> bool:
+        if wanted in ids:
+            return True
+        if "::" not in wanted:
+            return _module_of(wanted) in prefixes
+        if wanted.partition("::")[0].endswith(".py"):  # a pytest node id, or the start of one
+            base, bracket, params = wanted.partition("[")
+            parts = base.split("::")
+            classname = ".".join([_module_of(parts[0]), *parts[1:-1]])
+            name = parts[-1] + bracket + params
+            if not bracket and f"{classname}.{name}" in prefixes:  # a class
+                return True
+        else:  # a JUnit id `<classname>::<name>`
+            classname, _, name = wanted.partition("::")
+        own = names.get(classname, set())
+        return name in own or ("[" not in name and any(n.startswith(name + "[") for n in own))
+
     missing = []
     for wanted in requested:
-        wanted = wanted.strip()
-        if not wanted:
-            continue
-        if "::" in wanted:
-            if wanted not in ids and _from_node_id(wanted) not in ids:
-                missing.append(wanted)
-            continue
-        if wanted in ids or wanted in prefixes or _module_of(wanted) in prefixes:
-            continue
-        missing.append(wanted)
+        wanted = _normal(wanted)
+        if wanted and not answered(wanted):
+            missing.append(wanted)
     return tuple(dict.fromkeys(missing))
 
 
-def _module_of(path: str) -> str:
-    """A file or folder as pytest's classname of it: `./tests/sub/test_x.py` and `tests\\sub\\`
-    give `tests.sub.test_x` and `tests.sub`."""
+def _normal(wanted: str) -> str:
+    wanted = wanted.strip().replace("\\", "/")
+    while wanted.startswith("./"):
+        wanted = wanted[2:]
+    return wanted
 
-    path = path.replace("\\", "/").strip("/")
-    while path.startswith("./"):
-        path = path[2:]
+
+def _module_of(path: str) -> str:
+    """A file or folder as pytest's classname of it: `tests/sub/test_x.py` and `tests/sub/` give
+    `tests.sub.test_x` and `tests.sub`."""
+
+    path = path.strip("/")
     if path.endswith(".py"):
         path = path[:-3]
     return path.replace("/", ".")
-
-
-def _split_node_id(node_id: str) -> list[str]:
-    """`a.py::C::t[x::y]` -> `["a.py", "C", "t[x::y]"]`: a `::` inside a parameter's brackets
-    does not split."""
-
-    parts, start, depth, i = [], 0, 0, 0
-    while i < len(node_id):
-        char = node_id[i]
-        if char == "[":
-            depth += 1
-        elif char == "]" and depth:
-            depth -= 1
-        elif depth == 0 and node_id.startswith("::", i):
-            parts.append(node_id[start:i])
-            start = i + 2
-            i += 1
-        i += 1
-    return parts + [node_id[start:]]
-
-
-def _from_node_id(node_id: str) -> str:
-    """A pytest node id as its JUnit test id: `tests/test_x.py::TestC::test_y` ->
-    `tests.test_x.TestC::test_y`."""
-
-    file, *classes, name = _split_node_id(node_id)
-    return f"{'.'.join([_module_of(file), *classes])}::{name}"

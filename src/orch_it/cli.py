@@ -1,5 +1,5 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
-7 and 9 for `import-github` and `test-places`).
+7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -17,9 +17,16 @@ from orch_it import settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.testruns import github
+from orch_it.testruns.config import TestSettings
+from orch_it.testruns.runner import RunError, git_output, run_tests
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
+EXIT_INTERRUPTED = 130
+# `tests run` exits 0 on passed, 1 on failed, 3 on any other outcome (no result, refused, lost,
+# stopped): a script tells "red" from "no answer" without reading the line
+TESTS_EXIT = {"passed": 0, "failed": 1}
+TESTS_EXIT_OTHER = 3
 
 
 _INTEGER = re.compile(r"-?(0|[1-9][0-9]*)")
@@ -28,7 +35,7 @@ _DECIMAL = re.compile(r"-?(0|[1-9][0-9]*)\.[0-9]+")
 
 class CommandError(Exception):
     """A command given a value it cannot use. `code`: `bad_pct` (a weekly percent outside
-    0-100)."""
+    0-100), `repo_unknown` (no `--repo` and no GitHub origin in the work tree)."""
 
     def __init__(self, code: str, detail: str = ""):
         self.code = code
@@ -106,6 +113,15 @@ def _parser() -> argparse.ArgumentParser:
 
     p = command("test-places", "runs, outcomes and median run and GitHub queue minutes per place and OS")
     p.add_argument("--repo")
+
+    tests = commands.add_parser("tests", help="test runs").add_subparsers(dest="command", required=True)
+    p = tests.add_parser("run", parents=[common], help="run the repo's tests at a test place")
+    p.add_argument("--ids-file", metavar="PATH", help="run only the tests named in this file")
+    p.add_argument("--place", help="force a place (own, machine:<id>, github); default: the place rule")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+    p.add_argument("--ticket", type=int)
+    p.add_argument("--role", default="script")
     return root
 
 
@@ -121,6 +137,30 @@ def render(result: QueryResult) -> str:
 
 def _store(args) -> Store:
     return Store.open(args.store)
+
+
+_ORIGIN = re.compile(r"(?:github\.com[:/])([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
+
+
+def _repo_of(work_tree: str) -> str:
+    """`owner/name` of the work tree's `origin` on GitHub, or `CommandError("repo_unknown")`."""
+
+    origin = git_output(work_tree, "remote", "get-url", "origin")
+    found = _ORIGIN.search(origin) if origin else None
+    if not found:
+        raise CommandError("repo_unknown", f"{work_tree}: give --repo")
+    return found.group(1)
+
+
+def _tests_run(args) -> tuple[str, int]:
+    repo = args.repo or _repo_of(args.work_tree)
+    test_settings = TestSettings.from_settings(settings.load(), repo)
+    done = run_tests(_store(args), work_tree=Path(args.work_tree), repo=repo, settings=test_settings,
+                     ids_file=Path(args.ids_file) if args.ids_file else None, place=args.place,
+                     role=args.role, ticket=args.ticket)
+    line = (f"run={done.run} place={done.place} outcome={done.outcome} reason={done.reason or '-'}"
+            f" collected={done.collected} failed={done.failed}\n")
+    return line, TESTS_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
 
 
 def _run(args) -> str:
@@ -175,10 +215,16 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else EXIT_ERROR
     try:
-        text = _run(args)
+        if args.group == "tests":
+            text, code = _tests_run(args)
+        else:
+            text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, CommandError) as e:
+            queries.QueryError, github.GithubError, CommandError, RunError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
+    except KeyboardInterrupt:  # a run stopped by a person has already written its end
+        print("error: interrupted", file=sys.stderr)
+        return EXIT_INTERRUPTED
     sys.stdout.write(text)
-    return 0
+    return code
