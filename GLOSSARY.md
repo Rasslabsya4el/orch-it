@@ -63,8 +63,8 @@ _Avoid_: scheduler, routing, placement policy
 
 **Clean environment**:
 What a test run's process sees of its environment: the OS's base variables and the repo's own test settings, nothing of whoever started it.
-_Avoid_: sandbox, isolated env, env
+_Avoid_: sandbox, isolated environment
 
 **Bound**:
-The longest a test run may take; a run that reaches it is cut, and a cut run has no result, never a red one.
+The longest a test run may take, set per repo; a run that reaches it is cut, which is never a failed run.
 _Avoid_: timeout, limit, deadline
