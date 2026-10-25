@@ -13,7 +13,8 @@ from pathlib import Path
 
 
 class SettingsError(ValueError):
-    """`code`: `settings_unreadable` (the settings file is no JSON object of settings)."""
+    """`code`: `settings_unreadable` (the settings file is no JSON object of settings),
+    `bad_setting` (a setting of the wrong shape; the field names which part)."""
 
     def __init__(self, code: str, detail: str = ""):
         self.code = code
