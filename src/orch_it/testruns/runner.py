@@ -24,6 +24,7 @@ from orch_it.events import schema
 from orch_it.events.store import Store
 from orch_it.testruns import environment, outcome, place_rule
 from orch_it.testruns.config import TestSettings
+from orch_it.testruns.machine import MachinePlace
 from orch_it.testruns.places import OwnPlace, PlaceEnd, PlaceRefused, PlaceVanished, Request
 
 GIT_TIMEOUT_SECONDS = 30
@@ -110,12 +111,24 @@ def offers_of(settings: TestSettings, places: dict) -> list[place_rule.Offer]:
     return offers
 
 
+def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, ...] = ("ssh",)) -> dict:
+    """The own place and one machine place per machine of the settings. A machine clones and
+    fetches from its own `origin` setting, else from the work tree's `origin`."""
+
+    places = {"own": OwnPlace()}
+    if settings.machines:
+        origin = git_output(work_tree, "remote", "get-url", "origin")
+        for machine in settings.machines:
+            places[machine.place] = MachinePlace(machine, origin_url=origin, ssh=ssh)
+    return places
+
+
 def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSettings,
               ids_file: Path | None = None, place: str | None = None, need_os: str = "any",
               role: str = "script", ticket: int | None = None, places: dict | None = None,
               wait_minutes: float | None = None, sleep=time.sleep, now=None) -> RunDone:
     """One run of the repo's test command at the place the rule picks (or `place`, forced).
-    `places` maps a place id to its adapter (default: the own place). A place lost or refusing
+    `places` maps a place id to its adapter (default: `default_places`). A place lost or refusing
     mid-run is left out and the rule picks again, until a place finishes the run or none is
     left. No place left writes a `wait` on `test_place`: while a place it can free is busy it
     lasts up to `wait_minutes` (default: the bound), re-deciding every `WAIT_POLL_SECONDS`, else
@@ -127,7 +140,7 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     if need_os not in NEED_OSES:
         raise RunError("bad_os", need_os)
     ids = read_ids(ids_file) if ids_file is not None else None
-    places = places if places is not None else {"own": OwnPlace()}
+    places = places if places is not None else default_places(settings, work_tree)
     if place is not None and place not in places:
         raise RunError("unknown_place", place)
     run = _Run(store, work_tree, repo, settings, ids, role, ticket, offers_of(settings, places),
@@ -216,7 +229,9 @@ class _Run:
         writer.write(envelope | {"kind": "step.started", "detail": {
             "place": decision.chosen, "chosen": decision.chosen, "reason": decision.reason,
             "places_offered": decision.detail(), "selection": self.selection,
-            "commit": self.commit, "dirty": self.dirty, "branch": self.branch, "pr": None,
+            "commit": self.commit, "branch": self.branch, "pr": None,
+            # only the own place runs the work tree as it is; the others run the clean commit
+            "dirty": self.dirty if decision.chosen == "own" else None,
             "workers": None, "part": None, "run_os": run_os,
             "settings_hash": environment.settings_hash(self.settings.command,
                                                        self.settings.bound_minutes,
@@ -243,7 +258,7 @@ class _Run:
             try:
                 place_end = adapter.run(request, Path(scratch))
             except PlaceRefused as e:
-                return _unfinished(writer, envelope, decision.chosen, "refused", e.code)
+                return _unfinished(writer, envelope, decision.chosen, "refused", e.code, e.step)
             except PlaceVanished:
                 return _unfinished(writer, envelope, decision.chosen, "lost", "place_vanished")
             except BaseException:  # stopped by a person (Ctrl-C) or a crash: never left live
@@ -259,10 +274,13 @@ class _Run:
                        run_end.collected, run_end.failed, run_end.missing_ids)
 
 
-def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str) -> RunDone:
-    writer.write(envelope | {"kind": "step.ended", "detail": {
-        "outcome": run_outcome, "reason": reason, "collected": 0, "passed": 0, "failed": 0,
-        "skipped": 0, "summary_seen": False}})
+def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str,
+                step: str | None = None) -> RunDone:
+    detail = {"outcome": run_outcome, "reason": reason, "collected": 0, "passed": 0, "failed": 0,
+              "skipped": 0, "summary_seen": False}
+    if step:
+        detail["refused_step"] = step  # where the place stopped, for a refusal
+    writer.write(envelope | {"kind": "step.ended", "detail": detail})
     return RunDone(envelope["run"], place, run_outcome, reason, 0, 0)
 
 

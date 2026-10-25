@@ -139,3 +139,11 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
             expected = ["suite/test_marks.py::test_live", "suite/test_marks.py::test_plain",
                         "suite/test_marks.py::test_slow"]
         assert ids == expected, name
+
+
+def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_does_not():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    linux = "\n".join(step_named(steps_of(jobs["linux"]), "pytest"))
+    windows = "\n".join(step_named(steps_of(jobs["windows"]), "pytest"))
+    assert re.search(r'^\s+ORCH_IT_REQUIRE_SSHD: "1"$', linux, re.M)
+    assert "ORCH_IT_REQUIRE_SSHD" not in windows

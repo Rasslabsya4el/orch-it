@@ -32,6 +32,16 @@ def test_machines_are_read_in_settings_order():
         Machine("win", "win", "windows", "C:/ci/orch-it", 1, None, False))
 
 
+def test_a_machine_may_name_its_origin_and_extra_ssh_options():
+    raw = {"test_machines": [{"id": "box", "host": "me@box", "os": "linux", "checkout": "/srv/x",
+                              "origin": "https://example.org/me/x.git", "ssh_options": ["-p", "2222"]}]}
+    [box] = TestSettings.from_settings(raw, REPO).machines
+    assert (box.origin, box.ssh_options) == ("https://example.org/me/x.git", ("-p", "2222"))
+    [plain] = TestSettings.from_settings(
+        {"test_machines": [{"id": "b", "host": "h", "os": "linux", "checkout": "/x"}]}, REPO).machines
+    assert (plain.origin, plain.ssh_options) == (None, ())
+
+
 @pytest.mark.parametrize("raw, field", [
     ({"test_command": "pytest"}, "test_command"),
     ({"test_command": []}, "test_command"),
@@ -44,6 +54,12 @@ def test_machines_are_read_in_settings_order():
     ({"own_capacity": -1}, "own_capacity"),
     ({"repos": []}, "repos"),
     ({"test_machines": {}}, "test_machines"),
+    ({"test_machines": [{"id": "a", "host": "-oProxyCommand=x", "os": "linux", "checkout": "/x"}]},
+     "test_machines[0].host"),
+    ({"test_machines": [{"id": "a", "host": "h", "os": "linux", "checkout": "/x", "origin": ""}]},
+     "test_machines[0].origin"),
+    ({"test_machines": [{"id": "a", "host": "h", "os": "linux", "checkout": "/x", "ssh_options": "-p 22"}]},
+     "test_machines[0].ssh_options"),
     ({"test_machines": [{"id": "a", "host": "h", "os": "beos", "checkout": "/x"}]}, "test_machines[0].os"),
     ({"test_machines": [{"id": "a b", "host": "h", "os": "linux", "checkout": "/x"}]}, "test_machines[0].id"),
     ({"test_machines": [{"id": "a", "host": "h", "os": "linux", "checkout": "/x"},

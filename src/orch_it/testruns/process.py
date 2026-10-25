@@ -9,7 +9,8 @@ wall clock says so: a wall clock stepping back never stretches it, and a machine
 through it still cuts the run. A jump of the wall clock between two polls longer than
 `SLEEP_GAP_SECONDS` that carries the run past its bound marks it `slept` (a short sleep long
 before the bound does not). The command's output is read through a pipe and only its last
-`LOG_TAIL_BYTES` are kept.
+`LOG_TAIL_BYTES` are kept. A caller may also set an `abort` event: the run is then killed like a
+cut one (a machine place sets it when its caller is gone).
 """
 
 from __future__ import annotations
@@ -43,7 +44,11 @@ class CommandMissing(Exception):
 
 
 def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str] | None, bound_seconds: float,
-                wall=time.time, poll_seconds: float = POLL_SECONDS) -> Finished:
+                wall=time.time, poll_seconds: float = POLL_SECONDS,
+                abort: threading.Event | None = None) -> Finished:
+    """Run `argv` until it exits, its bound passes, or `abort` is set (then it is killed like a
+    cut run: a machine place sets it when its caller is gone)."""
+
     try:
         tree = _Tree.start(argv, cwd, env)
     except (OSError, ValueError) as e:
@@ -60,6 +65,9 @@ def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str] | None, bound
                 break
             except subprocess.TimeoutExpired:
                 pass
+            if abort is not None and abort.is_set():
+                cut = True
+                break
             now = wall()
             if now - last > poll_seconds + SLEEP_GAP_SECONDS and last < deadline <= now:
                 slept = True  # the machine slept across the bound

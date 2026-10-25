@@ -43,6 +43,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          ORCH_IT_REQUIRE_SSHD: "1"
         run: |
           if [ "$NIGHTLY" = "true" ]; then marks=(); else marks=(-m "$MARKS_LEFT_OUT_OF_CHANGE_RUNS"); fi
           pytest -q --junitxml=junit.xml "${marks[@]}"

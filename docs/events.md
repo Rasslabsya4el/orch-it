@@ -190,3 +190,4 @@ after its prefix.
 `python -m orch_it [--store PATH] tests run [--ids-file F] [--place P] [--work-tree PATH] [--repo R] [--ticket N] [--role script]`:
 run the repo's test command once at a test place, write its `test_run` pair and one `test.result` per test case, and
 print `run=… place=… outcome=… reason=… collected=… failed=…`; exit 0 on passed, 1 on failed, 3 on any other outcome.
+`--place machine:<id>` forces a run to a machine of the setting `test_machines` (a list of `id`, `host`, `os`, `checkout`, optional `capacity`, `python`, `origin`, `ssh_options`, `on`): one `ssh` connection, the commit checked out in a free slot of the machine (`checkout`, then `checkout-1` ... one per unit of `capacity`; cloned from `origin`, default the work tree's `origin`), the caller's work tree untouched. A refused run's end carries `refused_step` in its detail (`clone`, `fetch`, `commit`, `checkout`, `clean`, `busy`, `not_ours`, `connect`, `start_timeout`).
