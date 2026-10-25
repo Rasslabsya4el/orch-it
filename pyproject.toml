@@ -19,3 +19,8 @@ orch_it = ["events/*.json", "events/*.sql", "events/queries/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--strict-markers --ignore=tests/fixtures"
+markers = [
+    "slow: long; the workflow leaves it out of pull request and push runs (#394 decision 8)",
+    "live: reads a live outside service; the workflow leaves it out of pull request and push runs",
+]
