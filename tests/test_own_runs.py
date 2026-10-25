@@ -319,8 +319,9 @@ def test_the_test_process_sees_test_env_and_none_of_the_caller_s_variables(tmp_p
     assert "ORCH_IT_CALLER_ONLY" not in env
     assert env["FROM_TEST_ENV"] == "yes"
     allowed = set(environment.BASE_NAMES[environment.this_os()]) | {"SEEN_FILE", "FROM_TEST_ENV", "PYTHONPATH"}
-    # what pytest sets for itself while it runs, never the caller's
-    own = {"PYTEST_CURRENT_TEST", "PYTEST_VERSION"}
+    # what pytest sets for itself while it runs, and what Python sets in a C locale (PEP 538
+    # coerces it to UTF-8 through LC_CTYPE): never the caller's
+    own = {"PYTEST_CURRENT_TEST", "PYTEST_VERSION", "LC_CTYPE"}
     assert set(env) - allowed - own == set()
 
 
