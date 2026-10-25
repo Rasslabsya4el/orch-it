@@ -270,3 +270,132 @@ def test_a_folder_that_is_no_transcript_folder_is_refused(tmp_path):
     with pytest.raises(ImportError_) as caught:
         run(tmp_path / "missing", store)
     assert caught.value.code == "no_transcript_folder"
+
+
+def lines_with(extra):
+    return top_lines()[:-1] + extra + top_lines()[-1:]
+
+
+def test_secrets_never_reach_args_head(folder, tmp_path):
+    secret = assistant("msg_s", "2026-10-25T18:03:30.000Z", "claude-opus-5-5", usage(1, 1, 0, 0), [
+        tool_use("tu_s1", "Bash", {"command": "curl -H 'Authorization: Bearer abc.def.ghi' x"}),
+        tool_use("tu_s2", "Bash", {"command": "export ANTHROPIC_API_KEY=sk-ant-api03-SECRETSECRET"}),
+        tool_use("tu_s3", "Bash", {"command": "git push https://ghp_0123456789abcdefghijABCDEFGHIJ@github.com"}),
+        tool_use("tu_s4", "Bash", {"command": "mysql --password=hunter2 db"})])
+    write_lines(folder / f"{TOP}.jsonl", lines_with([secret]))
+    store = Store.open(tmp_path / "store")
+    run(folder, store)
+    heads = [h for (h,) in store.query(
+        "SELECT args_head FROM events WHERE kind = 'tool.called' AND turn = 'msg_s'").rows]
+    assert len(heads) == 4
+    for leaked in ("abc.def.ghi", "SECRETSECRET", "ghp_0123456789", "hunter2"):
+        assert not any(leaked in head for head in heads), leaked
+
+
+def test_an_error_that_merely_mentions_permission_is_a_failure_not_a_refusal(folder, tmp_path):
+    call = assistant("msg_p", "2026-10-25T18:03:30.000Z", "claude-opus-5-5", usage(1, 1, 0, 0),
+                     [tool_use("tu_p", "Bash", {"command": "cat /root/x"})])
+    write_lines(folder / f"{TOP}.jsonl", lines_with([
+        call, result("tu_p", "2026-10-25T18:03:31.000Z", "cat: Permission to use /root denied", error=True)]))
+    store = Store.open(tmp_path / "store")
+    run(folder, store)
+    assert store.query("SELECT outcome FROM events WHERE kind = 'tool.called' AND turn = 'msg_p'").rows == [
+        ("failed",)]
+
+
+def test_a_lone_surrogate_in_a_transcript_never_blocks_its_import(folder, tmp_path):
+    path = folder / f"{TOP}.jsonl"
+    odd = assistant("msg_u", "2026-10-25T18:03:30.000Z", "claude-opus-5-5", usage(1, 1, 0, 0),
+                    [tool_use("tu_u", "Write", {"content": "PLACEHOLDER"})])
+    raw = json.dumps(odd).replace("PLACEHOLDER", "\\ud800")  # JSON's escape of a lone surrogate
+    write_lines(path, top_lines()[:-1])
+    with path.open("ab") as f:
+        f.write(raw.encode() + b"\n" + json.dumps(top_lines()[-1]).encode() + b"\n")
+    store = Store.open(tmp_path / "store")
+    report = run(folder, store)
+    assert store.query("SELECT count(*) FROM events WHERE turn = 'msg_u'").rows == [(2,)]
+    assert run(folder, store).written == 0 and report.bad_lines == 0
+
+
+def test_a_turn_without_a_timestamp_is_counted_as_a_bad_line(folder, tmp_path):
+    no_time = assistant("msg_t", None, "claude-opus-5-5", usage(9, 9, 0, 0), [])
+    write_lines(folder / f"{TOP}.jsonl", lines_with([no_time]))
+    store = Store.open(tmp_path / "store")
+    assert run(folder, store).bad_lines == 1
+
+
+def test_odd_records_never_stop_an_import(folder, tmp_path):
+    odd = [
+        assistant("msg_far", "0001-01-01T00:00:00+00:00", "claude-opus-5-5", usage(1, 1, 0, 0), []),
+        assistant("msg_str", "2026-10-25T18:03:10.000Z", "claude-opus-5-5",
+                  {"input_tokens": "10", "output_tokens": 5}, []),
+        assistant("msg_flt", "2026-10-25T18:03:20.000Z", "claude-opus-5-5",
+                  {"input_tokens": 10.0, "output_tokens": 5,
+                   "cache_creation": {"ephemeral_1h_input_tokens": 50, "ephemeral_5m_input_tokens": 5}}, []),
+        {"type": "assistant", "sessionId": TOP, "timestamp": "2026-10-25T18:03:25.000Z",
+         "message": {"model": None, "content": [tool_use("tu_nomodel", "Read", {"file_path": "x"})]}},
+        result("tu_nomodel", "2026-10-25T18:03:26.000Z"),
+    ]
+    write_lines(folder / f"{TOP}.jsonl", lines_with(odd))
+    (folder / TOP / "subagents" / f"agent-{AGENT}.meta.json").write_text(
+        json.dumps({"agentType": ["x"], "agentId": 7, "finished": True}))
+    (folder / "junk.jsonl").mkdir()
+    store = Store.open(tmp_path / "store")
+    report = run(folder, store)
+    assert report.bad_lines == 1 and report.refused_events == 0
+    rows = dict((t, (u, r, i, w)) for t, u, r, i, w in store.query(
+        "SELECT turn, usd, reason, input_tokens, cache_write_tokens FROM events WHERE kind = 'turn.used'").rows)
+    assert rows["msg_str"][:2] == (None, "usage_unreadable")
+    # msg_flt: 10 in x 4 + 5 out x 20 + 50 1h-write x 8 + 5 write x 5 = 565 per million
+    assert (round(rows["msg_flt"][0], 9), rows["msg_flt"][2:]) == (0.000565, (10, 55))
+    assert store.query("SELECT count(*) FROM events WHERE kind = 'tool.called' AND tool = 'Read'").rows == [(1,)]
+    assert store.query("SELECT DISTINCT role FROM events WHERE parent_session IS NOT NULL").rows == [("worker",)]
+
+
+def test_a_session_ends_at_its_latest_moment_not_its_last_line(folder, tmp_path):
+    late_then_early = lines_with([{"type": "user", "sessionId": TOP, "timestamp": "2026-10-25T17:00:00.000Z",
+                                   "message": {"role": "user", "content": "x"}}])
+    write_lines(folder / f"{TOP}.jsonl", late_then_early + [
+        {"type": "user", "sessionId": TOP, "timestamp": "2026-10-25T10:00:00.000Z",
+         "message": {"role": "user", "content": "clock went back"}}])
+    store = Store.open(tmp_path / "store")
+    run(folder, store)
+    assert store.query("SELECT kind, at FROM events WHERE step = 'session' ORDER BY kind").rows == [
+        ("step.ended", "2026-10-25T18:04:00.000000Z"), ("step.started", "2026-10-25T10:00:00.000000Z")]
+
+
+def test_a_quiet_transcript_s_last_line_without_newline_is_read(folder, tmp_path):
+    path = folder / f"{TOP}.jsonl"
+    lines = top_lines()
+    write_lines(path, lines[:-1], tail=json.dumps(lines[-1]).encode())
+    store = Store.open(tmp_path / "store")
+    run(folder, store, now=LATER)
+    assert store.query("SELECT count(*) FROM events WHERE kind = 'turn.used' AND turn = 'msg_4'").rows == [(1,)]
+
+
+def test_bad_options_are_refused_before_anything_is_read(folder, tmp_path):
+    from orch_it.events.schema import EventError
+    from orch_it.events.transcripts import ImportError_
+    store = Store.open(tmp_path / "store")
+    for over, error, code in (({"repo": "orch-it"}, EventError, "bad_repo"),
+                              ({"subagent_role": "intern"}, EventError, "bad_code"),
+                              ({"now": datetime(2026, 10, 25)}, ImportError_, "bad_now"),
+                              ({"quiet_minutes": float("nan")}, ImportError_, "bad_quiet_minutes")):
+        with pytest.raises(error) as caught:
+            run(folder, store, **over)
+        assert caught.value.code == code
+    assert store.query("SELECT count(*) FROM events").rows == [(0,)]
+
+
+def test_more_secret_shapes_never_reach_args_head(folder, tmp_path):
+    commands = ["export TOKEN='abc def'", "curl -u admin:hunter2 x", "psql postgres://u:pw123@host/db",
+                "curl -H 'X-Auth-Token: abcd1234' x", 'PASSWORD="my pass" run']
+    call = assistant("msg_s2", "2026-10-25T18:03:30.000Z", "claude-opus-5-5", usage(1, 1, 0, 0),
+                     [tool_use(f"tu_c{n}", "Bash", {"command": c}) for n, c in enumerate(commands)])
+    write_lines(folder / f"{TOP}.jsonl", lines_with([call]))
+    store = Store.open(tmp_path / "store")
+    run(folder, store)
+    heads = " ".join(h for (h,) in store.query(
+        "SELECT args_head FROM events WHERE kind = 'tool.called' AND turn = 'msg_s2'").rows)
+    for leaked in ("abc def", "hunter2", "pw123", "abcd1234", "my pass"):
+        assert leaked not in heads, leaked

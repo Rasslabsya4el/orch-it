@@ -75,7 +75,7 @@ CODE_FIELDS = {
         "lease_released", "closed", "unparked", "rerun", "red_ticket_opened",
     },
     ("test_run.ended", "reason"): {"suspended", "lease_lost"},
-    ("turn.used", "reason"): {"price_missing"},
+    ("turn.used", "reason"): {"price_missing", "usage_unreadable"},  # decision 6; a turn whose usage is no counts
     ("test.result", "load_verdict"): {"code", "load"},
     ("hook.ran", "action"): {"acted", "skipped"},
     ("run.checked", "result"): {"alive", "ended", "failed"},

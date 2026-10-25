@@ -11,12 +11,15 @@ the same transcripts writes nothing, and a half-written last line is left for th
 A record still in motion waits: a message until a line of it carries its `stop_reason`, a tool
 call until its result, a session's end until its transcript has been quiet for
 `quiet_minutes` (a subagent whose meta says `finished` ends at once). Once the transcript is
-quiet, what is there is written as it stands.
+quiet, what is there is written as it stands. A session that resumes after its end was written
+keeps that end; its later turns are still read.
 """
 
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,12 +31,25 @@ from orch_it.events.store import Store
 
 SOURCE = "claude-code"
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-REFUSAL_MARKS = ("doesn't want to proceed", "tool use was rejected", "permission to use")
+# The words Claude Code answers a tool use with when the user or a permission rule refused it.
+REFUSAL_MARKS = ("doesn't want to proceed with this tool use", "the tool use was rejected")
 ARGS_HEAD_CHARS = 120
+TEXT_CHARS = 200  # model, title, effort, skill: longer is no name
+MAX_TOKENS = 10**12  # a count past this is no token count
+# Secrets an argument may carry. Each match keeps its key (group 1) and loses its value, before
+# the head is taken, so no private value reaches the store.
+_SECRETS = re.compile(
+    r"(?i)((?:authorization|x-[a-z-]*(?:auth|token|key|secret)[a-z-]*):\s*(?:bearer\s+|basic\s+)?|bearer\s+"
+    r"|(?:password|passwd|pwd|secret|token|api[_-]?key)[\"']?\s*[:=]\s*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s\"']+)"
+    r"|(?i:(-u\s+|--user[\s=]+)[^\s:]+:)\S+"
+    r"|(://[^/\s:@]+:)[^@\s/]+(?=@)"
+    r"|sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}"
+    r"|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+")
 
 
 class ImportError_(Exception):
-    """`code`: `no_transcript_folder`."""
+    """`code`: `no_transcript_folder`, `bad_now` (a `now` without a zone), `bad_quiet_minutes`."""
 
     def __init__(self, code: str, detail: str = ""):
         self.code = code
@@ -45,13 +61,15 @@ class ImportReport:
     written: int = 0
     already_stored: int = 0
     sessions: int = 0
-    bad_lines: int = 0
+    bad_lines: int = 0  # lines no record could be read from, and turns with no usable time
     pending_lines: int = 0
+    refused_events: int = 0  # events the store refused (each counted, the rest still written)
+    unreadable_files: int = 0
 
 
 @dataclass
 class _Message:
-    at: str
+    at: datetime
     model: str
     usage: dict
     order: int
@@ -60,10 +78,10 @@ class _Message:
 
 @dataclass
 class _ToolUse:
-    at: str
+    at: datetime
     name: str
     args: object
-    turn: str
+    turn: str | None
     order: int
 
 
@@ -74,17 +92,22 @@ class _Transcript:
     session: str
     parent: str | None
     meta: dict
-    first_at: str | None = None
-    last_at: str | None = None
+    first_at: datetime | None = None
+    last_at: datetime | None = None
     title: str | None = None
     model: str | None = None
     effort: str | None = None
     last_stop: str | None = None
     messages: dict[str, _Message] = field(default_factory=dict)
     tool_uses: dict[str, _ToolUse] = field(default_factory=dict)
-    results: dict[str, tuple[str, bool, str]] = field(default_factory=dict)
+    results: dict[str, tuple[datetime, bool, str]] = field(default_factory=dict)
     bad_lines: int = 0
     pending_lines: int = 0
+    quiet_tail: tuple[dict, int] | None = None  # a whole last record still without its newline
+
+    def saw(self, at: datetime) -> None:
+        self.first_at = at if self.first_at is None else min(self.first_at, at)
+        self.last_at = at if self.last_at is None else max(self.last_at, at)
 
 
 def import_transcripts(folder: str | Path, store: Store, *, repo: str, role: str = "worker",
@@ -95,21 +118,37 @@ def import_transcripts(folder: str | Path, store: Store, *, repo: str, role: str
 
     `role` is the role of the top-level sessions; a subagent takes `subagent_role`, else its
     meta's `agentType` when that is a role code, else `worker`. `ticket` goes on every event.
-    `session` limits the run to one top-level session and its subagents."""
+    `session` limits the run to one top-level session and its subagents. Bad options raise
+    before any file is read."""
 
     folder = Path(folder)
     if not folder.is_dir():
         raise ImportError_("no_transcript_folder", str(folder))
     now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        raise ImportError_("bad_now", str(now))
+    if not (isinstance(quiet_minutes, (int, float)) and math.isfinite(quiet_minutes)
+            and 0 <= quiet_minutes <= 60 * 24 * 365):
+        raise ImportError_("bad_quiet_minutes", str(quiet_minutes))
+    for probe_role in (role, subagent_role or role):
+        schema.validate(_event("step.started", "probe", now.isoformat(), {
+            "repo": repo, "ticket": ticket, "role": probe_role, "session": None,
+            "parent_session": None, "step": "session", "run": None, "note": None,
+            "machine": "probe", "os": "probe", "layer_version": "probe"}, {}))
+
     report = ImportReport()
     events: dict[str, dict] = {}
     for path, parent, meta in _transcript_files(folder, session):
-        transcript = _read(path, parent, meta)
+        try:
+            transcript = _read(path, parent, meta)
+        except OSError:
+            report.unreadable_files += 1
+            continue
         report.sessions += 1
         report.bad_lines += transcript.bad_lines
         report.pending_lines += transcript.pending_lines
         quiet = transcript.last_at is not None and (
-            now - datetime.fromisoformat(transcript.last_at) >= timedelta(minutes=quiet_minutes))
+            now - transcript.last_at >= timedelta(minutes=quiet_minutes))
         envelope = {
             "repo": repo, "ticket": ticket,
             "role": role if parent is None else _subagent_role(subagent_role, meta),
@@ -122,9 +161,14 @@ def import_transcripts(folder: str | Path, store: Store, *, repo: str, role: str
     report.already_stored = len(stored)
     with store.writer() as writer:
         for event_id, event in events.items():
-            if event_id not in stored:
+            if event_id in stored:
+                continue
+            try:
                 writer.write(event)
-                report.written += 1
+            except schema.EventError:
+                report.refused_events += 1
+                continue
+            report.written += 1
     return report
 
 
@@ -132,52 +176,62 @@ def _subagent_role(given: str | None, meta: dict) -> str:
     if given:
         return given
     agent_type = meta.get("agentType")
-    return agent_type if agent_type in schema.codes_of("envelope", "role") else "worker"
+    roles = schema.codes_of("envelope", "role")
+    return agent_type if isinstance(agent_type, str) and agent_type in roles else "worker"
 
 
 def _transcript_files(folder: Path, session: str | None):
     """(path, parent session or None, meta) of every transcript, top-level sessions first."""
 
     for path in sorted(folder.glob("*.jsonl")):
-        if session is None or path.stem == session:
+        if (session is None or path.stem == session) and path.is_file():
             yield path, None, {}
     for path in sorted(folder.glob("*/subagents/*.jsonl")):
         parent = path.parent.parent.name
-        if session is not None and parent != session:
-            continue
-        yield path, parent, _meta(path)
+        if (session is None or parent == session) and path.is_file():
+            yield path, parent, _meta(path)
 
 
 def _meta(path: Path) -> dict:
     try:
-        meta = json.loads(path.with_name(path.stem + ".meta.json").read_text("utf-8"))
+        meta = json.loads(path.with_name(path.stem + ".meta.json").read_text("utf-8-sig"))
     except (OSError, ValueError):
         return {}
     return meta if isinstance(meta, dict) else {}
 
 
-def _local_at(timestamp: object) -> str | None:
-    """A transcript timestamp (UTC) as the machine's local time with its offset."""
+def _moment(timestamp: object) -> datetime | None:
+    """A transcript timestamp as an aware datetime, or None when it is none."""
 
     if not isinstance(timestamp, str):
         return None
     try:
         moment = datetime.fromisoformat(timestamp)
-    except ValueError:
+        if moment.tzinfo is None:
+            return None
+        moment.astimezone(UTC).astimezone()  # the local view of it must exist too
+    except (ValueError, OverflowError, OSError):
         return None
-    if moment.tzinfo is None:
-        return None
+    return moment
+
+
+def _local(moment: datetime) -> str:
+    """The machine's local time of `moment`, with its offset."""
+
     return moment.astimezone().isoformat(timespec="microseconds")
 
 
 def _read(path: Path, parent: str | None, meta: dict) -> _Transcript:
+    agent_id = meta.get("agentId")
     if parent is None:
         session = path.stem
+    elif isinstance(agent_id, str) and agent_id.strip():
+        session = _clean(agent_id)
     else:
-        session = meta.get("agentId") or path.stem.removeprefix("agent-")
-    transcript = _Transcript(session=session, parent=parent, meta=meta)
-    data = path.read_bytes()
-    lines = data.split(b"\n")
+        session = path.stem.removeprefix("agent-")
+    transcript = _Transcript(session=_clean(session), parent=_clean(parent) if parent else None,
+                             meta=meta)
+    lines = path.read_bytes().split(b"\n")
     if lines[-1]:
         transcript.pending_lines = 1  # a last line still being written: read next run
     for order, raw in enumerate(lines[:-1]):
@@ -190,18 +244,33 @@ def _read(path: Path, parent: str | None, meta: dict) -> _Transcript:
             continue
         if isinstance(record, dict):
             _take(transcript, record, order)
+    if lines[-1] and transcript.last_at is not None:
+        _take_quiet_tail(transcript, lines[-1], len(lines) - 1)
     return transcript
+
+
+def _take_quiet_tail(transcript: _Transcript, raw: bytes, order: int) -> None:
+    """A last line without its newline that is still a whole record is kept aside: it is read
+    only once the transcript is quiet (see `_events`), when no newline is coming."""
+
+    try:
+        record = json.loads(raw)
+    except (ValueError, RecursionError):
+        return
+    if isinstance(record, dict):
+        transcript.quiet_tail = (record, order)
 
 
 def _take(transcript: _Transcript, record: dict, order: int) -> None:
     kind = record.get("type")
     if kind == "custom-title" and isinstance(record.get("customTitle"), str):
-        transcript.title = record["customTitle"]
-    at = _local_at(record.get("timestamp"))
+        transcript.title = _name(record["customTitle"])
+    at = _moment(record.get("timestamp"))
     if at is None:
+        if kind == "assistant":
+            transcript.bad_lines += 1  # a turn with no time cannot be placed: counted, not lost
         return
-    transcript.first_at = transcript.first_at or at
-    transcript.last_at = at
+    transcript.saw(at)
     message = record.get("message")
     if not isinstance(message, dict):
         return
@@ -213,31 +282,34 @@ def _take(transcript: _Transcript, record: dict, order: int) -> None:
         for block in blocks:
             if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
                 text = _text_of(block.get("content"))
-                transcript.results[block["tool_use_id"]] = (at, bool(block.get("is_error")), text)
+                transcript.results[_clean(block["tool_use_id"])] = (
+                    at, bool(block.get("is_error")), text)
 
 
 def _take_assistant(transcript: _Transcript, record: dict, message: dict, blocks: list,
-                    at: str, order: int) -> None:
+                    at: datetime, order: int) -> None:
     model, message_id = message.get("model"), message.get("id")
-    if not isinstance(model, str) or model == "<synthetic>" or not isinstance(message_id, str):
+    turn = _clean(message_id) if isinstance(message_id, str) and message_id else None
+    for block in blocks:
+        if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+            transcript.tool_uses.setdefault(_clean(block["id"]), _ToolUse(
+                at, _name(str(block.get("name") or "")), block.get("input"), turn, order))
+    if not isinstance(model, str) or model == "<synthetic>" or turn is None:
         return
+    model = _name(model)
     transcript.model = transcript.model or model
     if isinstance(record.get("effort"), str):
-        transcript.effort = transcript.effort or record["effort"]
+        transcript.effort = transcript.effort or _name(record["effort"])
     stop = message.get("stop_reason")
     if stop is not None:
         transcript.last_stop = stop
     usage = message.get("usage") if isinstance(message.get("usage"), dict) else None
-    seen = transcript.messages.get(message_id)
+    seen = transcript.messages.get(turn)
     if seen is None:
-        seen = transcript.messages[message_id] = _Message(at, model, usage or {}, order)
+        seen = transcript.messages[turn] = _Message(at, model, usage or {}, order)
     elif usage:
         seen.usage = usage  # the last line of a message holds its whole usage
     seen.finished = seen.finished or stop is not None
-    for block in blocks:
-        if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
-            transcript.tool_uses.setdefault(block["id"], _ToolUse(
-                at, str(block.get("name") or ""), block.get("input"), message_id, order))
 
 
 def _text_of(content: object) -> str:
@@ -249,29 +321,28 @@ def _text_of(content: object) -> str:
     return ""
 
 
-def _count(usage: dict, key: str) -> int:
-    value = usage.get(key)
-    return value if type(value) is int and value > 0 else 0
-
-
 def _events(transcript: _Transcript, envelope: dict, quiet: bool):
-    is_subagent = transcript.parent is not None
-    step = "subagent" if is_subagent else "session"
-    session_record = f"session:{transcript.session}"
+    if quiet and transcript.quiet_tail is not None:
+        _take(transcript, *transcript.quiet_tail)
     if transcript.first_at is None:
         return
+    is_subagent = transcript.parent is not None
+    step = "subagent" if is_subagent else "session"
+    session_record = f"{step}:{transcript.session}"
+    description = transcript.meta.get("description")
+    agent_type = transcript.meta.get("agentType")
     started = {"model": transcript.model, "effort": transcript.effort,
-               "title": transcript.meta.get("description") if is_subagent else transcript.title}
+               "title": (_name(description) if isinstance(description, str) else None)
+               if is_subagent else transcript.title}
     if is_subagent:
         started["launched_by"] = "session"
-        started["agent_type"] = transcript.meta.get("agentType")
-    yield _event("step.started", session_record, transcript.first_at, envelope | {"step": step},
-                 {k: v for k, v in started.items() if v is not None})
+        started["agent_type"] = _name(agent_type) if isinstance(agent_type, str) else None
+    yield _event("step.started", session_record, _local(transcript.first_at),
+                 envelope | {"step": step}, {k: v for k, v in started.items() if v is not None})
 
     for message_id, message in transcript.messages.items():
-        if not (message.finished or quiet):
-            continue
-        yield _turn_used(message_id, message, envelope)
+        if message.finished or quiet:
+            yield _turn_used(message_id, message, envelope)
 
     first_edit = min((use.order for use in transcript.tool_uses.values() if use.name in EDIT_TOOLS),
                      default=None)
@@ -285,53 +356,103 @@ def _events(transcript: _Transcript, envelope: dict, quiet: bool):
             refused = is_error and any(mark in text.lower() for mark in REFUSAL_MARKS)
             detail["outcome"] = "refused" if refused else "failed" if is_error else "passed"
             detail["refused_by"] = "permission" if refused else None
-            detail["ms"] = _ms_between(use.at, result_at)
-        yield _event("tool.called", tool_id, use.at, envelope | {"turn": use.turn}, detail)
+            detail["ms"] = max(0, round((result_at - use.at).total_seconds() * 1000))
+        of_turn = envelope | {"turn": use.turn}
+        yield _event("tool.called", tool_id, _local(use.at), of_turn, detail)
         if use.name == "Skill" and isinstance(use.args, dict) and isinstance(use.args.get("skill"), str):
-            yield _event("skill.called", tool_id, use.at, envelope | {"turn": use.turn}, {
-                "skill": use.args["skill"],
+            yield _event("skill.called", tool_id, _local(use.at), of_turn, {
+                "skill": _name(use.args["skill"]),
                 "before_first_edit": first_edit is None or use.order < first_edit})
 
-    ended = quiet or (is_subagent and transcript.meta.get("finished") is True)
-    if ended:
-        passed = transcript.last_stop == "end_turn" or transcript.meta.get("finished") is True
+    finished = is_subagent and transcript.meta.get("finished") is True
+    if quiet or finished:
+        passed = transcript.last_stop == "end_turn" or finished
         detail = {"outcome": "passed" if passed else "no_result",
                   "reason": "turn_ended" if passed else "idle"}
         if not is_subagent and transcript.title:
             detail["title"] = transcript.title
-        yield _event("step.ended", session_record, transcript.last_at, envelope | {"step": step},
-                     detail)
+        yield _event("step.ended", session_record, _local(transcript.last_at),
+                     envelope | {"step": step}, detail)
+
+
+def _count(usage: dict, key: str) -> int | None:
+    """A token count of `usage`: 0 when absent, None when it is no count."""
+
+    value = usage.get(key)
+    if value is None:
+        return 0
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if type(value) is not int or not 0 <= value <= MAX_TOKENS:
+        return None
+    return value
 
 
 def _turn_used(message_id: str, message: _Message, envelope: dict) -> dict:
     usage = message.usage
-    cache_write = _count(usage, "cache_creation_input_tokens")
     creation = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else {}
+    write_1h, write_5m = _count(creation, "ephemeral_1h_input_tokens"), _count(creation, "ephemeral_5m_input_tokens")
+    write = _count(usage, "cache_creation_input_tokens")
+    if "cache_creation_input_tokens" not in usage and write_1h is not None and write_5m is not None:
+        write = write_1h + write_5m
     tokens = {
         "input_tokens": _count(usage, "input_tokens"),
         "output_tokens": _count(usage, "output_tokens"),
         "cache_read_tokens": _count(usage, "cache_read_input_tokens"),
-        "cache_write_tokens": cache_write,
-        "cache_write_1h_tokens": min(_count(creation, "ephemeral_1h_input_tokens"), cache_write),
+        "cache_write_tokens": write,
+        "cache_write_1h_tokens": None if write is None or write_1h is None else min(write_1h, write),
     }
-    usd, table = price_turn(message.model, tokens)
-    detail = {"model": message.model, **tokens, "usd": usd, "price_table": table}
-    if usd is None:
-        detail["reason"] = "price_missing"
-    return _event("turn.used", message_id, message.at, envelope | {"turn": message_id}, detail)
+    if not usage or None in tokens.values():
+        detail = {"model": message.model, **{k: v or 0 for k, v in tokens.items()},
+                  "usd": None, "price_table": None, "reason": "usage_unreadable"}
+    else:
+        usd, table = price_turn(message.model, tokens)
+        detail = {"model": message.model, **tokens, "usd": usd, "price_table": table}
+        if usd is None:
+            detail["reason"] = "price_missing"
+    return _event("turn.used", message_id, _local(message.at), envelope | {"turn": message_id},
+                  detail)
 
 
 def _args_head(args: object) -> str:
+    """The tool's arguments as compact JSON, secrets cut out, at most 120 characters."""
+
     try:
-        text = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
+        text = json.dumps(_without_secrets(args), ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError, RecursionError):
         text = ""
-    return text[:ARGS_HEAD_CHARS]
+    return _clean(text)[:ARGS_HEAD_CHARS]
 
 
-def _ms_between(start: str, end: str) -> int:
-    delta = datetime.fromisoformat(end) - datetime.fromisoformat(start)
-    return max(0, round(delta.total_seconds() * 1000))
+def _without_secrets(value: object, depth: int = 0) -> object:
+    """`value` with every string's secrets cut out (strings as written, before JSON escapes
+    them); past 50 levels the rest is dropped."""
+
+    if depth > 50:
+        return None
+    if isinstance(value, str):
+        return _SECRETS.sub(_hide, _clean(value))
+    if isinstance(value, dict):
+        return {_SECRETS.sub(_hide, _clean(str(k))): _without_secrets(v, depth + 1)
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [_without_secrets(v, depth + 1) for v in value]
+    return value
+
+
+def _hide(match: re.Match) -> str:
+    kept = next((group for group in match.groups() if group), "")
+    return kept + "<secret>"
+
+
+def _clean(text: str) -> str:
+    """`text` with any lone surrogate (valid in JSON, not in UTF-8) replaced."""
+
+    return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
+def _name(text: str) -> str:
+    return _clean(text)[:TEXT_CHARS]
 
 
 def _event(kind: str, record_id: str, at: str, envelope: dict, detail: dict) -> dict:
