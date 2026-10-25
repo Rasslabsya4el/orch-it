@@ -326,7 +326,7 @@ def test_a_turn_without_a_timestamp_is_counted_as_a_bad_line(folder, tmp_path):
 
 def test_odd_records_never_stop_an_import(folder, tmp_path):
     odd = [
-        assistant("msg_far", "0001-01-01T00:00:00+00:00", "claude-opus-5-5", usage(1, 1, 0, 0), []),
+        assistant("msg_far", "0001-01-01T00:00:00+14:00", "claude-opus-5-5", usage(1, 1, 0, 0), []),
         assistant("msg_str", "2026-10-25T18:03:10.000Z", "claude-opus-5-5",
                   {"input_tokens": "10", "output_tokens": 5}, []),
         assistant("msg_flt", "2026-10-25T18:03:20.000Z", "claude-opus-5-5",
