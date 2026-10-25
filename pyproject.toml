@@ -14,5 +14,8 @@ test = ["pytest>=8"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+orch_it = ["events/*.json", "events/*.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
