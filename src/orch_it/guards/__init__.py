@@ -1,1 +1,1 @@
-"""The guards of #395: what keeps private data and broken work from reaching the public repo."""
+"""The guards of #395: worktree delete, foreign process stop, private data in a public repo."""
