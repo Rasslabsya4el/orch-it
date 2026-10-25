@@ -184,3 +184,7 @@ after its prefix.
 - `measure-limit <pct> [--repo R] [--role owner] [--note TEXT]`: record a reading of the usage card as `value.measured`.
 - `set-limit-rate <usd_per_pct> --plan NAME --measured DATE`: save the setting `weekly_limit_usd_per_pct`.
 - `import <transcript folder> --repo R [--role worker] [--subagent-role ROLE] [--ticket N] [--session ID] [--quiet-minutes 30]`: write the events of Claude Code transcripts.
+
+`python -m orch_it [--store PATH] tests run [--ids-file F] [--place P] [--work-tree PATH] [--repo R] [--ticket N] [--role script]`:
+run the repo's test command once at a test place, write its `test_run` pair and one `test.result` per test case, and
+print `run=… place=… outcome=… reason=… collected=… failed=…`; exit 0 on passed, 1 on failed, 3 on any other outcome.
