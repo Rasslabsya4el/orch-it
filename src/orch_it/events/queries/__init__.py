@@ -1,5 +1,6 @@
 """The named queries of the store (#393 decisions 8 and 9): `ticket_cost`, `session_cost`,
-`limit_rate`, and the share of the weekly subscription limit a cost is.
+`limit_rate`, and the share of the weekly subscription limit a cost is; and `test_places`
+(#394 decision 9).
 
 Each returns a `QueryResult` (columns and rows) for the CLI to print. The SQL of `ticket_cost`
 is the event list's section 7, kept as a file beside this module and run as written.
@@ -8,11 +9,12 @@ is the event list's section 7, kept as a file beside this module and run as writ
 from __future__ import annotations
 
 import math
+import statistics
 from datetime import datetime, timedelta
 from importlib import resources
 
 from orch_it import settings
-from orch_it.events import index
+from orch_it.events import index, schema
 from orch_it.events.store import QueryResult, Store
 
 WEEKLY_LIMIT_SETTING = "weekly_limit_usd_per_pct"
@@ -306,3 +308,83 @@ def limit_rate(store: Store) -> QueryResult:
             rate = f"{usd / (after - before):.2f}"
         rows.append((start, end, before, after, round(usd, 2), rate))
     return QueryResult(["from", "to", "pct_before", "pct_after", "usd", "usd_per_pct"], rows)
+
+
+# --- test-places -------------------------------------------------------------------------------
+
+TEST_PLACES_COLUMNS = ["place", "os", "runs", "outcomes", "median_run_minutes", "median_queue_minutes"]
+_MEASURED_OUTCOMES = ("passed", "failed")  # a run that is neither measures nothing
+_NOT_MEASURED = "n/a"
+
+
+def _place_order(place: str) -> tuple:
+    """Own first, then the machines by id, then github, then any other place."""
+
+    if place == "own":
+        return (0, "")
+    if place.startswith("machine:"):
+        return (1, place)
+    return (2, "") if place == "github" else (3, place)
+
+
+def _median_cell(values: list[float]) -> str:
+    return f"{statistics.median(values):.1f}" if values else _NOT_MEASURED
+
+
+def test_places(store: Store, repo: str | None = None) -> QueryResult:
+    """Per place and OS (the `place` and `run_os` of the `test_run` start): `runs` (ended test
+    runs), `outcomes` (each outcome that happened, in the closed set's order), the median
+    `run_minutes` of the ended passed and failed runs, and, for `github`, the median minutes of
+    the `github_queue` waits whose `on` is a run of that place and OS. A median is `n/a` when
+    nothing was measured, the queue median for any other place always. An ended run whose start
+    is not in the store has no place and is left out. `repo` keeps that repo's events."""
+
+    where, params = "", {}
+    if repo is not None:
+        where, params = " AND repo = :repo", {"repo": repo}
+    placed = {}  # (repo, run) -> (place, os)
+    for run_repo, run, place, run_os in store.query(
+            "SELECT repo, run, place, run_os FROM events WHERE kind = 'step.started'"
+            f" AND step = 'test_run' AND run IS NOT NULL AND place IS NOT NULL{where} ORDER BY at, id",
+            params).rows:
+        placed.setdefault((run_repo, run), (place, run_os))
+
+    groups = {}  # (place, os) -> {"outcomes": [...], "minutes": [...], "queue": [...]}
+    seen = set()
+    for run_repo, run, outcome, minutes in store.query(
+            "SELECT repo, run, outcome, run_minutes FROM events WHERE kind = 'step.ended'"
+            f" AND step = 'test_run' AND run IS NOT NULL{where} ORDER BY at, id", params).rows:
+        key = (run_repo, run)
+        if key not in placed or key in seen:
+            continue
+        seen.add(key)
+        group = groups.setdefault(placed[key], {"outcomes": [], "minutes": [], "queue": []})
+        group["outcomes"].append(outcome)
+        if outcome in _MEASURED_OUTCOMES and isinstance(minutes, (int, float)):
+            group["minutes"].append(float(minutes))
+
+    ends = {}  # (repo, wait run) -> the times its wait ended
+    for run_repo, run, at in store.query(
+            "SELECT repo, run, at FROM events WHERE kind = 'step.ended' AND step = 'wait'"
+            f" AND run IS NOT NULL{where} ORDER BY at, id", params).rows:
+        ends.setdefault((run_repo, run), []).append(at)
+    for run_repo, run, on, at in store.query(
+            "SELECT repo, run, \"on\", at FROM events WHERE kind = 'step.started' AND step = 'wait'"
+            f" AND reason = 'github_queue' AND run IS NOT NULL{where} ORDER BY at, id", params).rows:
+        target = placed.get((run_repo, on))
+        end = next((e for e in ends.get((run_repo, run), []) if e >= at), None)
+        if target is None or target[0] != "github" or end is None or target not in groups:
+            continue
+        waited = datetime.strptime(end, _AT_FORMAT) - datetime.strptime(at, _AT_FORMAT)
+        groups[target]["queue"].append(waited.total_seconds() / 60)
+
+    order = schema.outcomes()
+    rows = []
+    for (place, run_os), group in sorted(groups.items(), key=lambda g: (
+            _place_order(g[0][0]), g[0][1] is None, g[0][1] or "")):
+        counts = {name: group["outcomes"].count(name) for name in order}
+        rows.append((place, run_os or _NOT_MEASURED, len(group["outcomes"]),
+                     " ".join(f"{name}={n}" for name, n in counts.items() if n),
+                     _median_cell(group["minutes"]),
+                     _median_cell(group["queue"]) if place == "github" else _NOT_MEASURED))
+    return QueryResult(list(TEST_PLACES_COLUMNS), rows)

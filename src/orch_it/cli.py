@@ -15,6 +15,7 @@ from pathlib import Path
 from orch_it import settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
+from orch_it.testruns import github
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
@@ -97,6 +98,13 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--ticket", type=int)
     p.add_argument("--session")
     p.add_argument("--quiet-minutes", type=float, default=30)
+
+    p = command("import-github", "import the runs of the repo's `tests` workflow from GitHub")
+    p.add_argument("--repo", default=DEFAULT_REPO)
+    p.add_argument("--since", metavar="ISO")
+
+    p = command("test-places", "runs, outcomes and median run and GitHub queue minutes per place and OS")
+    p.add_argument("--repo")
     return root
 
 
@@ -149,6 +157,12 @@ def _run(args) -> str:
                 f" sessions={done.sessions} bad_lines={done.bad_lines}"
                 f" pending_lines={done.pending_lines} refused_events={done.refused_events}"
                 f" unreadable_files={done.unreadable_files}\n")
+    if command == "import-github":
+        done = github.import_github(_store(args), args.repo, since=args.since)
+        return (f"runs_read={done.runs_read} jobs={done.jobs} written={done.written}"
+                f" already_stored={done.already_stored} reports_missing={done.reports_missing}\n")
+    if command == "test-places":
+        return render(queries.test_places(_store(args), args.repo))
     raise AssertionError(command)
 
 
@@ -160,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         text = _run(args)
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, CommandError) as e:
+            queries.QueryError, github.GithubError, CommandError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     sys.stdout.write(text)

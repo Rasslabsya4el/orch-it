@@ -184,3 +184,5 @@ after its prefix.
 - `measure-limit <pct> [--repo R] [--role owner] [--note TEXT]`: record a reading of the usage card as `value.measured`.
 - `set-limit-rate <usd_per_pct> --plan NAME --measured DATE`: save the setting `weekly_limit_usd_per_pct`.
 - `import <transcript folder> --repo R [--role worker] [--subagent-role ROLE] [--ticket N] [--session ID] [--quiet-minutes 30]`: write the events of Claude Code transcripts.
+- `import-github [--repo R] [--since ISO]`: write a `test_run` pair, a `github_queue` wait and the `test.result` rows per required job of the repo's `tests` workflow runs (default repo `Rasslabsya4el/orch-it`); a second import writes nothing.
+- `test-places [--repo R]`: per place and OS, the runs, their outcomes, the median run minutes and the median GitHub queue minutes.
