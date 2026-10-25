@@ -2,6 +2,7 @@
 it ended, and an exit code a script reads without parsing it (0 passed, 1 failed, 3 any other
 outcome, 2 an error)."""
 
+import sys
 import textwrap
 
 import pytest
@@ -64,6 +65,13 @@ def test_a_work_tree_with_no_github_origin_and_no_repo_is_an_error(tmp_path, cap
     code = main(["--store", str(tmp_path / "store"), "tests", "run", "--work-tree", str(root)])
     assert code == 2
     assert "error: repo_unknown" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="the own place has macOS here")
+def test_a_run_needing_an_os_no_place_has_is_refused_with_exit_3(tmp_path, capsys):
+    root = suite(tmp_path, "def test_one():\n    pass\n")
+    assert run(tmp_path, root, "--os", "macos") == 3
+    assert "outcome=refused reason=os_missing" in capsys.readouterr().out
 
 
 def test_an_unreadable_ids_file_is_an_error(tmp_path, capsys):

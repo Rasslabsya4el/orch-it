@@ -11,20 +11,28 @@ between the two events stays a live run in the store until its bound and a grace
 from __future__ import annotations
 
 import hashlib
+import math
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from orch_it.events.ids import live_id
+from orch_it.events import schema
 from orch_it.events.store import Store
-from orch_it.testruns import environment, outcome
+from orch_it.testruns import environment, outcome, place_rule
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.places import OwnPlace, PlaceEnd, PlaceRefused, PlaceVanished, Request
 
 GIT_TIMEOUT_SECONDS = 30
+WAIT_POLL_SECONDS = 15
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-RUN_ERROR_CODES = ("ids_file_unreadable", "unknown_place", "bad_work_tree")
+# the OS a run may need: any, or one of the closed set `test_os`
+NEED_OSES = ("any", *sorted(schema.codes_of("test_run.started", "run_os")))
+GITHUB_OSES = ("linux", "windows")  # the jobs of the `tests` workflow
+RUN_ERROR_CODES = ("ids_file_unreadable", "unknown_place", "bad_work_tree", "bad_os")
 
 
 class RunError(Exception):
@@ -88,60 +96,170 @@ def selection_of(ids: list[str] | None) -> str:
     return f"ids:{len(set(ids))}:{digest}"
 
 
+def offers_of(settings: TestSettings, places: dict) -> list[place_rule.Offer]:
+    """Every test place in the rule's tie order: own, the machines in settings order, github.
+    A place with no adapter here is offered switched off."""
+
+    own = places.get("own")
+    offers = [place_rule.Offer("own", (own.os if own else environment.this_os(),), own is not None,
+                               settings.own_capacity)]
+    offers += [place_rule.Offer(m.place, (m.os,), m.on and m.place in places, m.capacity)
+               for m in settings.machines]
+    offers.append(place_rule.Offer("github", GITHUB_OSES, settings.github_tests and "github" in places,
+                                   settings.github_capacity))
+    return offers
+
+
 def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSettings,
-              ids_file: Path | None = None, place: str | None = None, role: str = "script",
-              ticket: int | None = None, places: dict | None = None) -> RunDone:
-    """One run of the repo's test command. `places` maps a place id to its adapter (default:
-    the own place)."""
+              ids_file: Path | None = None, place: str | None = None, need_os: str = "any",
+              role: str = "script", ticket: int | None = None, places: dict | None = None,
+              wait_minutes: float | None = None, sleep=time.sleep, now=None) -> RunDone:
+    """One run of the repo's test command at the place the rule picks (or `place`, forced).
+    `places` maps a place id to its adapter (default: the own place). A place lost or refusing
+    mid-run is left out and the rule picks again, until a place finishes the run or none is
+    left. No place left writes a `wait` on `test_place`: while a place it can free is busy it
+    lasts up to `wait_minutes` (default: the bound), re-deciding every `WAIT_POLL_SECONDS`, else
+    it ends at once; a wait that finds no place ends the run `refused`."""
 
     work_tree = Path(work_tree)
     if not work_tree.is_dir():
         raise RunError("bad_work_tree", str(work_tree))
+    if need_os not in NEED_OSES:
+        raise RunError("bad_os", need_os)
     ids = read_ids(ids_file) if ids_file is not None else None
     places = places if places is not None else {"own": OwnPlace()}
-    chosen = place or "own"
-    if chosen not in places:
-        raise RunError("unknown_place", chosen)
-    adapter = places[chosen]
-    run = live_id()
-    envelope = {"repo": repo, "ticket": ticket, "role": role, "session": None,
-                "parent_session": None, "turn": None, "step": "test_run", "run": run,
-                "note": None}
-    commit = git_output(work_tree, "rev-parse", "HEAD")
-    status = git_output(work_tree, "status", "--porcelain")
-    request = Request(work_tree, commit, settings.command, settings.test_env,
-                      settings.bound_minutes * 60, ids)
+    if place is not None and place not in places:
+        raise RunError("unknown_place", place)
+    run = _Run(store, work_tree, repo, settings, ids, role, ticket, offers_of(settings, places),
+               need_os, now or (lambda: datetime.now(UTC)))
     with store.writer() as writer:
+        if place is not None:  # a human's choice: taken as it is, the rule's view kept beside it
+            decision = place_rule.Decision(place, "forced", run.decide({}).offered)
+            return run.attempt(writer, places[place], decision)
+        excluded: dict[str, str] = {}  # places that refused or vanished in this run
+        last = None
+        while True:
+            decision = run.decide(excluded)
+            if decision.chosen is None:  # no place left: a wait on test_place, polled only while
+                # a place it can free is busy, else ended at once
+                polls = _polls(settings, wait_minutes) if run.may_free(decision, excluded) else 0
+                decision = run.wait(writer, excluded, polls, sleep)
+            if decision.chosen is None:
+                # after a lost or refused attempt, that attempt ends the run; else one refusal
+                return last if last is not None else run.refused(writer, decision)
+            last = run.attempt(writer, places[decision.chosen], decision)
+            if last.outcome not in ("lost", "refused"):
+                return last
+            excluded[last.place] = last.reason
+
+
+def _polls(settings: TestSettings, wait_minutes: float | None) -> int:
+    """How many `WAIT_POLL_SECONDS` polls a wait of `wait_minutes` (default: the bound) makes: a
+    count, so a clock standing still or stepping back never stretches it."""
+
+    minutes = settings.bound_minutes if wait_minutes is None else wait_minutes
+    if not (isinstance(minutes, (int, float)) and math.isfinite(minutes)):
+        minutes = settings.bound_minutes
+    minutes = min(max(minutes, 0.0), place_rule.MAX_MINUTES)
+    return math.ceil(minutes * 60 / WAIT_POLL_SECONDS)
+
+
+class _Run:
+    """The facts every attempt of one run shares, and the events of one attempt."""
+
+    def __init__(self, store, work_tree, repo, settings, ids, role, ticket, offers, need_os, now):
+        self.store, self.work_tree, self.repo, self.settings = store, work_tree, repo, settings
+        self.ids, self.selection = ids, selection_of(ids)
+        self.offers, self.need_os, self.now = offers, need_os, now
+        self.base = {"repo": repo, "ticket": ticket, "role": role, "session": None,
+                     "parent_session": None, "turn": None, "note": None}
+        self.commit = git_output(work_tree, "rev-parse", "HEAD")
+        status = git_output(work_tree, "status", "--porcelain")
+        self.dirty = None if status is None else bool(status)
+        self.branch = _branch(work_tree)
+
+    def envelope(self, step: str) -> dict:
+        return self.base | {"step": step, "run": live_id()}
+
+    def decide(self, excluded: dict[str, str]) -> place_rule.Decision:
+        live, measured = place_rule.read_facts(self.store, repo=self.repo, selection=self.selection,
+                                               need_os=self.need_os, now=self.now())
+        return place_rule.choose(self.need_os, self.offers, live, measured, excluded)
+
+    def may_free(self, decision: place_rule.Decision, excluded: dict[str, str]) -> bool:
+        """A place busy with live runs that has room once they end: the only drop a wait can
+        clear (a refusal in this run, no capacity, the OS or a switched-off place never clear)."""
+
+        capacity = {o.place: o.capacity for o in self.offers}
+        return any(o.dropped == place_rule.BUSY and o.place not in excluded and capacity[o.place] > 0
+                   for o in decision.offered)
+
+    def wait(self, writer, excluded: dict[str, str], polls: int, sleep) -> place_rule.Decision:
+        envelope = self.envelope("wait")
+        writer.write(envelope | {"kind": "step.started",
+                                 "detail": {"reason": "test_place", "on": f"test_run:{self.selection}"}})
+        try:
+            decision = self.decide(excluded)
+            for _ in range(polls):
+                if decision.chosen is not None:
+                    break
+                sleep(WAIT_POLL_SECONDS)
+                decision = self.decide(excluded)
+        except BaseException:  # stopped by a person or a failing store: the wait is not left open
+            writer.write(envelope | {"kind": "step.ended", "detail": {"outcome": "stopped", "reason": None}})
+            raise
+        writer.write(envelope | {"kind": "step.ended", "detail": {
+            "outcome": "passed" if decision.chosen else "no_result", "reason": None}})
+        return decision
+
+    def _started(self, writer, envelope, decision, run_os) -> None:
         writer.write(envelope | {"kind": "step.started", "detail": {
-            "place": chosen, "chosen": chosen, "reason": "forced" if place else None,
-            "selection": selection_of(ids), "commit": commit,
-            "dirty": None if status is None else bool(status),
-            "branch": _branch(work_tree), "pr": None,
-            "workers": None, "part": None, "run_os": adapter.os,
-            "settings_hash": environment.settings_hash(settings.command, settings.bound_minutes,
-                                                       settings.test_env),
-            "bound_minutes": settings.bound_minutes}})
+            "place": decision.chosen, "chosen": decision.chosen, "reason": decision.reason,
+            "places_offered": decision.detail(), "selection": self.selection,
+            "commit": self.commit, "dirty": self.dirty, "branch": self.branch, "pr": None,
+            "workers": None, "part": None, "run_os": run_os,
+            "settings_hash": environment.settings_hash(self.settings.command,
+                                                       self.settings.bound_minutes,
+                                                       self.settings.test_env),
+            "bound_minutes": self.settings.bound_minutes}})
+
+    def refused(self, writer, decision) -> RunDone:
+        """No place took the run after the wait: one `refused` run, its reason the drop most
+        likely to clear (busy, then switched off, then the OS)."""
+
+        drops = {o.dropped for o in decision.offered}
+        reason = next((code for code in (place_rule.BUSY, place_rule.PLACE_OFF, place_rule.OS_MISSING)
+                       if code in drops), place_rule.PLACE_OFF)
+        envelope = self.envelope("test_run")
+        self._started(writer, envelope, decision, None)
+        return _unfinished(writer, envelope, None, "refused", reason)
+
+    def attempt(self, writer, adapter, decision) -> RunDone:
+        envelope = self.envelope("test_run")
+        self._started(writer, envelope, decision, adapter.os)
+        request = Request(self.work_tree, self.commit, self.settings.command, self.settings.test_env,
+                          self.settings.bound_minutes * 60, self.ids)
         with tempfile.TemporaryDirectory(prefix="orch-it-run-") as scratch:
             try:
                 place_end = adapter.run(request, Path(scratch))
             except PlaceRefused as e:
-                return _unfinished(writer, envelope, chosen, "refused", e.code)
+                return _unfinished(writer, envelope, decision.chosen, "refused", e.code)
             except PlaceVanished:
-                return _unfinished(writer, envelope, chosen, "lost", "place_vanished")
+                return _unfinished(writer, envelope, decision.chosen, "lost", "place_vanished")
             except BaseException:  # stopped by a person (Ctrl-C) or a crash: never left live
-                _unfinished(writer, envelope, chosen, "stopped", None)
+                _unfinished(writer, envelope, decision.chosen, "stopped", None)
                 raise
-            run_end = outcome.judge(place_end.report, requested_ids=ids, cut=place_end.cut,
+            run_end = outcome.judge(place_end.report, requested_ids=self.ids, cut=place_end.cut,
                                     slept=place_end.slept)
             for detail in run_end.result_details():
                 writer.write(envelope | {"kind": "test.result", "detail": detail})
         writer.write(envelope | {"kind": "step.ended",
                                  "detail": run_end.ended_detail() | _timing(place_end, run_end)})
-    return RunDone(run, chosen, run_end.outcome, run_end.reason, run_end.collected, run_end.failed,
-                   run_end.missing_ids)
+        return RunDone(envelope["run"], decision.chosen, run_end.outcome, run_end.reason,
+                       run_end.collected, run_end.failed, run_end.missing_ids)
 
 
-def _unfinished(writer, envelope: dict, place: str, run_outcome: str, reason: str) -> RunDone:
+def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str) -> RunDone:
     writer.write(envelope | {"kind": "step.ended", "detail": {
         "outcome": run_outcome, "reason": reason, "collected": 0, "passed": 0, "failed": 0,
         "skipped": 0, "summary_seen": False}})
