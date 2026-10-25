@@ -26,6 +26,9 @@
     "delivered": ["commit", "comment", "file", "none"],
     "wait_reason": ["test_place", "rate_limit", "owner_answer", "brain_answer", "parked", "blocker", "review", "github_queue", "capacity"],
     "place": ["own", "machine:<id>", "github"],
+    "test_os": ["linux", "windows", "macos"],
+    "place_reason": ["earliest_finish", "nothing_measured", "forced"],
+    "test_run_reason": ["red", "cut", "none_collected", "ids_not_collected", "summary_missing", "job_missing", "busy", "os_missing", "place_off", "out_of_minutes", "place_vanished", "superseded"],
     "review_axis": ["standards", "spec", "edge"],
     "unit_reason": ["format", "result", "merge"],
     "pr_reason": ["merged", "red", "closed_unmerged", "timeout", "withdrawn"],
@@ -76,8 +79,8 @@
       "ended": {}
     },
     "test_run": {
-      "started": {"place": {"codes": "place"}, "selection": {}, "commit": {}, "branch": {}, "pr": {}, "workers": {}, "settings_hash": {}, "part": {}},
-      "ended": {"collected": {}, "passed": {}, "failed": {}, "skipped": {}, "summary_seen": {}, "billed_minutes": {}}
+      "started": {"place": {"codes": "place"}, "selection": {}, "commit": {}, "branch": {}, "pr": {}, "workers": {}, "settings_hash": {}, "part": {}, "run_os": {"codes": "test_os"}, "places_offered": {}, "chosen": {"codes": "place"}, "reason": {"codes": "place_reason"}},
+      "ended": {"reason": {"codes": "test_run_reason"}, "collected": {}, "passed": {}, "failed": {}, "skipped": {}, "summary_seen": {}, "billed_minutes": {}, "start_minutes": {}, "run_minutes": {}}
     },
     "review": {
       "started": {"axis": {"codes": "review_axis"}, "unit": {}, "diff_ref": {}},

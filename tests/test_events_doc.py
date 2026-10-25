@@ -151,6 +151,20 @@ def test_a_planted_extra_code_in_the_file_is_found():
     assert len(found) == 1 and "outcome" in found[0] and "planted_code" in found[0]
 
 
+def test_a_test_run_reason_code_planted_in_one_side_only_is_found():
+    """#394 row 8: the test run's reason codes are held to the same agreement."""
+
+    raw = copy.deepcopy(load_file())
+    raw["codes"]["test_run_reason"].append("planted_reason")
+    found = differences(doc_sets(load_doc()), file_sets(raw))
+    assert len(found) == 1 and "test_run_reason" in found[0] and "planted_reason" in found[0]
+
+    line = next(row for row in load_doc().splitlines() if row.startswith("| `test_run_reason` |"))
+    planted = load_doc().replace(line, line.rstrip(" |") + ", `planted_reason` |")
+    found = differences(doc_sets(planted), file_sets(load_file()))
+    assert len(found) == 1 and "test_run_reason" in found[0] and "planted_reason" in found[0]
+
+
 def test_a_removed_step_id_in_the_doc_is_found():
     planted = "\n".join(
         row for row in load_doc().splitlines() if not row.startswith("| `wait` |")

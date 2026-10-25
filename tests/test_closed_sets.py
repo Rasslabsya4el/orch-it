@@ -74,7 +74,15 @@ CODE_FIELDS = {
     ("reconcile.ended", "repairs"): {
         "lease_released", "closed", "unparked", "rerun", "red_ticket_opened",
     },
-    ("test_run.ended", "reason"): {"suspended", "lease_lost"},
+    # #394 decision 2: the reason of each test run outcome; decision 5: the place rule's choice
+    ("test_run.ended", "reason"): {
+        "red", "cut", "none_collected", "ids_not_collected", "summary_missing", "job_missing",
+        "busy", "os_missing", "place_off", "out_of_minutes", "place_vanished", "superseded",
+        "suspended", "lease_lost",
+    },
+    ("test_run.started", "reason"): {"earliest_finish", "nothing_measured", "forced"},
+    ("test_run.started", "chosen"): {"own", "machine:<id>", "github"},
+    ("test_run.started", "run_os"): {"linux", "windows", "macos"},
     ("turn.used", "reason"): {"price_missing", "usage_unreadable"},  # decision 6; a turn whose usage is no counts
     ("test.result", "load_verdict"): {"code", "load"},
     ("hook.ran", "action"): {"acted", "skipped"},
