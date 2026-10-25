@@ -67,9 +67,10 @@ def test_a_work_tree_with_no_github_origin_and_no_repo_is_an_error(tmp_path, cap
     assert "error: repo_unknown" in capsys.readouterr().err
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="the own place has macOS here")
 def test_a_run_needing_an_os_no_place_has_is_refused_with_exit_3(tmp_path, capsys):
     root = suite(tmp_path, "def test_one():\n    pass\n")
-    assert run(tmp_path, root, "--os", "macos" if sys.platform != "darwin" else "windows") == 3
+    assert run(tmp_path, root, "--os", "macos") == 3
     assert "outcome=refused reason=os_missing" in capsys.readouterr().out
 
 

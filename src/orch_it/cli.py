@@ -1,5 +1,5 @@
-"""The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9) and
-`python -m orch_it tests run` (#394 decision 9).
+"""The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
+7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -16,8 +16,9 @@ from pathlib import Path
 from orch_it import settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
+from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
-from orch_it.testruns.runner import RunError, git_output, run_tests
+from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
@@ -106,9 +107,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--session")
     p.add_argument("--quiet-minutes", type=float, default=30)
 
+    p = command("import-github", "import the runs of the repo's `tests` workflow from GitHub")
+    p.add_argument("--repo", default=DEFAULT_REPO)
+    p.add_argument("--since", metavar="ISO")
+
+    p = command("test-places", "runs, outcomes and median run and GitHub queue minutes per place and OS")
+    p.add_argument("--repo")
+
     tests = commands.add_parser("tests", help="test runs").add_subparsers(dest="command", required=True)
     p = tests.add_parser("run", parents=[common], help="run the repo's tests at a test place")
-    p.add_argument("--os", default="any", choices=["any", "linux", "windows", "macos"],
+    p.add_argument("--os", default="any", choices=NEED_OSES,
                    help="the OS the run needs (default: any)")
     p.add_argument("--ids-file", metavar="PATH", help="run only the tests named in this file")
     p.add_argument("--place", help="force a place (own, machine:<id>, github); default: the place rule")
@@ -192,6 +200,14 @@ def _run(args) -> str:
                 f" sessions={done.sessions} bad_lines={done.bad_lines}"
                 f" pending_lines={done.pending_lines} refused_events={done.refused_events}"
                 f" unreadable_files={done.unreadable_files}\n")
+    if command == "import-github":
+        done = github.import_github(_store(args), args.repo, since=args.since)
+        failed = f" failure_codes={','.join(done.failure_codes)}" if done.failure_codes else ""
+        return (f"runs_read={done.runs_read} jobs={done.jobs} written={done.written}"
+                f" already_stored={done.already_stored} reports_missing={done.reports_missing}"
+                f" runs_failed={done.runs_failed}{failed}\n")
+    if command == "test-places":
+        return render(queries.test_places(_store(args), args.repo))
     raise AssertionError(command)
 
 
@@ -206,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, CommandError, RunError) as e:
+            queries.QueryError, github.GithubError, CommandError, RunError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
