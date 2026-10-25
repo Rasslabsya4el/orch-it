@@ -229,7 +229,9 @@ class _Run:
         writer.write(envelope | {"kind": "step.started", "detail": {
             "place": decision.chosen, "chosen": decision.chosen, "reason": decision.reason,
             "places_offered": decision.detail(), "selection": self.selection,
-            "commit": self.commit, "dirty": self.dirty, "branch": self.branch, "pr": None,
+            "commit": self.commit, "branch": self.branch, "pr": None,
+            # only the own place runs the work tree as it is; the others run the clean commit
+            "dirty": self.dirty if decision.chosen == "own" else None,
             "workers": None, "part": None, "run_os": run_os,
             "settings_hash": environment.settings_hash(self.settings.command,
                                                        self.settings.bound_minutes,
@@ -256,7 +258,7 @@ class _Run:
             try:
                 place_end = adapter.run(request, Path(scratch))
             except PlaceRefused as e:
-                return _unfinished(writer, envelope, decision.chosen, "refused", e.code)
+                return _unfinished(writer, envelope, decision.chosen, "refused", e.code, e.step)
             except PlaceVanished:
                 return _unfinished(writer, envelope, decision.chosen, "lost", "place_vanished")
             except BaseException:  # stopped by a person (Ctrl-C) or a crash: never left live
@@ -272,10 +274,13 @@ class _Run:
                        run_end.collected, run_end.failed, run_end.missing_ids)
 
 
-def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str) -> RunDone:
-    writer.write(envelope | {"kind": "step.ended", "detail": {
-        "outcome": run_outcome, "reason": reason, "collected": 0, "passed": 0, "failed": 0,
-        "skipped": 0, "summary_seen": False}})
+def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str,
+                step: str | None = None) -> RunDone:
+    detail = {"outcome": run_outcome, "reason": reason, "collected": 0, "passed": 0, "failed": 0,
+              "skipped": 0, "summary_seen": False}
+    if step:
+        detail["refused_step"] = step  # where the place stopped, for a refusal
+    writer.write(envelope | {"kind": "step.ended", "detail": detail})
     return RunDone(envelope["run"], place, run_outcome, reason, 0, 0)
 
 

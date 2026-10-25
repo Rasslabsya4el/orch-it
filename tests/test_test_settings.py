@@ -54,6 +54,8 @@ def test_a_machine_may_name_its_origin_and_extra_ssh_options():
     ({"own_capacity": -1}, "own_capacity"),
     ({"repos": []}, "repos"),
     ({"test_machines": {}}, "test_machines"),
+    ({"test_machines": [{"id": "a", "host": "-oProxyCommand=x", "os": "linux", "checkout": "/x"}]},
+     "test_machines[0].host"),
     ({"test_machines": [{"id": "a", "host": "h", "os": "linux", "checkout": "/x", "origin": ""}]},
      "test_machines[0].origin"),
     ({"test_machines": [{"id": "a", "host": "h", "os": "linux", "checkout": "/x", "ssh_options": "-p 22"}]},

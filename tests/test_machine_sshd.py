@@ -8,6 +8,7 @@ killed mid-run the run is lost `place_vanished`, the rule's next place reruns it
 Skipped when `sshd`, `ssh` or `ssh-keygen` is missing; with ORCH_IT_REQUIRE_SSHD=1 it fails
 instead (the `linux` job sets it, so a runner without sshd cannot pass this row by skipping)."""
 
+import faulthandler
 import getpass
 import os
 import shutil
@@ -20,7 +21,7 @@ import time
 from pathlib import Path
 
 import pytest
-from machine_repos import GREEN, RED, Repos, alive, git, prefer_machine, sleeping_suite
+from machine_repos import GREEN, RED, Repos, dead_within, git, prefer_machine, sleeping_suite
 
 from orch_it.events.store import Store
 from orch_it.testruns.config import Machine, TestSettings
@@ -31,6 +32,17 @@ from orch_it.testruns.runner import run_tests
 REPO = "Rasslabsya4el/orch-it"
 PLACE = "machine:local-ssh"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+BOUND_MINUTES = 1  # a run of these tests is short; a stuck one is cut well inside the job's time
+SETUP_SECONDS = 60.0
+SLACK_SECONDS = 20.0
+HANG_GUARD_SECONDS = 240  # a test still going then dumps every thread's stack and ends the run
+
+
+@pytest.fixture(autouse=True)
+def hang_guard():
+    faulthandler.dump_traceback_later(HANG_GUARD_SECONDS, exit=True)
+    yield
+    faulthandler.cancel_dump_traceback_later()
 
 
 def need_sshd() -> str:
@@ -56,18 +68,27 @@ def free_port() -> int:
 
 
 def processes():
-    """(pid, parent pid, command name) of every process, in pid order, from /proc."""
+    """(pid, parent pid, command line) of every process, from /proc."""
 
     found = []
-    for entry in sorted(Path("/proc").iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else 0):
+    for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
         try:
             stat = (entry / "stat").read_text()
+            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
         except OSError:
             continue
-        name = stat[stat.index("(") + 1:stat.rindex(")")]
-        found.append((int(entry.name), int(stat[stat.rindex(")") + 2:].split()[1]), name))
+        found.append((int(entry.name), int(stat[stat.rindex(")") + 2:].split()[1]), command))
+    return found
+
+
+def below(roots, table):
+    """`roots` and every process under them."""
+
+    found = list(roots)
+    while grown := [pid for pid, parent, _ in table if parent in found and pid not in found]:
+        found += grown
     return found
 
 
@@ -115,24 +136,24 @@ class Sshd:
                 time.sleep(0.1)
         pytest.fail(f"sshd is not listening: {self.log.read_text()}")
 
-    def kill_group(self):
-        """Kill sshd and its per-connection children. A connection's `sshd: user [priv]` and
-        `sshd: user@notty` run in a session of their own, outside sshd's process group, so they are
-        found through the parent chain; the command the connection started (the test machine's
-        far side) is theirs too but is left alone: it must notice by itself that the connection
+    def kill_group(self) -> int:
+        """Kill sshd and its per-connection processes, whatever they are named (`sshd: user [priv]`,
+        `sshd-session`, `sshd-auth` ...); return how many it killed. They run in sessions of their
+        own, outside sshd's process group, so they are found through the parent chain. The command
+        the connection started (the test machine's far side: the python that reads its program
+        from stdin, and what it started) is spared: it must notice by itself that the connection
         is gone."""
 
-        victims = [self.process.pid]
         table = processes()
-        while grown := [pid for pid, parent, name in table
-                        if name == "sshd" and parent in victims and pid not in victims]:
-            victims += grown
+        spared = below([pid for pid, _, command in table if "sys.stdin.readline" in command], table)
+        victims = [pid for pid in below([self.process.pid], table) if pid not in spared]
         for pid in reversed(victims):
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
         self.process.wait()
+        return len(victims)
 
     def machine(self, checkout: Path) -> Machine:
         return Machine("local-ssh", f"{getpass.getuser()}@127.0.0.1", "linux", str(checkout),
@@ -154,8 +175,10 @@ def sshd(tmp_path):
 def setup(tmp_path, sshd, old_test):
     repos = Repos(tmp_path, old_test)
     machine = sshd.machine(tmp_path / "local-ssh-checkout")
-    settings = TestSettings(machines=(machine,))
-    places = {"own": OwnPlace(), PLACE: MachinePlace(machine, origin_url=str(repos.origin))}
+    settings = TestSettings(machines=(machine,), bound_minutes=BOUND_MINUTES)
+    places = {"own": OwnPlace(), PLACE: MachinePlace(machine, origin_url=str(repos.origin),
+                                                     setup_seconds=SETUP_SECONDS,
+                                                     run_slack_seconds=SLACK_SECONDS)}
     return repos, machine, settings, places, Store.open(tmp_path / "store")
 
 
@@ -194,21 +217,24 @@ def killed(tmp_path, sshd):
     repos, machine, settings, places, store = setup(tmp_path, sshd, sleeping_suite(pidfile))
     prefer_machine(store, PLACE)
 
-    def kill_when_started():
-        deadline = time.monotonic() + 120
+    killed_count = []
+
+    def kill_when_started():  # the test writes its pid file once the run has started
+        deadline = time.monotonic() + 60
         while not pidfile.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
-        sshd.kill_group()
+        killed_count.append(sshd.kill_group())
 
     killer = threading.Thread(target=kill_when_started, daemon=True)
     killer.start()
     try:
         done = run_at(store, repos, settings, places)
         killer.join(timeout=30)
+        assert killed_count and killed_count[0] > 1, "the kill found no connection process of sshd"
         yield store, done, int(pidfile.read_text())
     finally:  # never leave the sleeping test behind, whatever the verdict
-        if pidfile.exists() and pidfile.read_text().strip() and alive(int(pidfile.read_text())):
-            os.kill(int(pidfile.read_text()), signal.SIGKILL)
+        if pidfile.exists() and pidfile.read_text().strip():
+            dead_within(int(pidfile.read_text()), 0)
 
 
 def test_the_sshd_killed_mid_run_is_lost_place_vanished_and_own_reruns_it(killed):
@@ -224,7 +250,4 @@ def test_the_sshd_killed_mid_run_writes_no_failed_run(killed):
 
 def test_the_test_process_on_the_machine_is_dead_within_15_seconds_of_the_sshd_dying(killed):
     _, _, pid = killed
-    deadline = time.monotonic() + 15
-    while alive(pid) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert not alive(pid)
+    assert dead_within(pid)

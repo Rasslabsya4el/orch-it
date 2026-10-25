@@ -2,15 +2,21 @@
 caller work tree checked out at the older one, and a process-liveness check."""
 
 import os
+import signal
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
+
+from orch_it.testruns import environment
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 GREEN = "def test_adds():\n    assert 1 + 1 == 2\n"
 RED = "def test_adds():\n    assert 1 + 1 == 2\n\ndef test_breaks():\n    assert 1 == 2\n"
 NEWER = "def test_adds():\n    assert False  # the newer commit differs\n"
+SLOW_GREEN = "import time\n\ndef test_adds():\n    time.sleep(3)\n"
+SLOW_RED = "import time\n\ndef test_adds():\n    time.sleep(3)\n    assert False\n"
 
 
 def git(cwd, *args) -> str:
@@ -24,7 +30,7 @@ def git(cwd, *args) -> str:
 class Repos:
     """`origin` (bare) holds `old` and `new`; `caller` is a clone checked out at `old`."""
 
-    def __init__(self, tmp_path: Path, old_test: str = GREEN):
+    def __init__(self, tmp_path: Path, old_test: str = GREEN, new_test: str = NEWER):
         seed = tmp_path / "seed"
         seed.mkdir()
         git(seed, "init", "-b", "main")
@@ -32,7 +38,7 @@ class Repos:
         git(seed, "add", ".")
         git(seed, "commit", "-m", "old")
         self.old = git(seed, "rev-parse", "HEAD")
-        (seed / "test_suite.py").write_text(NEWER, "utf-8")
+        (seed / "test_suite.py").write_text(new_test, "utf-8")
         git(seed, "commit", "-am", "new")
         self.new = git(seed, "rev-parse", "HEAD")
         self.origin = tmp_path / "origin.git"
@@ -53,7 +59,6 @@ class Repos:
 def prefer_machine(store, machine_place: str):
     """Past runs saying the machine finishes sooner than own, so the place rule offers it first."""
 
-    from orch_it.testruns import environment
     with store.writer() as writer:
         for n, (place, minutes) in enumerate((("own", 5.0), (machine_place, 0.001))):
             envelope = {"repo": "Rasslabsya4el/orch-it", "ticket": None, "role": "script", "session": None,
@@ -106,3 +111,15 @@ def alive(pid: int) -> bool:
         return Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[0] != "Z"
     except OSError:
         return True
+
+
+def dead_within(pid: int, seconds: float = 15.0) -> bool:
+    """Whether the process is gone within `seconds`; one still there is killed, whatever the verdict."""
+
+    deadline = time.monotonic() + seconds
+    while alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    gone = not alive(pid)
+    if not gone:
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+    return gone

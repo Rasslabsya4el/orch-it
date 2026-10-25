@@ -10,6 +10,7 @@ run and `PlaceVanished` when it is lost mid-run; the runner turns those into the
 from __future__ import annotations
 
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,15 +43,23 @@ class PlaceEnd:
 
 
 REFUSAL_CODES = ("busy", "os_missing", "place_off", "out_of_minutes")
+# where a place stopped when it refused (`refused_step` of the run's end): the far side's setup
+# steps, and the two ways a connection fails before the run starts
+REFUSAL_STEPS = ("clone", "fetch", "commit", "checkout", "clean", "busy", "not_ours", "connect",
+                 "start_timeout")
 
 
 class PlaceRefused(Exception):
-    """The place could not take the run. `code` is one of `REFUSAL_CODES` (decision 2)."""
+    """The place could not take the run. `code` is one of `REFUSAL_CODES` (decision 2); `step`,
+    when given, is one of `REFUSAL_STEPS`."""
 
-    def __init__(self, code: str, detail: str = ""):
+    def __init__(self, code: str, detail: str = "", step: str | None = None):
         if code not in REFUSAL_CODES:
             raise ValueError(f"not a refusal code: {code}")
+        if step is not None and step not in REFUSAL_STEPS:
+            raise ValueError(f"not a refusal step: {step}")
         self.code = code
+        self.step = step
         super().__init__(f"{code}: {detail}" if detail else code)
 
 
@@ -86,26 +95,36 @@ def test_process_env(test_env: dict[str, str], ids_file: str | None, plugin_fold
     return env
 
 
+def run_command(request: Request, work_tree: Path, scratch: Path, *,
+                abort: threading.Event | None = None, on_start=None) -> PlaceEnd:
+    """The command of `request` run once in `work_tree` with this interpreter: the ids file written
+    to `scratch`, the placeholders filled (the report in `scratch`), the clean environment, the
+    bound. Shared by the own place and the far side of a machine place. `on_start` is called just
+    before the command starts; `abort` kills the run when set."""
+
+    report = scratch / "junit.xml"
+    ids_file = None
+    if request.ids is not None:
+        ids_file = scratch / "ids.txt"
+        ids_file.write_text("".join(f"{i}\n" for i in request.ids), "utf-8")
+    argv = fill(request.command, {"python": sys.executable, "report": str(report),
+                                  "ids_file": str(ids_file or ""), "work_tree": str(work_tree)})
+    env = test_process_env(request.test_env, str(ids_file) if ids_file else None, str(PLUGIN_FOLDER))
+    if on_start is not None:
+        on_start()
+    try:
+        done = process.run_bounded(argv, cwd=work_tree, env=env, bound_seconds=request.bound_seconds,
+                                   abort=abort)
+    except process.CommandMissing as e:
+        return PlaceEnd(None, False, False, None, 0.0, 0.0, str(e)[-LOG_TAIL_CHARS:])
+    return PlaceEnd(report if report.exists() else None, done.cut, done.slept, done.rc, 0.0,
+                    done.seconds, done.log_tail[-LOG_TAIL_CHARS:])
+
+
 @dataclass
 class OwnPlace:
     id: str = "own"
     os: str = field(default_factory=environment.this_os)
 
     def run(self, request: Request, scratch: Path) -> PlaceEnd:
-        work_tree = Path(request.work_tree).absolute()
-        report = scratch / "junit.xml"
-        ids_file = None
-        if request.ids is not None:
-            ids_file = scratch / "ids.txt"
-            ids_file.write_text("".join(f"{i}\n" for i in request.ids), "utf-8")
-        argv = fill(request.command, {"python": sys.executable, "report": str(report),
-                                      "ids_file": str(ids_file or ""), "work_tree": str(work_tree)})
-        env = test_process_env(request.test_env, str(ids_file) if ids_file else None,
-                               str(PLUGIN_FOLDER))
-        try:
-            done = process.run_bounded(argv, cwd=work_tree, env=env,
-                                       bound_seconds=request.bound_seconds)
-        except process.CommandMissing as e:
-            return PlaceEnd(None, False, False, None, 0.0, 0.0, str(e)[-LOG_TAIL_CHARS:])
-        return PlaceEnd(report if report.exists() else None, done.cut, done.slept, done.rc, 0.0,
-                        done.seconds, done.log_tail[-LOG_TAIL_CHARS:])
+        return run_command(request, Path(request.work_tree).absolute(), scratch)

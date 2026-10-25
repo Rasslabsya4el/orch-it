@@ -125,6 +125,8 @@ def _machines(entries: object) -> tuple[Machine, ...]:
         for key in ("id", "host", "os", "checkout"):
             if not isinstance(entry.get(key), str) or not entry[key].strip():
                 raise SettingsError("bad_setting", f"{where}.{key}")
+        if entry["host"].startswith("-"):  # would read as an ssh option
+            raise SettingsError("bad_setting", f"{where}.host")
         if not _MACHINE_ID.fullmatch(entry["id"]) or entry["id"] in seen:
             raise SettingsError("bad_setting", f"{where}.id")
         if entry["os"] not in OSES:
