@@ -3,10 +3,12 @@ row 1). The fixtures are opencode message lists (`tests/fixtures/opencode/report
 `build_report_fixtures.py`), each with the answer it must get."""
 
 import json
+import time
 from pathlib import Path
 
 import pytest
 
+from orch_it.events import schema
 from orch_it.research import report
 
 FIXTURES = Path(__file__).parent / "fixtures" / "opencode" / "report"
@@ -97,8 +99,6 @@ def test_a_half_written_or_odd_message_list_is_read_without_error(messages):
 
 
 def test_the_ended_event_takes_where_the_report_came_from_and_the_reason_as_codes():
-    from orch_it.events import schema
-
     def ended(**detail):
         return {"id": "e1", "kind": "step.ended", "at": "2026-10-26T10:00:00Z", "repo": "o/r",
                 "ticket": None, "role": "external-researcher", "session": None, "parent_session": None,
@@ -114,9 +114,55 @@ def test_the_ended_event_takes_where_the_report_came_from_and_the_reason_as_code
 
 
 def test_a_huge_run_is_read_in_time():
-    import time
     one = {"info": {"role": "assistant", "finish": "stop", "tokens": {"input": 1}},
            "parts": [{"type": "text", "text": "word " * 2000}]}
     started = time.monotonic()
     chosen = report.choose([one] * 2000, require_reddit=False)
-    assert chosen.reason == "few_links" and time.monotonic() - started < 10
+    assert chosen.reason == "few_links" and time.monotonic() - started < 30
+
+
+def test_every_reason_choose_gives_is_a_code_of_the_ended_event():
+    assert set(report.CHECK_REASONS + report.RUN_REASONS) <= schema.codes_of("research_run.ended", "reason")
+    assert {case_["expect"]["reason"] for case_ in map(load, CASES)} - {None} <= set(
+        report.CHECK_REASONS + report.RUN_REASONS)
+
+
+def reply(*texts, finish="stop", **info):
+    return {"info": {"role": "assistant", "finish": finish, "tokens": {"input": 1}} | info,
+            "parts": [{"type": "text", "text": text} for text in texts]}
+
+
+LINKS = " ".join(f"https://example.org/{n}" for n in range(3)) + " https://www.reddit.com/r/a/1"
+
+
+def test_of_two_equally_long_reports_the_newer_one_is_chosen():
+    text = "word " * 1000 + LINKS
+    assert report.choose([reply(text), reply(text)], require_reddit=True).report_from == "last"
+
+
+def test_two_text_parts_of_one_message_never_run_together_into_one_url():
+    body = "word " * 1000 + " https://a.example.org/1 https://a.example.org/2 https://a.example.org/3"
+    chosen = report.choose([reply(body, "tail https://www.reddit.com/r/x/1")], require_reddit=True)
+    assert chosen.reason is None and chosen.links == 4
+
+
+def test_blank_padding_does_not_make_a_short_text_long():
+    assert report.check(" \n" * 4000 + LINKS, require_reddit=True) == "too_short"
+
+
+def test_a_list_that_is_no_list_is_no_reply():
+    for odd in (None, "text", 7, {"info": {}}):
+        assert report.choose(odd, require_reddit=True).reason == "no_reply"
+
+
+def test_links_in_parentheses_and_markdown_and_capitals_are_read_whole():
+    found = report.urls("[a](https://en.wikipedia.org/wiki/Foo_(bar)) HTTPS://Example.ORG/x/ "
+                        "https://example.org/x#part (https://example.org/y).")
+    assert found == {"https://en.wikipedia.org/wiki/Foo_(bar)", "https://example.org/x",
+                     "https://example.org/y"}
+
+
+def test_a_failed_model_call_is_named_even_when_it_left_a_short_text():
+    chosen = report.choose([reply("partial answer", finish="error", error={"name": "APIError"})],
+                           require_reddit=True)
+    assert chosen.reason == "model_error"

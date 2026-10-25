@@ -90,14 +90,15 @@ class Session:
         self.messages.append({"info": info, "parts": parts})
         return self
 
-    def compaction(self, summary_text: str, *, overflow: bool = False) -> Session:
+    def compaction(self, summary_text: str, *, overflow: bool = False,
+                   summary_tokens: dict | None = None) -> Session:
         """opencode's compaction: the marker, the summary, the injected continue turn."""
 
         self.messages.append({"info": {"id": self._id("msg"), "role": "user", "agent": "research",
                                        "time": {"created": self._time()}},
                               "parts": [{"id": self._id("prt"), "type": "compaction", "auto": True,
                                          "overflow": overflow}]})
-        self.assistant(summary_text, summary=True)
+        self.assistant(summary_text, summary=True, tokens=summary_tokens)
         return self.user("Continue if you have next steps, or stop and ask for clarification if "
                          "you are unsure how to proceed.", synthetic=True, continue_turn=True)
 
@@ -138,13 +139,7 @@ def lost_report_380() -> Session:
         text = prose(134) if n == 0 else None
         s.assistant(text, finish=finish, tools=tools, tokens=used)
     s.assistant(prose(38973, urls=44, reddit=9, seed=380), tokens=tokens(4656, 9075, 6068, 359936))
-    s.messages.append({"info": {"id": "msg_c380", "role": "user", "agent": "research",
-                                "time": {"created": s._time()}},
-                       "parts": [{"id": "prt_c380", "type": "compaction", "auto": True, "overflow": False}]})
-    s.assistant(prose(13391, urls=41, reddit=6, seed=381), summary=True,
-                tokens=tokens(33757, 3191, 2070, 0))
-    s.user("Continue if you have next steps, or stop and ask for clarification if you are unsure "
-           "how to proceed.", synthetic=True, continue_turn=True)
+    s.compaction(prose(13391, urls=41, reddit=6, seed=381), summary_tokens=tokens(33757, 3191, 2070, 0))
     s.assistant(LAST_380, tokens=tokens(17290, 42, 360, 4608))
     return s
 
@@ -193,6 +188,12 @@ def cases() -> dict[str, dict]:
     case("report-split-across-compaction", s,
          "the report cut by an overflow compaction and finished after the continue turn",
          report_from="joined", chars=2500 + 1 + 2600, compactions=1, reddit_urls=1, last_chars=2600)
+
+    s = Session().user().assistant(report).compaction(prose(3500, urls=5, reddit=1, seed=33), overflow=True)
+    s.assistant(LAST_380)
+    case("report-then-overflow-compaction", s,
+         "a finished report, then a compaction that says overflow, then the 201-character reply: never joined",
+         report_from="earlier", chars=6000, compactions=1, reddit_urls=2, last_chars=201)
 
     s = Session().user().assistant(report)
     case("report-alone", s, "the report in one message with nothing after it",
