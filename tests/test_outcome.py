@@ -3,6 +3,7 @@
 Each case writes a small report by hand, the way pytest writes one, and asks `judge` for the
 run's outcome and reason; the expected values are the decision's table."""
 
+from orch_it.events import schema
 from orch_it.testruns.outcome import judge
 
 
@@ -25,15 +26,15 @@ def failing(name, classname="tests.test_math"):
 
 
 def test_a_green_report_is_passed(tmp_path):
-    verdict = judge(report(tmp_path, passing("test_adds"), passing("test_subtracts")))
-    assert (verdict.outcome, verdict.reason) == ("passed", None)
-    assert (verdict.collected, verdict.passed, verdict.failed) == (2, 2, 0)
+    end = judge(report(tmp_path, passing("test_adds"), passing("test_subtracts")))
+    assert (end.outcome, end.reason) == ("passed", None)
+    assert (end.collected, end.passed, end.failed) == (2, 2, 0)
 
 
 def test_one_red_case_is_failed_and_names_that_test(tmp_path):
-    verdict = judge(report(tmp_path, passing("test_adds"), failing("test_subtracts")))
-    assert (verdict.outcome, verdict.reason) == ("failed", "red")
-    rows = {row["test_id"]: row["outcome"] for row in verdict.result_details()}
+    end = judge(report(tmp_path, passing("test_adds"), failing("test_subtracts")))
+    assert (end.outcome, end.reason) == ("failed", "red")
+    rows = {row["test_id"]: row["outcome"] for row in end.result_details()}
     assert rows == {"tests.test_math::test_adds": "passed",
                     "tests.test_math::test_subtracts": "failed"}
 
@@ -41,55 +42,55 @@ def test_one_red_case_is_failed_and_names_that_test(tmp_path):
 def test_an_errored_case_is_red_too(tmp_path):
     errored = ('<testcase classname="tests.test_math" name="test_setup">'
                '<error message="fixture broke">trace</error></testcase>')
-    verdict = judge(report(tmp_path, passing("test_adds"), errored))
-    assert (verdict.outcome, verdict.reason, verdict.failed) == ("failed", "red", 1)
-    assert [row["outcome"] for row in verdict.result_details()] == ["passed", "error"]
+    end = judge(report(tmp_path, passing("test_adds"), errored))
+    assert (end.outcome, end.reason, end.failed) == ("failed", "red", 1)
+    assert [row["outcome"] for row in end.result_details()] == ["passed", "error"]
 
 
 def test_a_deleted_report_is_no_result_summary_missing(tmp_path):
-    verdict = judge(tmp_path / "never-written.xml")
-    assert (verdict.outcome, verdict.reason, verdict.summary_seen) == ("no_result", "summary_missing", False)
+    end = judge(tmp_path / "never-written.xml")
+    assert (end.outcome, end.reason, end.summary_seen) == ("no_result", "summary_missing", False)
 
 
 def test_a_truncated_report_is_no_result_summary_missing_never_failed(tmp_path):
     whole = report(tmp_path, passing("test_adds"), failing("test_subtracts")).read_bytes()
     for cut_at in (0, 1, len(whole) // 3, len(whole) - 20, len(whole) - 1):
         (tmp_path / "half.xml").write_bytes(whole[:cut_at])
-        verdict = judge(tmp_path / "half.xml")
-        assert (verdict.outcome, verdict.reason) == ("no_result", "summary_missing"), cut_at
-        assert verdict.result_details() == []
+        end = judge(tmp_path / "half.xml")
+        assert (end.outcome, end.reason) == ("no_result", "summary_missing"), cut_at
+        assert end.result_details() == []
 
 
 def test_zero_collected_is_no_result_none_collected(tmp_path):
-    verdict = judge(report(tmp_path))
-    assert (verdict.outcome, verdict.reason, verdict.summary_seen) == ("no_result", "none_collected", True)
+    end = judge(report(tmp_path))
+    assert (end.outcome, end.reason, end.summary_seen) == ("no_result", "none_collected", True)
 
 
 def test_a_requested_id_not_collected_is_no_result_ids_not_collected(tmp_path):
     path = report(tmp_path, passing("test_adds"))
-    verdict = judge(path, requested_ids=["tests.test_math::test_adds", "tests.test_math::test_gone"])
-    assert (verdict.outcome, verdict.reason) == ("no_result", "ids_not_collected")
-    assert verdict.missing_ids == ("tests.test_math::test_gone",)
+    end = judge(path, requested_ids=["tests.test_math::test_adds", "tests.test_math::test_gone"])
+    assert (end.outcome, end.reason) == ("no_result", "ids_not_collected")
+    assert end.missing_ids == ("tests.test_math::test_gone",)
 
 
 def test_requested_ids_match_by_pytest_node_id_and_by_bare_file(tmp_path):
     path = report(tmp_path, passing("test_adds"), passing("test_b[x y]", "tests.sub.test_more.TestC"))
-    verdict = judge(path, requested_ids=[
+    end = judge(path, requested_ids=[
         "tests/test_math.py::test_adds",            # a pytest node id
         "tests/sub/test_more.py::TestC::test_b[x y]",  # a class and a parameter with a space
         "tests/sub/test_more.py",                   # a bare file: every test of it
         "tests.test_math::test_adds"])              # a test id as test.result writes it
-    assert (verdict.outcome, verdict.reason, verdict.missing_ids) == ("passed", None, ())
+    assert (end.outcome, end.reason, end.missing_ids) == ("passed", None, ())
 
 
 def test_a_bare_file_with_no_test_collected_is_not_collected(tmp_path):
-    verdict = judge(report(tmp_path, passing("test_adds")), requested_ids=["tests/test_other.py"])
-    assert verdict.reason == "ids_not_collected"
+    end = judge(report(tmp_path, passing("test_adds")), requested_ids=["tests/test_other.py"])
+    assert end.reason == "ids_not_collected"
 
 
 def test_a_red_case_is_red_even_when_a_requested_id_is_missing(tmp_path):
-    verdict = judge(report(tmp_path, failing("test_adds")), requested_ids=["tests/test_math.py::test_gone"])
-    assert (verdict.outcome, verdict.reason) == ("failed", "red")
+    end = judge(report(tmp_path, failing("test_adds")), requested_ids=["tests/test_math.py::test_gone"])
+    assert (end.outcome, end.reason) == ("failed", "red")
 
 
 def test_a_run_cut_at_its_bound_is_no_result_cut_whatever_its_report_says(tmp_path):
@@ -100,15 +101,15 @@ def test_a_run_cut_at_its_bound_is_no_result_cut_whatever_its_report_says(tmp_pa
 
 
 def test_a_cut_run_keeps_the_rows_its_report_holds(tmp_path):
-    verdict = judge(report(tmp_path, passing("test_adds")), cut=True)
-    assert [row["test_id"] for row in verdict.result_details()] == ["tests.test_math::test_adds"]
+    end = judge(report(tmp_path, passing("test_adds")), cut=True)
+    assert [row["test_id"] for row in end.result_details()] == ["tests.test_math::test_adds"]
 
 
 def test_skips_ms_and_repeated_ids_reach_the_rows(tmp_path):
     skipped = ('<testcase classname="tests.test_math" name="test_skips" time="0.000">'
                '<skipped type="pytest.skip" message="not on windows">x</skipped></testcase>')
-    verdict = judge(report(tmp_path, skipped, failing("test_flaky"), passing("test_flaky")))
-    assert verdict.result_details() == [
+    end = judge(report(tmp_path, skipped, failing("test_flaky"), passing("test_flaky")))
+    assert end.result_details() == [
         {"test_id": "tests.test_math::test_skips", "outcome": "skipped",
          "skip_reason": "not on windows", "ms": 0, "attempt": 1},
         {"test_id": "tests.test_math::test_flaky", "outcome": "failed", "skip_reason": None,
@@ -116,12 +117,12 @@ def test_skips_ms_and_repeated_ids_reach_the_rows(tmp_path):
         {"test_id": "tests.test_math::test_flaky", "outcome": "passed", "skip_reason": None,
          "ms": 10, "attempt": 2},
     ]
-    assert (verdict.collected, verdict.passed, verdict.failed, verdict.skipped) == (3, 1, 1, 1)
+    assert (end.collected, end.passed, end.failed, end.skipped) == (3, 1, 1, 1)
 
 
 def test_the_end_detail_carries_the_counts_and_the_outcome(tmp_path):
-    verdict = judge(report(tmp_path, passing("test_adds"), failing("test_subtracts")))
-    assert verdict.ended_detail() == {
+    end = judge(report(tmp_path, passing("test_adds"), failing("test_subtracts")))
+    assert end.ended_detail() == {
         "outcome": "failed", "reason": "red", "collected": 2, "passed": 1, "failed": 1,
         "skipped": 0, "summary_seen": True}
 
@@ -137,5 +138,35 @@ def test_a_report_declaring_entities_is_refused_unread(tmp_path):
 def test_xml_that_is_no_junit_report_is_summary_missing(tmp_path):
     (tmp_path / "page.xml").write_text("<html><body>502 Bad Gateway</body></html>", "utf-8")
     assert judge(tmp_path / "page.xml").reason == "summary_missing"
+
+
+def test_a_folder_in_the_report_s_place_is_summary_missing(tmp_path):
     (tmp_path / "folder.xml").mkdir()
     assert judge(tmp_path / "folder.xml").reason == "summary_missing"
+
+
+def test_a_node_id_with_colons_inside_its_parameter_matches_its_case(tmp_path):
+    path = report(tmp_path, passing("test_a[x::y]", "tests.test_t"))
+    assert judge(path, requested_ids=["tests/test_t.py::test_a[x::y]"]).outcome == "passed"
+
+
+def test_every_end_judge_gives_is_a_valid_test_run_end(tmp_path):
+    """The closed sets are the only definition of an outcome and its reason (#393 decision 4):
+    each end `judge` can give passes the store's validation as a `test_run` `step.ended`."""
+
+    green = report(tmp_path, passing("test_adds"), name="green.xml")
+    red = report(tmp_path, failing("test_adds"), name="red.xml")
+    empty = report(tmp_path, name="empty.xml")
+    ends = [judge(green), judge(red), judge(empty), judge(tmp_path / "none.xml"),
+            judge(green, requested_ids=["tests/test_gone.py"]), judge(green, cut=True),
+            judge(green, cut=True, slept=True)]
+    assert {(e.outcome, e.reason) for e in ends} == {
+        ("passed", None), ("failed", "red"), ("no_result", "none_collected"),
+        ("no_result", "summary_missing"), ("no_result", "ids_not_collected"),
+        ("no_result", "cut"), ("no_result", "suspended")}
+    for end in ends:
+        schema.validate({
+            "id": "x", "kind": "step.ended", "at": "2026-10-25T10:00:00Z",
+            "repo": "Rasslabsya4el/orch-it", "ticket": None, "role": "script", "session": None,
+            "parent_session": None, "turn": None, "step": "test_run", "run": "r", "machine": "m",
+            "os": "o", "layer_version": "0", "note": None, "detail": end.ended_detail()})

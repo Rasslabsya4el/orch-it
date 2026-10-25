@@ -79,7 +79,7 @@
       "ended": {}
     },
     "test_run": {
-      "started": {"place": {"codes": "place"}, "selection": {}, "commit": {}, "branch": {}, "pr": {}, "workers": {}, "settings_hash": {}, "part": {}, "os": {"codes": "test_os"}, "places_offered": {}, "chosen": {"codes": "place"}, "reason": {"codes": "place_reason"}},
+      "started": {"place": {"codes": "place"}, "selection": {}, "commit": {}, "branch": {}, "pr": {}, "workers": {}, "settings_hash": {}, "part": {}, "run_os": {"codes": "test_os"}, "places_offered": {}, "chosen": {"codes": "place"}, "reason": {"codes": "place_reason"}},
       "ended": {"reason": {"codes": "test_run_reason"}, "collected": {}, "passed": {}, "failed": {}, "skipped": {}, "summary_seen": {}, "billed_minutes": {}, "start_minutes": {}, "run_minutes": {}}
     },
     "review": {

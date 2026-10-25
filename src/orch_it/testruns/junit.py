@@ -7,7 +7,7 @@ chunks, so a huge report never sits in memory whole. A report that is missing, u
 half-written, declares a DTD or an entity, or has another root raises `ReportUnreadable`; the
 caller never gets a partial list.
 
-A case's result is `failed` with a `<failure>` child, `error` with an `<error>` child (either
+A case's outcome is `failed` with a `<failure>` child, `error` with an `<error>` child (either
 one wins over `<skipped>`), `skipped` with a `<skipped>` child, else `passed`.
 """
 
@@ -20,9 +20,10 @@ from pathlib import Path
 
 ROOTS = ("testsuites", "testsuite")
 CHUNK_BYTES = 1 << 20
-MESSAGE_CHARS = 300
+SKIP_REASON_CHARS = 300
+REPORT_ERROR_CODES = ("missing", "broken")
 _RANK = {"passed": 0, "skipped": 1, "error": 2, "failed": 3}
-_CHILD_RESULT = {"failure": "failed", "error": "error", "skipped": "skipped"}
+_CHILD_OUTCOME = {"failure": "failed", "error": "error", "skipped": "skipped"}
 
 
 class ReportUnreadable(Exception):
@@ -30,6 +31,8 @@ class ReportUnreadable(Exception):
     XML, a DTD or entity in it, or not a JUnit report)."""
 
     def __init__(self, code: str, detail: str = ""):
+        if code not in REPORT_ERROR_CODES:
+            raise ValueError(f"not a report error code: {code}")
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
 
@@ -38,9 +41,9 @@ class ReportUnreadable(Exception):
 class Case:
     classname: str
     name: str
-    result: str  # passed, failed, error or skipped
+    outcome: str  # passed, failed, error or skipped
     seconds: float | None
-    message: str | None  # the skip reason of a skipped case, the message of a failed one
+    skip_reason: str | None  # the `message` (else `type`) of a skipped case's <skipped>
 
     @property
     def test_id(self) -> str:
@@ -50,6 +53,13 @@ class Case:
         if not self.classname or self.classname == self.name:
             return self.name
         return f"{self.classname}::{self.name}"
+
+    def result_detail(self, attempt: int) -> dict:
+        """The detail of this case's `test.result` event."""
+
+        return {"test_id": self.test_id, "outcome": self.outcome, "skip_reason": self.skip_reason,
+                "ms": None if self.seconds is None else round(self.seconds * 1000),
+                "attempt": attempt}
 
 
 class _Reader:
@@ -70,15 +80,15 @@ class _Reader:
             if tag == "testcase":
                 self.case_depth = self.depth
                 self.open_case = {"classname": attrs.get("classname") or "",
-                                  "name": attrs.get("name") or "", "result": "passed",
-                                  "seconds": _seconds(attrs.get("time")), "message": None}
-        elif self.depth == self.case_depth + 1 and tag in _CHILD_RESULT:
-            result = _CHILD_RESULT[tag]
+                                  "name": attrs.get("name") or "", "outcome": "passed",
+                                  "seconds": _seconds(attrs.get("time")), "skip_reason": None}
+        elif self.depth == self.case_depth + 1 and tag in _CHILD_OUTCOME:
+            outcome = _CHILD_OUTCOME[tag]
             case = self.open_case
-            if _RANK[result] > _RANK[case["result"]]:
-                case["result"] = result
-                text = attrs.get("message") or attrs.get("type")
-                case["message"] = text[:MESSAGE_CHARS] if text else None
+            if _RANK[outcome] > _RANK[case["outcome"]]:
+                case["outcome"] = outcome
+                text = attrs.get("message") or attrs.get("type") if outcome == "skipped" else None
+                case["skip_reason"] = text[:SKIP_REASON_CHARS] if text else None
 
     def end(self, tag: str) -> None:
         if self.case_depth == self.depth:
@@ -89,6 +99,9 @@ class _Reader:
 
 
 def _seconds(text: str | None) -> float | None:
+    """A `time` attribute in seconds; `1,234.5` (a thousands comma) reads as 1234.5; anything
+    that is no finite, non-negative number is unknown."""
+
     try:
         value = float(text.replace(",", "")) if text else None
     except ValueError:

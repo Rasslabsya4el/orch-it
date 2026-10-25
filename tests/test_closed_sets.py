@@ -82,7 +82,7 @@ CODE_FIELDS = {
     },
     ("test_run.started", "reason"): {"earliest_finish", "nothing_measured", "forced"},
     ("test_run.started", "chosen"): {"own", "machine:<id>", "github"},
-    ("test_run.started", "os"): {"linux", "windows", "macos"},
+    ("test_run.started", "run_os"): {"linux", "windows", "macos"},
     ("turn.used", "reason"): {"price_missing", "usage_unreadable"},  # decision 6; a turn whose usage is no counts
     ("test.result", "load_verdict"): {"code", "load"},
     ("hook.ran", "action"): {"acted", "skipped"},

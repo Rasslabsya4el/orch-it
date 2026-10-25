@@ -29,20 +29,20 @@ EXPECTED = {
 
 
 def rows_by_test(tool: str, scenario: str) -> tuple[str, str | None, dict[str, str]]:
-    verdict = judge(FIXTURES / tool / f"{scenario}.xml")
-    rows = {NAMES[tool][row["test_id"]]: row["outcome"] for row in verdict.result_details()}
-    return verdict.outcome, verdict.reason, rows
+    end = judge(FIXTURES / tool / f"{scenario}.xml")
+    rows = {NAMES[tool][row["test_id"]]: row["outcome"] for row in end.result_details()}
+    return end.outcome, end.reason, rows
 
 
 @pytest.mark.parametrize("scenario", sorted(EXPECTED))
 @pytest.mark.parametrize("tool", sorted(NAMES))
-def test_each_runner_s_report_gives_the_hand_counted_outcome_and_rows(tool, scenario):
+def test_every_runner_report_gives_the_hand_counted_outcome_and_rows(tool, scenario):
     assert rows_by_test(tool, scenario) == EXPECTED[scenario]
 
 
 @pytest.mark.parametrize("scenario", sorted(EXPECTED))
 @pytest.mark.parametrize("tool", ["jest", "go"])
-def test_a_jest_or_go_report_reads_the_same_as_pytest_s(tool, scenario):
+def test_a_jest_or_go_report_reads_the_same_as_the_pytest_report(tool, scenario):
     assert rows_by_test(tool, scenario) == rows_by_test("pytest", scenario)
 
 
