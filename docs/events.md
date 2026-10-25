@@ -45,7 +45,7 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `plan_reason` | `ticket_changed`, `not_doable` |
 | `close_reason` | `acceptance_missing`, `row_failed`, `unanswered`, `already_closed` |
 | `repair` | `lease_released`, `closed`, `unparked`, `rerun`, `red_ticket_opened` |
-| `turn_reason` | `price_missing` |
+| `turn_reason` | `price_missing`, `usage_unreadable` |
 | `load_verdict` | `code`, `load` |
 | `hook_action` | `acted`, `skipped` |
 | `run_check_result` | `alive`, `ended`, `failed` |
