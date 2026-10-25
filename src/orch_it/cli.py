@@ -1,4 +1,5 @@
-"""The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9).
+"""The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
+7 and 9 for `import-github` and `test-places`).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -159,8 +160,10 @@ def _run(args) -> str:
                 f" unreadable_files={done.unreadable_files}\n")
     if command == "import-github":
         done = github.import_github(_store(args), args.repo, since=args.since)
+        failed = f" failure_codes={','.join(done.failure_codes)}" if done.failure_codes else ""
         return (f"runs_read={done.runs_read} jobs={done.jobs} written={done.written}"
-                f" already_stored={done.already_stored} reports_missing={done.reports_missing}\n")
+                f" already_stored={done.already_stored} reports_missing={done.reports_missing}"
+                f" runs_failed={done.runs_failed}{failed}\n")
     if command == "test-places":
         return render(queries.test_places(_store(args), args.repo))
     raise AssertionError(command)

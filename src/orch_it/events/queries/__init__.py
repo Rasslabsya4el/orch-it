@@ -388,3 +388,7 @@ def test_places(store: Store, repo: str | None = None) -> QueryResult:
                      _median_cell(group["minutes"]),
                      _median_cell(group["queue"]) if place == "github" else _NOT_MEASURED))
     return QueryResult(list(TEST_PLACES_COLUMNS), rows)
+
+
+# A query the ticket names, not a test: pytest must not collect it where a module imports it.
+test_places.__test__ = False
