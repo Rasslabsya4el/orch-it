@@ -75,3 +75,13 @@ def test_a_command_that_ends_inside_its_bound_is_not_cut(tmp_path):
     done = process.run_bounded([sys.executable, "-c", "raise SystemExit(4)"], cwd=tmp_path, env=None,
                                bound_seconds=60)
     assert (done.rc, done.cut, done.slept) == (4, False, False)
+
+
+def test_a_run_told_to_abort_is_killed_at_once_and_not_waited_for(tmp_path):
+    import threading
+    abort = threading.Event()
+    threading.Timer(0.5, abort.set).start()
+    started = time.monotonic()
+    done = process.run_bounded([sys.executable, "-c", "import time; time.sleep(60)"], cwd=tmp_path,
+                               env=None, bound_seconds=600, poll_seconds=0.05, abort=abort)
+    assert done.rc is None and time.monotonic() - started < 15

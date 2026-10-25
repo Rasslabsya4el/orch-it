@@ -4,8 +4,9 @@ Keys (each optional): `test_command` (argv list; `{python}`, `{report}`, `{ids_f
 `{work_tree}` are filled per run; default pytest writing `--junitxml`), `test_run_bound_minutes`
 (default 15), `test_env` (name -> value), `github_tests` (default off), `test_machines` (one
 entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1), `python`,
-`on` (true)), `own_capacity` (1) and `github_capacity` (20, GitHub's concurrent job cap on a
-free account). A key under `repos.<owner/name>` (any case) overrides the same key for that repo.
+`on` (true), `origin` (default: the caller work tree's `origin`), `ssh_options` (list of extra
+`ssh` arguments such as `["-p", "2222"]`)), `own_capacity` (1) and `github_capacity` (20, GitHub's
+concurrent job cap on a free account). A key under `repos.<owner/name>` (any case) overrides the same key for that repo.
 A value of the wrong shape (a NUL in a command or `test_env` value, a bound over a week
 included) raises `SettingsError("bad_setting")` naming the key.
 """
@@ -34,6 +35,8 @@ class Machine:
     capacity: int = 1
     python: str | None = None  # default: `python` on Windows, `python3` elsewhere
     on: bool = True
+    origin: str | None = None  # the url the machine clones and fetches from; default: the caller's origin
+    ssh_options: tuple[str, ...] = ()  # extra `ssh` arguments before the host (-p, -i, -o ...)
 
     @property
     def place(self) -> str:
@@ -129,10 +132,18 @@ def _machines(entries: object) -> tuple[Machine, ...]:
         python = entry.get("python")
         if python is not None and (not isinstance(python, str) or not python.strip()):
             raise SettingsError("bad_setting", f"{where}.python")
+        origin = entry.get("origin")
+        if origin is not None and (not isinstance(origin, str) or not origin.strip()):
+            raise SettingsError("bad_setting", f"{where}.origin")
+        options = entry.get("ssh_options", [])
+        if not (isinstance(options, list) and all(isinstance(o, str) and o and "\x00" not in o
+                                                  for o in options)):
+            raise SettingsError("bad_setting", f"{where}.ssh_options")
         on = entry.get("on", True)
         if not isinstance(on, bool):
             raise SettingsError("bad_setting", f"{where}.on")
         seen.add(entry["id"])
         machines.append(Machine(entry["id"], entry["host"], entry["os"], entry["checkout"],
-                                _count(f"{where}.capacity", entry.get("capacity", 1)), python, on))
+                                _count(f"{where}.capacity", entry.get("capacity", 1)), python, on,
+                                origin, tuple(options)))
     return tuple(machines)

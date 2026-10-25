@@ -43,7 +43,11 @@ class CommandMissing(Exception):
 
 
 def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str] | None, bound_seconds: float,
-                wall=time.time, poll_seconds: float = POLL_SECONDS) -> Finished:
+                wall=time.time, poll_seconds: float = POLL_SECONDS,
+                abort: threading.Event | None = None) -> Finished:
+    """Run `argv` until it exits, its bound passes, or `abort` is set (then it is killed like a
+    cut run: a machine place sets it when its caller is gone)."""
+
     try:
         tree = _Tree.start(argv, cwd, env)
     except (OSError, ValueError) as e:
@@ -60,6 +64,9 @@ def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str] | None, bound
                 break
             except subprocess.TimeoutExpired:
                 pass
+            if abort is not None and abort.is_set():
+                cut = True
+                break
             now = wall()
             if now - last > poll_seconds + SLEEP_GAP_SECONDS and last < deadline <= now:
                 slept = True  # the machine slept across the bound

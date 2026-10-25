@@ -22,6 +22,7 @@ from orch_it.events.ids import live_id
 from orch_it.events.store import Store
 from orch_it.testruns import environment, outcome, place_rule
 from orch_it.testruns.config import TestSettings
+from orch_it.testruns.machine import MachinePlace
 from orch_it.testruns.places import OwnPlace, PlaceEnd, PlaceRefused, PlaceVanished, Request
 
 GIT_TIMEOUT_SECONDS = 30
@@ -107,12 +108,24 @@ def offers_of(settings: TestSettings, places: dict) -> list[place_rule.Offer]:
     return offers
 
 
+def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, ...] = ("ssh",)) -> dict:
+    """The own place and one machine place per machine of the settings. A machine clones and
+    fetches from its own `origin` setting, else from the work tree's `origin`."""
+
+    places = {"own": OwnPlace()}
+    if settings.machines:
+        origin = git_output(work_tree, "remote", "get-url", "origin")
+        for machine in settings.machines:
+            places[machine.place] = MachinePlace(machine, origin_url=origin, ssh=ssh)
+    return places
+
+
 def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSettings,
               ids_file: Path | None = None, place: str | None = None, need_os: str = "any",
               role: str = "script", ticket: int | None = None, places: dict | None = None,
               wait_minutes: float | None = None, sleep=time.sleep, now=None) -> RunDone:
     """One run of the repo's test command at the place the rule picks (or `place`, forced).
-    `places` maps a place id to its adapter (default: the own place). A place lost or refusing
+    `places` maps a place id to its adapter (default: `default_places`). A place lost or refusing
     mid-run is left out and the rule picks again, until a place finishes the run or none is
     left. With no place left and one of them busy, the run waits on `test_place` up to
     `wait_minutes` (default: the bound), re-deciding every `WAIT_POLL_SECONDS`; giving up, or no
@@ -124,7 +137,7 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     if need_os not in NEED_OSES:
         raise RunError("bad_os", need_os)
     ids = read_ids(ids_file) if ids_file is not None else None
-    places = places if places is not None else {"own": OwnPlace()}
+    places = places if places is not None else default_places(settings, work_tree)
     if place is not None and place not in places:
         raise RunError("unknown_place", place)
     now = now or (lambda: datetime.now(UTC))
