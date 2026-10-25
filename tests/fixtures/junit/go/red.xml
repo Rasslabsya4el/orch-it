@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="1" skipped="1">
+	<testsuite name="example.com/math" tests="3" failures="1" errors="0" id="0" hostname="WIN-OHK3JQ5AM84" skipped="1" time="0.354" timestamp="2026-10-25T21:19:45+01:00">
+		<testcase name="TestAdds" classname="example.com/math" time="0.000"></testcase>
+		<testcase name="TestSubtracts" classname="example.com/math" time="0.000">
+			<failure message="Failed"><![CDATA[    math_test.go:13: 1 - 1 != 1]]></failure>
+		</testcase>
+		<testcase name="TestSkips" classname="example.com/math" time="0.000">
+			<skipped message="Skipped"><![CDATA[    math_test.go:18: not now]]></skipped>
+		</testcase>
+	</testsuite>
+</testsuites>

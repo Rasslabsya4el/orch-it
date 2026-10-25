@@ -36,6 +36,9 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `delivered` | `commit`, `comment`, `file`, `none` |
 | `wait_reason` | `test_place`, `rate_limit`, `owner_answer`, `brain_answer`, `parked`, `blocker`, `review`, `github_queue`, `capacity` |
 | `place` | `own`, `machine:<id>`, `github` |
+| `test_os` | `linux`, `windows`, `macos` |
+| `place_reason` | `earliest_finish`, `nothing_measured`, `forced` |
+| `test_run_reason` | `red`, `cut`, `none_collected`, `ids_not_collected`, `summary_missing`, `job_missing`, `busy`, `os_missing`, `place_off`, `out_of_minutes`, `place_vanished`, `superseded` |
 | `review_axis` | `standards`, `spec`, `edge` |
 | `unit_reason` | `format`, `result`, `merge` |
 | `pr_reason` | `merged`, `red`, `closed_unmerged`, `timeout`, `withdrawn` |
@@ -81,7 +84,7 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 | `session` | `model`, `effort`, `agent_file`, `title`, `launched_by` (`launched_by`) | `reason` (`session_end_reason`), `held_tickets`, `checkpoint_written` | cost and time per session; why it ended; tickets left held by a dead session |
 | `subagent` | `model`, `effort`, `agent_file`, `title`, `launched_by` (`launched_by`), `unit`, `worktree`, `prompt_has`, `prompt_chars` | `reason` (`session_end_reason`), `held_tickets`, `checkpoint_written`, `delivered` (`delivered`), `report_lines_owed`, `report_lines_present` | does a delegation give the subagent what it needs; subagents with no report |
 | `wait` | `reason` (`wait_reason`), `on` | none | where the hours go between steps |
-| `test_run` | `place` (`place`), `selection`, `commit`, `branch`, `pr`, `workers`, `settings_hash`, `part` | `collected`, `passed`, `failed`, `skipped`, `summary_seen`, `billed_minutes` | did the tests run where and on what; a cut run is no_result, never red |
+| `test_run` | `place` (`place`), `selection`, `commit`, `branch`, `pr`, `workers`, `settings_hash`, `part`, `os` (`test_os`), `places_offered`, `chosen` (`place`), `reason` (`place_reason`) | `reason` (`test_run_reason`), `collected`, `passed`, `failed`, `skipped`, `summary_seen`, `billed_minutes`, `start_minutes`, `run_minutes` | did the tests run where and on what; a cut run is no_result, never red |
 | `review` | `axis` (`review_axis`), `unit`, `diff_ref` | `findings`, `fixed` | review cost and yield per axis |
 | `unit` | `unit`, `assigned_role` (`role`), `model` | `commit`, `note_present`, `reason` (`unit_reason`) | a unit's life from assignment to hand-back or send-back |
 | `pr` | `pr`, `branch`, `base`, `head` | `merge_sha`, `reason` (`pr_reason`) | time from PR to merge; PRs that never end |
