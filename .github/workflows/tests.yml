@@ -1,9 +1,33 @@
 name: tests
 
+# The job names `linux` and `windows` are required by branch protection by name: never rename them.
+# Pull request and push runs leave the `slow` and `live` tests out; the nightly run (schedule, or
+# workflow_dispatch with slow_and_live on) runs the full suite with them (#394 decision 8).
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      slow_and_live:
+        description: "run the tests marked slow and live too"
+        type: boolean
+        default: true
+
+# A newer push to a pull request cancels its older run: only the newer head's result counts.
+concurrency:
+  group: tests-${{ github.event_name }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PR_MARKS: "not slow and not live"
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   linux:
@@ -15,7 +39,20 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[test]"
-      - run: pytest -q
+      - name: pytest
+        shell: bash
+        env:
+          NIGHTLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live) }}
+          ORCH_IT_REQUIRE_SSHD: "1"
+        run: |
+          if [ "$NIGHTLY" = "true" ]; then marks=(); else marks=(-m "$PR_MARKS"); fi
+          pytest -q --junitxml=junit.xml "${marks[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ github.job }}
+          path: junit.xml
+          if-no-files-found: ignore
 
   windows:
     runs-on: windows-latest
@@ -26,4 +63,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[test]"
-      - run: pytest -q
+      - name: pytest
+        shell: bash
+        env:
+          NIGHTLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live) }}
+        run: |
+          if [ "$NIGHTLY" = "true" ]; then marks=(); else marks=(-m "$PR_MARKS"); fi
+          pytest -q --junitxml=junit.xml "${marks[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ github.job }}
+          path: junit.xml
+          if-no-files-found: ignore
