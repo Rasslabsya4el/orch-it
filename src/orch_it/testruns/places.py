@@ -42,10 +42,15 @@ class PlaceEnd:
     log_tail: str = ""
 
 
+REFUSAL_CODES = ("busy", "os_missing", "place_off", "out_of_minutes")
+
+
 class PlaceRefused(Exception):
-    """`code`: one of `busy`, `os_missing`, `place_off`, `out_of_minutes`."""
+    """The place could not take the run. `code` is one of `REFUSAL_CODES` (decision 2)."""
 
     def __init__(self, code: str, detail: str = ""):
+        if code not in REFUSAL_CODES:
+            raise ValueError(f"not a refusal code: {code}")
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
 

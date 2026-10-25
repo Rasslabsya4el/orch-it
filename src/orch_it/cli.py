@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -18,7 +17,7 @@ from orch_it import settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.testruns.config import TestSettings
-from orch_it.testruns.runner import RunError, run_tests
+from orch_it.testruns.runner import RunError, git_output, run_tests
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
@@ -137,13 +136,8 @@ _ORIGIN = re.compile(r"(?:github\.com[:/])([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.g
 def _repo_of(work_tree: str) -> str:
     """`owner/name` of the work tree's `origin` on GitHub, or `CommandError("repo_unknown")`."""
 
-    try:
-        done = subprocess.run(["git", "-C", work_tree, "remote", "get-url", "origin"],
-                              capture_output=True, text=True, timeout=30,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except (OSError, subprocess.TimeoutExpired):
-        raise CommandError("repo_unknown", work_tree) from None
-    found = _ORIGIN.search(done.stdout.strip()) if done.returncode == 0 else None
+    origin = git_output(work_tree, "remote", "get-url", "origin")
+    found = _ORIGIN.search(origin) if origin else None
     if not found:
         raise CommandError("repo_unknown", f"{work_tree}: give --repo")
     return found.group(1)

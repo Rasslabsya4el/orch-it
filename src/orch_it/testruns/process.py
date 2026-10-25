@@ -5,7 +5,8 @@ passes, and then kills its whole process tree either way, so no process of the r
 Windows every process of the run sits in one job object (the command starts suspended, joins
 the job, then resumes); elsewhere the command leads its own process group. The bound is wall
 time, so a machine that sleeps through it still cuts the run; a jump of the wall clock between
-two polls longer than `SLEEP_GAP_SECONDS` marks the run `slept`.
+two polls longer than `SLEEP_GAP_SECONDS` that carries the run past its bound marks it `slept`
+(a short sleep long before the bound does not).
 """
 
 from __future__ import annotations
@@ -52,8 +53,8 @@ def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str], bound_second
                 except subprocess.TimeoutExpired:
                     pass
                 now = wall()
-                if now - last > poll_seconds + SLEEP_GAP_SECONDS:
-                    slept = True
+                if now - last > poll_seconds + SLEEP_GAP_SECONDS and last < deadline <= now:
+                    slept = True  # the machine slept across the bound
                 last = now
                 if now >= deadline:
                     cut = True

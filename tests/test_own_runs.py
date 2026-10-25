@@ -4,13 +4,19 @@ a clean environment under its bound, and the run lands in the store as a `test_r
 
 import json
 import os
+import subprocess
 import sys
 import textwrap
 import time
 
+import pytest
+
 from orch_it.events.store import Store
 from orch_it.testruns import environment
 from orch_it.testruns.config import TestSettings
+from orch_it.testruns.places import PlaceRefused, PlaceVanished
+
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 from orch_it.testruns.runner import run_tests
 
 REPO = "Rasslabsya4el/orch-it"
@@ -131,6 +137,52 @@ def test_a_truncated_report_is_summary_missing_never_failed(tmp_path):
     store, done = run_of(tmp_path, root, settings)
     assert (done.outcome, done.reason) == ("no_result", "summary_missing")
     assert results(store) == []
+
+
+class Failing:
+    """A place that cannot finish: it raises what a real place raises."""
+
+    def __init__(self, error):
+        self.id, self.os, self.error = "own", "linux", error
+
+    def run(self, request, scratch):
+        raise self.error
+
+
+def test_a_place_that_vanishes_mid_run_ends_it_lost_never_failed(tmp_path):
+    root = suite(tmp_path)
+    store, done = run_of(tmp_path, root, places={"own": Failing(PlaceVanished("ssh dropped"))})
+    assert (done.outcome, done.reason) == ("lost", "place_vanished")
+    assert [row[1:3] for row in ended(store)] == [("lost", "place_vanished")]
+    assert results(store) == []
+
+
+def test_a_place_that_refuses_ends_the_run_refused_with_its_code(tmp_path):
+    root = suite(tmp_path)
+    store, done = run_of(tmp_path, root, places={"own": Failing(PlaceRefused("out_of_minutes"))})
+    assert (done.outcome, done.reason) == ("refused", "out_of_minutes")
+    assert [row[1:3] for row in ended(store)] == [("refused", "out_of_minutes")]
+
+
+def test_a_refusal_code_outside_the_list_is_no_refusal():
+    with pytest.raises(ValueError):
+        PlaceRefused("tired")
+
+
+def test_the_start_says_whether_the_work_tree_had_changes(tmp_path):
+    root = suite(tmp_path, test_one="def test_one():\n    pass\n")
+    git = ["git", "-C", str(root)]
+    for args in (["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t",
+                                                 "commit", "-qm", "one"]):
+        subprocess.run(git + args, check=True, capture_output=True, timeout=60, creationflags=NO_WINDOW)
+    store = Store.open(tmp_path / "store")
+    run_tests(store, work_tree=root, repo=REPO, settings=TestSettings())
+    (root / "test_one.py").write_text("def test_one():\n    assert True\n", "utf-8")
+    run_tests(store, work_tree=root, repo=REPO, settings=TestSettings())
+    rows = store.query("SELECT \"commit\", json_extract(detail, '$.dirty') FROM events"
+                       " WHERE kind = 'step.started' ORDER BY at").rows
+    assert [dirty for _, dirty in rows] == [0, 1]
+    assert rows[0][0] and rows[0][0] == rows[1][0]
 
 
 def test_a_program_that_does_not_exist_is_summary_missing(tmp_path):
