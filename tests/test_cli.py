@@ -299,3 +299,31 @@ def test_the_module_runs_as_python_dash_m_orch_it(tmp_path):
         capture_output=True, text=True, env=env, timeout=60,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     assert (done.returncode, done.stdout, done.stderr) == (0, "answer\n42\n", "")
+
+
+def test_help_prints_and_exits_0(store, capsys):
+    assert run(capsys, store, "--help")[0] == 0
+    assert main(["events", "session-cost", "--help"]) == 0
+
+
+def test_a_weekly_percent_outside_0_to_100_is_bad_pct(store, capsys):
+    for pct in ("-5", "1000"):
+        code, _, err = run(capsys, store, "measure-limit", pct)
+        assert code == 2 and err.startswith("error: bad_pct")
+
+
+def test_params_bind_as_numbers_only_when_written_plainly(store, capsys):
+    code, out, _ = run(capsys, store, "query", "SELECT typeof(:a), typeof(:b), typeof(:c), :b",
+                       "--param", "a=7", "--param", "b=007", "--param", "c=-2.5")
+    assert code == 0 and cells(out)[1] == ["integer", "text", "real", "007"]
+
+
+def test_an_empty_query_is_an_error_and_the_code_is_said_once(store, capsys):
+    code, _, err = run(capsys, store, "query", "  -- nothing")
+    assert code == 2 and err.startswith("error: query_failed:") and err.count("query_failed") == 1
+
+
+def test_a_recursive_query_runs(store, capsys):
+    code, out, _ = run(capsys, store, "query",
+                       "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 3) SELECT sum(x) FROM n")
+    assert code == 0 and cells(out)[1] == ["6"]

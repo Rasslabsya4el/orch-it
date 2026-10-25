@@ -25,7 +25,8 @@ from orch_it.events import schema
 BUSY_TIMEOUT_S = 60
 HEAD_BYTES = 1024
 BOM = b"\xef\xbb\xbf"
-_READ_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION}
+_READ_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION,
+                 getattr(sqlite3, "SQLITE_RECURSIVE", 33)}
 
 
 class IndexError_(Exception):
@@ -34,6 +35,7 @@ class IndexError_(Exception):
 
     def __init__(self, code: str, detail: str):
         self.code = code
+        self.detail = detail
         super().__init__(f"{code}: {detail}")
 
 
@@ -317,9 +319,10 @@ def query(index_path: Path, sql: str, params: dict | tuple = ()) -> tuple[list[s
     try:
         connection.set_authorizer(_only_reads)
         cursor = connection.execute(sql, params)
+        if cursor.description is None:
+            raise IndexError_("query_failed", "the SQL holds no query")
         rows = cursor.fetchall()
-        columns = [d[0] for d in cursor.description] if cursor.description else []
-        return columns, rows
+        return [d[0] for d in cursor.description], rows
     except sqlite3.OperationalError as e:
         if _busy(e):
             raise IndexError_("index_busy", str(e)) from None

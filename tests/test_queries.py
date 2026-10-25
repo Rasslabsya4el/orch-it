@@ -324,3 +324,42 @@ def test_limit_rate_shows_reset_for_a_pair_whose_percent_did_not_rise(tmp_path):
 def test_limit_rate_with_fewer_than_two_readings_has_no_rows(tmp_path):
     store = store_with(tmp_path, [measured("12:00:00", 12), turn("12:30:00", 2.0)])
     assert queries.limit_rate(store).rows == []
+
+
+# --- review fixes: answers instead of silence ----------------------------------------------
+
+def test_ticket_cost_of_a_ticket_never_ready_or_never_closed_says_so(tmp_path):
+    edited = envelope(kind="ticket.edited", at=at("10:00:00"), ticket=7, role="brain",
+                      detail={"field": "labels", "before": [], "after": ["ready-for-agent"]})
+    for events, code in (([], "ticket_not_ready"), ([edited], "ticket_not_closed")):
+        store = store_with(tmp_path, events, name=code)
+        with pytest.raises(queries.QueryError) as caught:
+            queries.ticket_cost(store, REPO, 7)
+        assert caught.value.code == code
+
+
+def test_limit_rate_tells_no_change_and_no_turns_apart_from_a_reset(tmp_path):
+    store = store_with(tmp_path, [measured("10:00:00", 10), measured("11:00:00", 10),
+                                  measured("12:00:00", 12), measured("13:00:00", 3)])
+    assert [row[-1] for row in queries.limit_rate(store).rows] == ["no_change", "no_turns", "reset"]
+
+
+def test_an_until_date_keeps_the_whole_day(tmp_path):
+    store = store_with(tmp_path, [turn("18:00:00", 1.0, session="s1")])
+    rows = queries.session_cost(store, until=DAY).rows
+    assert rows and rows[0][0] == "s1"
+
+
+def test_an_end_before_the_start_falls_back_to_first_and_last_event(tmp_path):
+    store = store_with(tmp_path, [step("ended", "10:00:00", "session", "s1"),
+                                  step("started", "10:10:00", "session", "s1"),
+                                  turn("10:11:00", 1.0, session="s1")])
+    assert queries.session_cost(store).rows[0][-1] == "11.0"
+
+
+def test_a_rate_setting_out_of_bounds_or_of_another_shape_is_bad_setting():
+    for rate, measured_at in ((10 ** 400, "2026-10-24"), (1e-320, "2026-10-24"), (float("inf"), "2026-10-24"),
+                              (16.5, "not a date")):
+        with pytest.raises(settings.SettingsError) as caught:
+            queries.checked_rate(rate, "max", measured_at)
+        assert caught.value.code == "bad_setting"

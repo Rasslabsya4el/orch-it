@@ -112,7 +112,7 @@ class Store:
         try:
             return index.refresh(self.root, self.index_path)
         except index.IndexError_ as e:
-            raise StoreError(e.code, str(e)) from None
+            raise StoreError(e.code, e.detail) from None
 
     def query(self, sql: str, params: dict | tuple = ()) -> QueryResult:
         """Run read-only `sql` over the index's table `events` after a refresh: the envelope as
@@ -123,7 +123,7 @@ class Store:
         try:
             columns, rows = index.query(self.index_path, sql, params)
         except index.IndexError_ as e:
-            raise StoreError(e.code, str(e)) from None
+            raise StoreError(e.code, e.detail) from None
         return QueryResult(columns, rows)
 
     def existing_ids(self, ids: list[str]) -> set[str]:
@@ -133,7 +133,7 @@ class Store:
         try:
             return index.existing_ids(self.index_path, ids)
         except index.IndexError_ as e:
-            raise StoreError(e.code, str(e)) from None
+            raise StoreError(e.code, e.detail) from None
 
 
 class Writer:

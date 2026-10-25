@@ -1,14 +1,14 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9).
 
-Commands print a result as an aligned text table (header, then rows). An `EventError`,
-`StoreError`, `SettingsError` or the importer's `ImportError_` prints `error: <code>` (plus the field or detail) to stderr and
-the exit code is 2.
+Commands print a result as an aligned text table (header, then rows). Any coded error of the
+store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
+field or detail) to stderr and the exit code is 2.
 """
 
 from __future__ import annotations
 
 import argparse
-import math
+import re
 import sys
 from pathlib import Path
 
@@ -20,15 +20,30 @@ DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
 
 
+_INTEGER = re.compile(r"-?(0|[1-9][0-9]*)")
+_DECIMAL = re.compile(r"-?(0|[1-9][0-9]*)\.[0-9]+")
+
+
+class CommandError(Exception):
+    """A command given a value it cannot use. `code`: `bad_pct` (a weekly percent outside
+    0-100)."""
+
+    def __init__(self, code: str, detail: str = ""):
+        self.code = code
+        super().__init__(f"{code}: {detail}" if detail else code)
+
+
 def _param(text: str) -> tuple[str, int | float | str]:
+    """`name=value`; the value binds as a number only when written plainly as one (`7`,
+    `-2.5`), so `007`, `1_000` or `nan` stay text."""
+
     name, equals, value = text.partition("=")
     if not equals or not name:
         raise argparse.ArgumentTypeError(f"expected name=value, got {text!r}")
-    for kind in (int, float):
-        try:
-            return name, kind(value)
-        except ValueError:
-            pass
+    if _INTEGER.fullmatch(value):
+        return name, int(value)
+    if _DECIMAL.fullmatch(value):
+        return name, float(value)
     return name, value
 
 
@@ -55,13 +70,13 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", required=True)
     p.add_argument("--ticket", required=True, type=int)
 
-    p = command("session-cost", "$, % week, tokens and minutes per session and model")
+    p = command("session-cost", "$, %% week, tokens and minutes per session and model")
     p.add_argument("--session")
     p.add_argument("--repo")
     p.add_argument("--since", metavar="ISO")
     p.add_argument("--until", metavar="ISO")
 
-    command("limit-rate", "dollars per 1 % of the weekly limit between readings")
+    command("limit-rate", "dollars per 1 %% of the weekly limit between readings")
 
     p = command("measure-limit", "record a reading of the usage card's weekly percent")
     p.add_argument("pct", type=float)
@@ -111,6 +126,8 @@ def _run(args) -> str:
     if command == "limit-rate":
         return render(queries.limit_rate(_store(args)))
     if command == "measure-limit":
+        if not 0 <= args.pct <= 100:
+            raise CommandError("bad_pct", str(args.pct))
         with _store(args).writer() as writer:
             writer.write({
                 "kind": "value.measured", "repo": args.repo, "ticket": None, "role": args.role,
@@ -120,11 +137,8 @@ def _run(args) -> str:
                            "source": "usage_card"}})
         return ""
     if command == "set-limit-rate":
-        if not (math.isfinite(args.usd_per_pct) and args.usd_per_pct > 0
-                and args.plan.strip() and args.measured.strip()):
-            raise settings.SettingsError("bad_setting", queries.WEEKLY_LIMIT_SETTING)
-        settings.save(queries.WEEKLY_LIMIT_SETTING, {
-            "usd_per_pct": args.usd_per_pct, "plan": args.plan, "measured": args.measured})
+        settings.save(queries.WEEKLY_LIMIT_SETTING,
+                      queries.checked_rate(args.usd_per_pct, args.plan, args.measured))
         return ""
     if command == "import":
         done = transcripts.import_transcripts(
@@ -145,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         return e.code if isinstance(e.code, int) else EXIT_ERROR
     try:
         text = _run(args)
-    except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_) as e:
+    except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
+            queries.QueryError, CommandError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     sys.stdout.write(text)

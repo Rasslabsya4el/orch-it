@@ -7,7 +7,8 @@ is the event list's section 7, kept as a file beside this module and run as writ
 
 from __future__ import annotations
 
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 from importlib import resources
 
 from orch_it import settings
@@ -38,6 +39,40 @@ def pct_week(usd: float | None, model: str | None, rate: float | None) -> str:
     return f"{usd / rate:.2f} %"
 
 
+class QueryError(Exception):
+    """A named query that has no answer for what was asked. `code`: `ticket_not_ready` (no
+    edit added `ready-for-agent`), `ticket_not_closed` (no `ticket.closed`)."""
+
+    def __init__(self, code: str, detail: str = ""):
+        self.code = code
+        super().__init__(f"{code}: {detail}" if detail else code)
+
+
+RATE_BOUNDS = (0.01, 1_000_000.0)  # dollars per 1 %: anything outside is no reading of a card
+
+
+def checked_rate(usd_per_pct: object, plan: object, measured: object) -> dict:
+    """The setting's value, or `SettingsError("bad_setting")` naming what is wrong: a rate
+    that is no finite number within `RATE_BOUNDS`, a blank plan, a `measured` that is no ISO
+    8601 date or time."""
+
+    if isinstance(usd_per_pct, bool) or not isinstance(usd_per_pct, (int, float)):
+        raise settings.SettingsError("bad_setting", f"{WEEKLY_LIMIT_SETTING}.usd_per_pct")
+    try:
+        rate = float(usd_per_pct)
+    except OverflowError:
+        raise settings.SettingsError("bad_setting", f"{WEEKLY_LIMIT_SETTING}.usd_per_pct") from None
+    if not (math.isfinite(rate) and RATE_BOUNDS[0] <= rate <= RATE_BOUNDS[1]):
+        raise settings.SettingsError("bad_setting", f"{WEEKLY_LIMIT_SETTING}.usd_per_pct")
+    if not isinstance(plan, str) or not plan.strip():
+        raise settings.SettingsError("bad_setting", f"{WEEKLY_LIMIT_SETTING}.plan")
+    try:
+        datetime.fromisoformat(measured)
+    except (TypeError, ValueError):
+        raise settings.SettingsError("bad_setting", f"{WEEKLY_LIMIT_SETTING}.measured") from None
+    return {"usd_per_pct": rate, "plan": plan, "measured": measured}
+
+
 def weekly_rate() -> dict | None:
     """The setting `weekly_limit_usd_per_pct` as `{"usd_per_pct", "plan", "measured"}`, or None
     when unset. A setting of another shape raises `SettingsError("bad_setting")`."""
@@ -45,11 +80,9 @@ def weekly_rate() -> dict | None:
     value = settings.load().get(WEEKLY_LIMIT_SETTING)
     if value is None:
         return None
-    rate = value.get("usd_per_pct") if isinstance(value, dict) else None
-    if (not isinstance(rate, (int, float)) or isinstance(rate, bool) or not rate > 0
-            or not isinstance(value.get("plan"), str) or not isinstance(value.get("measured"), str)):
+    if not isinstance(value, dict):
         raise settings.SettingsError("bad_setting", WEEKLY_LIMIT_SETTING)
-    return {"usd_per_pct": float(rate), "plan": value["plan"], "measured": value["measured"]}
+    return checked_rate(value.get("usd_per_pct"), value.get("plan"), value.get("measured"))
 
 
 def _usd_per_pct() -> float | None:
@@ -70,6 +103,12 @@ def ticket_cost(store: Store, repo: str, n: int) -> QueryResult:
 
     sql = load_sql("ticket_cost")
     params = {"repo": repo, "n": n}
+    bounds_sql = sql[:sql.index("-- a turn spent")].rstrip().rstrip(",") + "\nSELECT t_ready, t_close FROM bounds"
+    t_ready, t_close = store.query(bounds_sql, params).rows[0]
+    if t_ready is None:
+        raise QueryError("ticket_not_ready", f"{repo}#{n} has no edit adding ready-for-agent")
+    if t_close is None:
+        raise QueryError("ticket_not_closed", f"{repo}#{n} has no ticket.closed")
     claude_sql = sql.replace(_SPEND_FILTER, _CLAUDE_SPEND_FILTER)
     if claude_sql == sql:
         raise RuntimeError("ticket_cost.sql no longer holds the turn.used filter")
@@ -77,9 +116,11 @@ def ticket_cost(store: Store, repo: str, n: int) -> QueryResult:
     claude = {(role, how): usd for role, how, usd in store.query(claude_sql, params).rows}
     rows = []
     for role, how, usd in store.query(sql, params).rows:
-        part = (role, how) in claude
-        rows.append((role, how, usd,
-                     pct_week(claude.get((role, how)), CLAUDE_PREFIX if part else "", rate)))
+        if (role, how) in claude:
+            share = pct_week(claude[(role, how)], CLAUDE_PREFIX, rate)
+        else:
+            share = "n/a"  # no Claude turn in this row
+        rows.append((role, how, usd, share))
     return QueryResult(["role", "how", "usd", "% week"], rows)
 
 
@@ -137,14 +178,26 @@ class _Sums:
                 self.pct_cell(rate), minutes)
 
 
-def _utc(at: str) -> str:
-    """`at` (ISO 8601 with a zone, or a bare date meaning UTC midnight) as the index writes it."""
+def _utc(at: str, *, end_of_day: bool = False) -> str:
+    """`at` (ISO 8601 with a zone, or a bare UTC date) as the index writes it. A bare date as
+    an upper bound is the last moment of that day, so the bound keeps the whole day."""
 
-    return index.utc_at(f"{at}T00:00:00Z" if len(at) == 10 else at)
+    if len(at) != 10:
+        return index.utc_at(at)
+    start = index.utc_at(f"{at}T00:00:00Z")
+    if not end_of_day:
+        return start
+    day_after = datetime.strptime(start, _AT_FORMAT) + timedelta(days=1, microseconds=-1)
+    return day_after.strftime(_AT_FORMAT)
 
 
 def _minutes(first, last, started, ended) -> float:
+    """From the session's start to its end; a missing or inverted pair falls back to its
+    first and last events."""
+
     start, end = (started, ended or last) if started else (first, last)
+    if end < start:
+        start, end = first, last
     spent = datetime.strptime(end, _AT_FORMAT) - datetime.strptime(start, _AT_FORMAT)
     return max(spent.total_seconds() / 60, 0.0)
 
@@ -164,7 +217,7 @@ def session_cost(store: Store, *, session: str | None = None, repo: str | None =
     where, params = ["session IS NOT NULL"], {}
     for clause, name, value in (("repo = :repo", "repo", repo),
                                 ("at >= :since", "since", since and _utc(since)),
-                                ("at <= :until", "until", until and _utc(until))):
+                                ("at <= :until", "until", until and _utc(until, end_of_day=True))):
         if value is not None:
             where.append(clause)
             params[name] = value
@@ -228,20 +281,25 @@ def session_cost(store: Store, *, session: str | None = None, repo: str | None =
 def limit_rate(store: Store) -> QueryResult:
     """Dollars at API prices per 1 % of the weekly limit, from each two consecutive readings
     (`value.measured`, `name` `weekly_limit_pct`): the `usd` of Claude `turn.used` events with
-    `at` in (from, to] over the rise. A pair whose percent did not rise (the weekly reset)
-    shows `reset`; one with a Claude turn without a price shows `price_missing`."""
+    `at` in (from, to] over the rise. A pair whose percent fell (the weekly reset) shows
+    `reset`, one that stayed `no_change`, one with no Claude turn between `no_turns`, one with a
+    Claude turn without a price `price_missing`."""
 
     readings = store.query(
         "SELECT at, value FROM events WHERE kind = 'value.measured' AND name = 'weekly_limit_pct'"
         " AND typeof(value) IN ('integer', 'real') ORDER BY at, id").rows
     rows = []
     for (start, before), (end, after) in zip(readings, readings[1:]):
-        usd, missing = store.query(
-            "SELECT coalesce(sum(usd), 0), coalesce(sum(usd IS NULL), 0) FROM events"
+        turns, usd, missing = store.query(
+            "SELECT count(*), coalesce(sum(usd), 0), coalesce(sum(usd IS NULL), 0) FROM events"
             " WHERE kind = 'turn.used' AND model LIKE 'claude-%' AND at > ? AND at <= ?",
             (start, end)).rows[0]
-        if after <= before:
+        if after < before:
             rate = "reset"
+        elif after == before:
+            rate = "no_change"
+        elif not turns:
+            rate = "no_turns"
         elif missing:
             rate = "price_missing"
         else:
