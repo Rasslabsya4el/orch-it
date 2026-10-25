@@ -1,4 +1,4 @@
-"""The worktree-delete verdict on real folders (#395 decision 2, rows 2, 3 and 4): a target that is
+"""The worktree-delete guard on real folders (#395 decision 2, rows 2, 3 and 4): a target that is
 a protected root, an ancestor of one, or a folder holding a link outward is refused; the case
 rule is the one measured on the folder, shown by faking the opposite rule on the same OS."""
 
@@ -8,30 +8,17 @@ import sys
 
 import pytest
 
+from guard_links import make_junction, make_link
 from orch_it.guards import paths
 
 WINDOWS = sys.platform == "win32"
 INSENSITIVE_HERE = sys.platform in ("win32", "darwin")
 
 
-def make_link(link, target):
-    """A directory link: a symlink, or on Windows a junction where symlinks need a privilege
-    this machine does not grant."""
+def hit(target, roots, **options):
+    """The guard's rule for deleting `target` against `roots`, or `pass` when it is let
+    through; both the target and the roots resolved to their real paths first."""
 
-    try:
-        os.symlink(target, link, target_is_directory=True)
-    except OSError:
-        if not WINDOWS:
-            raise
-        make_junction(link, target)
-
-
-def make_junction(link, target):
-    import _winapi
-    _winapi.CreateJunction(str(target), str(link))
-
-
-def verdict(target, roots, **options):
     real = paths.resolve(str(target), None, windows=WINDOWS)
     roots = [paths.resolve(str(root), None, windows=WINDOWS) for root in roots]
     found = paths.judge(real, roots, windows=WINDOWS, **options)
@@ -47,49 +34,49 @@ def test_on_a_case_sensitive_folder_wt_beside_worktree_Wt_passes_and_Wt_is_refus
     (tmp_path / "Wt").mkdir()
     (tmp_path / "wt").mkdir()
     roots = [tmp_path / "Wt"]
-    assert verdict(tmp_path / "wt", roots) == "pass"
-    assert verdict(tmp_path / "Wt", roots) == "protected_root"
+    assert hit(tmp_path / "wt", roots) == "pass"
+    assert hit(tmp_path / "Wt", roots) == "protected_root"
     # the opposite rule faked on the same folders gives the opposite verdict for `wt`
-    assert verdict(tmp_path / "wt", roots, case_rule=always(True)) == "protected_root"
+    assert hit(tmp_path / "wt", roots, case_rule=always(True)) == "protected_root"
 
 
 @pytest.mark.skipif(not WINDOWS, reason="the windows job's case-insensitive file system")
 def test_on_a_case_insensitive_folder_WT_names_the_worktree_wt_and_is_refused(tmp_path):
     (tmp_path / "wt").mkdir()
     roots = [tmp_path / "wt"]
-    assert verdict(tmp_path / "WT", roots) == "protected_root"
-    assert verdict(tmp_path / "wT" / ".." / "WT", roots) == "protected_root"
+    assert hit(tmp_path / "WT", roots) == "protected_root"
+    assert hit(tmp_path / "wT" / ".." / "WT", roots) == "protected_root"
     # the opposite rule faked on the same folder gives the opposite verdict
-    assert verdict(tmp_path / "WT", roots, case_rule=always(False)) == "pass"
+    assert hit(tmp_path / "WT", roots, case_rule=always(False)) == "pass"
 
 
 def test_an_ancestor_of_a_protected_root_is_refused(tmp_path):
     (tmp_path / "repo" / ".claude" / "worktrees" / "w1").mkdir(parents=True)
     roots = [tmp_path / "repo" / ".claude" / "worktrees" / "w1"]
-    assert verdict(tmp_path / "repo" / ".claude", roots) == "ancestor_of_root"
-    assert verdict(tmp_path, roots) == "ancestor_of_root"
+    assert hit(tmp_path / "repo" / ".claude", roots) == "ancestor_of_root"
+    assert hit(tmp_path, roots) == "ancestor_of_root"
 
 
 def test_a_file_or_folder_inside_a_root_and_a_missing_target_pass(tmp_path):
     (tmp_path / "wt" / "src").mkdir(parents=True)
     (tmp_path / "wt" / "notes.txt").write_text("x")
     roots = [tmp_path / "wt"]
-    assert verdict(tmp_path / "wt" / "notes.txt", roots) == "pass"
-    assert verdict(tmp_path / "wt" / "src", roots) == "pass"
-    assert verdict(tmp_path / "gone", roots) == "pass"
+    assert hit(tmp_path / "wt" / "notes.txt", roots) == "pass"
+    assert hit(tmp_path / "wt" / "src", roots) == "pass"
+    assert hit(tmp_path / "gone", roots) == "pass"
 
 
 def test_a_root_reached_through_a_link_is_refused(tmp_path):
     (tmp_path / "wt").mkdir()
     make_link(tmp_path / "door", tmp_path / "wt")
-    assert verdict(tmp_path / "door", [tmp_path / "wt"]) == "protected_root"
+    assert hit(tmp_path / "door", [tmp_path / "wt"]) == "protected_root"
 
 
 def test_a_folder_holding_a_link_to_another_worktree_is_refused(tmp_path):
     (tmp_path / "other").mkdir()
     (tmp_path / "scratch" / "deep").mkdir(parents=True)
     make_link(tmp_path / "scratch" / "deep" / "to-other", tmp_path / "other")
-    assert verdict(tmp_path / "scratch", [tmp_path / "other"]) == "link_outward"
+    assert hit(tmp_path / "scratch", [tmp_path / "other"]) == "link_outward"
 
 
 @pytest.mark.skipif(not WINDOWS, reason="junctions are Windows links")
@@ -97,13 +84,13 @@ def test_a_folder_holding_a_junction_to_another_worktree_is_refused(tmp_path):
     (tmp_path / "other").mkdir()
     (tmp_path / "scratch").mkdir()
     make_junction(tmp_path / "scratch" / "j", tmp_path / "other")
-    assert verdict(tmp_path / "scratch", [tmp_path / "other"]) == "link_outward"
+    assert hit(tmp_path / "scratch", [tmp_path / "other"]) == "link_outward"
 
 
 def test_a_folder_holding_a_link_inside_itself_passes(tmp_path):
     (tmp_path / "scratch" / "a" / "b").mkdir(parents=True)
     make_link(tmp_path / "scratch" / "to-b", tmp_path / "scratch" / "a" / "b")
-    assert verdict(tmp_path / "scratch", []) == "pass"
+    assert hit(tmp_path / "scratch", []) == "pass"
 
 
 def test_a_tree_of_ten_thousand_entries_is_walked_to_its_one_link_at_the_end(tmp_path):
@@ -116,8 +103,8 @@ def test_a_tree_of_ten_thousand_entries_is_walked_to_its_one_link_at_the_end(tmp
     (tmp_path / "outside").mkdir()
     make_link(tree / "d099" / "zz-link", tmp_path / "outside")
     assert sum(len(files) + len(dirs) for _, dirs, files in os.walk(tree)) >= 10_000
-    assert verdict(tree, []) == "link_outward"
-    assert verdict(tree, [], walk_links=False) == "pass"
+    assert hit(tree, []) == "link_outward"
+    assert hit(tree, [], walk_links=False) == "pass"
 
 
 def git(cwd, *args):
@@ -135,10 +122,18 @@ def test_a_worktree_outside_the_usual_folder_is_protected_like_one_inside(tmp_pa
     git(repo, "worktree", "add", "-q", str(outside), "-b", "out")
     roots = paths.protected_roots(str(inside), windows=WINDOWS)
     for target in (repo, inside, outside, repo / ".git"):
-        assert verdict(target, roots) == "protected_root", target
-    assert verdict(outside.parent, roots) == "ancestor_of_root"
-    assert verdict(outside / "x.txt", roots) == "pass"
+        assert hit(target, roots) == "protected_root", target
+    assert hit(outside.parent, roots) == "ancestor_of_root"
+    assert hit(outside / "x.txt", roots) == "pass"
 
 
 def test_outside_a_repo_nothing_is_protected(tmp_path):
     assert paths.protected_roots(str(tmp_path), windows=WINDOWS) == ()
+
+
+@pytest.mark.skipif(not WINDOWS, reason="a trailing-dot name is a Windows case; junctions are Windows links")
+def test_a_link_whose_name_ends_in_a_dot_is_still_found(tmp_path):
+    (tmp_path / "other").mkdir()
+    (tmp_path / "scratch").mkdir()
+    make_junction(tmp_path / "scratch" / "lnk.", tmp_path / "other")
+    assert hit(tmp_path / "scratch", [tmp_path / "other"]) == "link_outward"

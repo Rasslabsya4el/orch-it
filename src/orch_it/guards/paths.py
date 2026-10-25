@@ -77,7 +77,11 @@ def _split(path: str, flavour) -> tuple[str, list[str]]:
     return anchor, [part for part in re.split(r"[\\/]" if flavour is ntpath else "/", rest) if part]
 
 
-def _follow(path: str, flavour, windows: bool) -> str:
+def _follow(path: str, flavour, windows: bool) -> str | None:
+    """The real path, links followed, or None when a chain of links does not settle within
+    `MAX_LINK_HOPS` (a loop): an unsettled path is never reported as naming a plain folder,
+    so the guard treats it as unresolved rather than letting it through as itself."""
+
     anchor, parts = _split(path, flavour)
     pending = deque(parts)
     current = anchor
@@ -93,7 +97,9 @@ def _follow(path: str, flavour, windows: bool) -> str:
         candidate = flavour.join(current, part)
         if windows and "~" in part:
             candidate = flavour.join(current, _long_name(candidate) or part)
-        target = _link_target(candidate, windows) if hops < MAX_LINK_HOPS else None
+        if hops >= MAX_LINK_HOPS:
+            return None
+        target = _link_target(candidate, windows)
         if target is None:
             current = candidate
             continue
@@ -133,7 +139,10 @@ def _long_name(path: str) -> str | None:
     import ctypes
 
     buffer = ctypes.create_unicode_buffer(32768)
-    if not ctypes.windll.kernel32.GetLongPathNameW(path, buffer, len(buffer)):
+    try:
+        if not ctypes.windll.kernel32.GetLongPathNameW(path, buffer, len(buffer)):
+            return None
+    except (ValueError, ctypes.ArgumentError):  # an embedded NUL, say
         return None
     return ntpath.basename(buffer.value) or None
 
@@ -145,7 +154,10 @@ def measure_case_rule(folder: str) -> bool:
     a folder nothing can be measured on counts as insensitive (more names compare equal, so
     more is protected)."""
 
-    current = os.path.abspath(folder)
+    try:
+        current = os.path.abspath(folder)
+    except (OSError, ValueError):
+        return True
     while True:
         found = _measure_on_entries(current)
         if found is not None:
@@ -168,41 +180,51 @@ def _measure_on_entries(folder: str) -> bool | None:
                 found = _same_entry_swapped(folder, entry.name)
                 if found is not None:
                     return found
-    except OSError:
+    except (OSError, ValueError):
         return None
     return None
 
 
 def _same_entry_swapped(folder: str, name: str) -> bool | None:
     """Whether `name` with its case swapped is the same entry of `folder`; None when the name
-    has no cased letter or the entry itself cannot be read."""
+    carries no usable cased letter or the entry itself cannot be read. A letter whose case
+    swap changes the length (`ß` -> `SS`) is not usable: the swapped spelling would name no
+    entry for a reason other than case, and read as case-sensitive."""
 
     swapped = name.swapcase()
-    if swapped == name:
+    if swapped == name or len(swapped) != len(name):
         return None
     try:
         original = os.lstat(os.path.join(folder, name))
-    except OSError:
+    except (OSError, ValueError):
         return None
     try:
         other = os.lstat(os.path.join(folder, swapped))
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, ValueError):
         return None
     return os.path.samestat(original, other)
 
 
+GUARD_ERROR_CODES = ("git_unreadable",)
+
+
 class GuardError(RuntimeError):
-    """A fact the guard needs and could not read. `code`: `git_unreadable`."""
+    """A fact the guard needs and could not read. `code` is one of `GUARD_ERROR_CODES`."""
 
     def __init__(self, code: str, detail: str = ""):
+        if code not in GUARD_ERROR_CODES:
+            raise ValueError(f"not a guard error code: {code}")
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
 
 
 GIT_SECONDS = 15
 _NOT_A_REPO = "not a git repository"
+# git reads these from the environment and would then ignore `cwd`; dropped so the repo found
+# is the one `cwd` sits in, never one a parent session left pointed elsewhere (the edge review)
+_GIT_ENV_OVERRIDES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
 
 
 def protected_roots(cwd: str, *, windows: bool) -> tuple[str, ...]:
@@ -213,10 +235,12 @@ def protected_roots(cwd: str, *, windows: bool) -> tuple[str, ...]:
     listing = _git(cwd, "worktree", "list", "--porcelain")
     if listing is None:
         return ()
-    spelled = [line[len("worktree "):] for line in listing.splitlines() if line.startswith("worktree ")]
+    # the porcelain is newline-separated; `splitlines` would also split on a path's own
+    # U+2028, U+0085 and the like and cut a root short (the edge review)
+    spelled = [line[len("worktree "):] for line in listing.split("\n") if line.startswith("worktree ")]
     common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if common:
-        spelled.append(common.strip())
+        spelled.append(common.strip("\n"))
     roots = (resolve(path, cwd, windows=windows) for path in spelled if path)
     return tuple(dict.fromkeys(root for root in roots if root))
 
@@ -225,28 +249,37 @@ def _git(cwd: str, *args: str) -> str | None:
     import subprocess
 
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    env = {key: value for key, value in os.environ.items() if key not in _GIT_ENV_OVERRIDES}
+    env["LC_ALL"] = "C"  # so the "not a git repository" line is read whatever the user's locale
     try:
         done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=GIT_SECONDS,
-                              stdin=subprocess.DEVNULL, creationflags=flags)
+                              stdin=subprocess.DEVNULL, creationflags=flags, env=env)
     except FileNotFoundError:
         if not os.path.isdir(cwd):
             return None  # a directory that is not there holds no repo
         raise GuardError("git_unreadable", "git not found") from None
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except NotADirectoryError:
+        return None  # a cwd that is a file, or not there, holds no repo
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        if not os.path.isdir(cwd):
+            return None
         raise GuardError("git_unreadable", f"{args[0]}: {e}") from None
     if done.returncode != 0:
-        if _NOT_A_REPO in done.stderr:
+        if _NOT_A_REPO in done.stderr.lower():
             return None
         raise GuardError("git_unreadable", f"{args[0]}: rc {done.returncode}")
     return done.stdout
 
 
+FINDING_RULES = ("protected_root", "ancestor_of_root", "link_outward")
+
+
 @dataclass(frozen=True)
 class Finding:
-    """Why a target is protected. `rule`: `protected_root` (it is one), `ancestor_of_root`
-    (one lies below it), `link_outward` (its tree holds a link leading outside it); `path`:
-    the protected root, or the link found."""
+    """Why a target is protected. `rule` (one of `FINDING_RULES`): `protected_root` (the target
+    is one), `ancestor_of_root` (one lies below it), `link_outward` (its tree holds a link
+    leading outside it); `path`: the protected root, or the link found."""
 
     rule: str
     path: str
@@ -322,7 +355,7 @@ def _outward_link(folder: str, flavour, windows: bool, insensitive: CaseRule) ->
         try:
             with os.scandir(current) as entries:
                 listed = list(entries)
-        except OSError:
+        except (OSError, ValueError):
             continue  # what cannot be read cannot be deleted through either
         for entry in listed:
             try:
@@ -331,9 +364,25 @@ def _outward_link(folder: str, flavour, windows: bool, insensitive: CaseRule) ->
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(entry.path)
                     continue
-            except OSError:
+            except (OSError, ValueError):
                 continue
-            target = resolve(entry.path, None, windows=windows)
+            # the link's own target, read from the link itself: re-resolving the entry's path
+            # would strip trailing dots and spaces from a real entry name and miss it
+            target = _settled_target(current, entry.name, flavour, windows)
             if target is None or _relation(folder, target, flavour, insensitive) is None:
                 return entry.path
     return None
+
+
+def _settled_target(folder: str, name: str, flavour, windows: bool) -> str | None:
+    """The real path the link `folder/name` points at, links followed, or None when it does
+    not settle. `folder` is a real directory and `name` a real entry of it, so neither is
+    re-spelled; only the link's recorded target is resolved."""
+
+    raw = _link_target(flavour.join(folder, name), windows)
+    if raw is None:
+        return None
+    joined = flavour.join(folder, _native(raw, windows, None))
+    if windows:
+        joined = ntpath.normpath(joined)
+    return _follow(joined, flavour, windows)

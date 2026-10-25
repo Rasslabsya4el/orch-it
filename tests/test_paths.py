@@ -7,6 +7,7 @@ The runners' file systems are known: the `linux` job's is case-sensitive, the `w
 import sys
 
 from orch_it.guards import paths
+from guard_links import make_link, same_path as same
 
 CASE_INSENSITIVE_HERE = sys.platform in ("win32", "darwin")
 
@@ -14,25 +15,6 @@ CASE_INSENSITIVE_HERE = sys.platform in ("win32", "darwin")
 def test_the_case_rule_is_measured_on_the_folder(tmp_path):
     (tmp_path / "Sample").mkdir()
     assert paths.measure_case_rule(str(tmp_path)) is CASE_INSENSITIVE_HERE
-
-
-def make_link(link, target):
-    """A directory link: a symlink, or on Windows a junction where symlinks need a privilege
-    this machine does not grant."""
-
-    import os
-    try:
-        os.symlink(target, link, target_is_directory=True)
-    except OSError:
-        if sys.platform != "win32":
-            raise
-        import _winapi
-        _winapi.CreateJunction(str(target), str(link))
-
-
-def same(a, b):
-    import os
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 def test_a_relative_path_is_joined_to_the_command_directory(tmp_path):
@@ -63,10 +45,26 @@ def test_msys_and_wsl_drive_forms_are_drive_paths_only_on_windows():
         assert paths.resolve("/mnt/c/x", "/", windows=False) == "/mnt/c/x"
 
 
-def test_a_link_loop_ends(tmp_path):
+
+
+def test_a_link_loop_resolves_to_nothing(tmp_path):
     if sys.platform == "win32":
-        return  # a junction loop needs a symlink privilege the windows job may lack; POSIX shows the rule
+        import pytest
+        pytest.skip("a junction loop needs a symlink privilege the windows job may lack")
     import os
     os.symlink(tmp_path / "b", tmp_path / "a")
     os.symlink(tmp_path / "a", tmp_path / "b")
-    assert paths.resolve(str(tmp_path / "a" / "x"), str(tmp_path), windows=False)
+    # it must not come back as a plain folder named after the link: that would be a silent pass
+    assert paths.resolve(str(tmp_path / "a" / "x"), str(tmp_path), windows=False) is None
+
+
+def test_a_nul_byte_never_crashes_resolution():
+    assert paths.measure_case_rule("a\x00b") in (True, False)
+    assert paths.resolve("a\x00b", None, windows=sys.platform == "win32") is None
+
+
+def test_the_error_codes_are_a_closed_set():
+    import pytest
+    with pytest.raises(ValueError):
+        paths.GuardError("made_up")
+    assert paths.FINDING_RULES == ("protected_root", "ancestor_of_root", "link_outward")
