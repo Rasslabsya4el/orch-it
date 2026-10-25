@@ -1,0 +1,318 @@
+{
+  "_about": "His skills copied byte for byte from `upstream` at `commit` (#397 decision 1): per copy its upstream path and the git blob hash of every file; `not_copied` his skills left out and why. Written by `python -m orch_it skills update`; a skill folder this file does not name is ours.",
+  "upstream": "https://github.com/mattpocock/skills",
+  "commit": "49dd158d1076134a641b33efb035946536778336",
+  "skills": {
+    "code-review": {
+      "path": "skills/engineering/code-review",
+      "files": {
+        "SKILL.md": "373a4f26e6cfa3617778397945bb069d9cb184bc",
+        "agents/openai.yaml": "9076774ba327f49068db9273feceda03bfe940fa"
+      }
+    },
+    "codebase-design": {
+      "path": "skills/engineering/codebase-design",
+      "files": {
+        "DEEPENING.md": "cd94075cfd754d147555c5d747a16431ed4c7dd8",
+        "DESIGN-IT-TWICE.md": "d0990138c35c800bd821289a73115e52680c1620",
+        "SKILL.md": "3f63c8146dd2604b419c929e9876b90c30d410e9",
+        "agents/openai.yaml": "3180715edb37f6e96bec42f92f00169faa8886ef"
+      }
+    },
+    "diagnosing-bugs": {
+      "path": "skills/engineering/diagnosing-bugs",
+      "files": {
+        "SKILL.md": "d039541ddd1c46e6ddbd662fe99d49b686fc5e12",
+        "agents/openai.yaml": "a13a755a77634ce61a649a3a0d905a66d3865b35",
+        "scripts/hitl-loop.template.sh": "243198464a8401a7ba1d63b3708fa43c3d067665"
+      }
+    },
+    "domain-modeling": {
+      "path": "skills/engineering/domain-modeling",
+      "files": {
+        "ADR-FORMAT.md": "d7e61f30a9fd8ca70d9ee68f019c2a9ebf2d13f7",
+        "GLOSSARY-FORMAT.md": "9c0b4c7a2e8507c23cbb5e0baa66d81699321cc6",
+        "SKILL.md": "a4438c6879c517d1a08e2b5fbca049b632688dfe",
+        "agents/openai.yaml": "7f1522d2f11506ee205275ab7c282aa52366ecf6"
+      }
+    },
+    "grill-with-docs": {
+      "path": "skills/engineering/grill-with-docs",
+      "files": {
+        "SKILL.md": "62b9efb6f991d1b229adee7506962f13ced0c499",
+        "agents/openai.yaml": "5dbe2780a51be3e9b118bd7758a73e54a9384e11"
+      }
+    },
+    "grilling": {
+      "path": "skills/productivity/grilling",
+      "files": {
+        "SKILL.md": "df69d9936880cd3314c28858c6c52f48db23b856",
+        "agents/openai.yaml": "ddbdb96139c0c1dfe6bca698f39d0465674b8a39"
+      }
+    },
+    "handoff": {
+      "path": "skills/productivity/handoff",
+      "files": {
+        "SKILL.md": "a224edc643a20ddb989f9bca1547440169159810",
+        "agents/openai.yaml": "6e1d8da121beceddc2f9ec7fa8714c1d914dd11a"
+      }
+    },
+    "implement": {
+      "path": "skills/engineering/implement",
+      "files": {
+        "SKILL.md": "bd49e472984c7b99aac40286fdae749bb955a842",
+        "agents/openai.yaml": "f8794dc153b409052a9167baf10858cf01b36175"
+      }
+    },
+    "implement-spec": {
+      "path": "skills/engineering/implement-spec",
+      "files": {
+        "SKILL.md": "183923797ab58f1b3ef09e03bc1f1f203c309f37",
+        "agents/openai.yaml": "f5e91af21e38eb1a167ea5aa93dfc7da3c4637b4"
+      }
+    },
+    "improve-codebase-architecture": {
+      "path": "skills/engineering/improve-codebase-architecture",
+      "files": {
+        "HTML-REPORT.md": "e39e8255b8797cf8257d014fb6658fb533f3a399",
+        "SKILL.md": "44cc7d3136c44534d68ac523fa6cd37e759d2846",
+        "agents/openai.yaml": "706fdca096da5937fe57875a9154017d50668c42"
+      }
+    },
+    "pr": {
+      "path": "skills/engineering/pr",
+      "files": {
+        "CREDITS.md": "5314bda2fa6005e264c9b5c1de7c425e719dc91f",
+        "SKILL.md": "84dd4fb2f068e9f6282690235d20dd505b418119",
+        "agents/openai.yaml": "48286f48f53b937cc19c0e39899b5f956271a98d"
+      }
+    },
+    "prototype": {
+      "path": "skills/engineering/prototype",
+      "files": {
+        "LOGIC.md": "32be86a0a5d9928db84b3988e55f9debe476ab40",
+        "SKILL.md": "a0044501fe0d385b4d8575b610188ede9b236ccf",
+        "UI.md": "3977951663490882c2632b40695d9f59a2fe2408",
+        "agents/openai.yaml": "1618b147965bc729b7bf3e8da5f130132067aadc"
+      }
+    },
+    "research": {
+      "path": "skills/engineering/research",
+      "files": {
+        "SKILL.md": "fecee97e9457ba039678d2fcf1b1bc9fca78307d",
+        "agents/openai.yaml": "e18b96ca0ccc1003889d5d6991386207c2454bc2"
+      }
+    },
+    "retro": {
+      "path": "skills/engineering/retro",
+      "files": {
+        "SKILL.md": "12149acf2dd23b4514dec57b04a6293eaa1352fa",
+        "agents/openai.yaml": "a2f0bac3f9cebf29beee2e79960cb876e0adc65d"
+      }
+    },
+    "setup-matt-pocock-skills": {
+      "path": "skills/engineering/setup-matt-pocock-skills",
+      "files": {
+        "SKILL.md": "293c25b75590119794af03b037ba4288054a32b3",
+        "agents/openai.yaml": "65a0da8128c98051183235e490767a8065310868",
+        "domain.md": "4032de016c1e91119d33d477633e2b8f265f4195",
+        "issue-tracker-github.md": "a63510f74038300d8da354553f9d31d1bd954d94",
+        "issue-tracker-gitlab.md": "81499dca459e8097d560b641f8ba7c2e1c7c9da4",
+        "issue-tracker-local.md": "0209a19af92c9c485cf3acc3d9e253171517ea17",
+        "triage-labels.md": "5276464244857a3cc29890ff4a978a197b21f3fc"
+      }
+    },
+    "tdd": {
+      "path": "skills/engineering/tdd",
+      "files": {
+        "SKILL.md": "01eadaa34e7c9a63a67d6dc3cce1cc81b0e49985",
+        "agents/openai.yaml": "651b838a7663e027b1b8884491e867f26bb9a021",
+        "mocking.md": "71cbfee674d93244ce81d1830b930ca9a69200bd",
+        "tests.md": "7ab86479f925a1f9e8ba680af33cb3b12e015381"
+      }
+    },
+    "to-spec": {
+      "path": "skills/engineering/to-spec",
+      "files": {
+        "SKILL.md": "3f52599ae2a4347aee5a07432c2707518e691a7f",
+        "agents/openai.yaml": "549e6f76f020a1b9ba65f52ccda336566ee6222a"
+      }
+    },
+    "to-tickets": {
+      "path": "skills/engineering/to-tickets",
+      "files": {
+        "SKILL.md": "9b77a01db9460c99c22d03c910c349f890f12c0e",
+        "agents/openai.yaml": "24605a5db64e4fc750b999aa94aea126bee814ee"
+      }
+    },
+    "triage": {
+      "path": "skills/engineering/triage",
+      "files": {
+        "AGENT-BRIEF.md": "1462fcd9e8cc21921158c296149dc05d9be39d20",
+        "OUT-OF-SCOPE.md": "c9fba2f77ee0619975ec8488c0d4861a0c7e3151",
+        "SKILL.md": "3fd5617e906cf9b71a6b17424791adb905fc248b",
+        "agents/openai.yaml": "acb366cf0f2527e8925ff1223b77610ac0b1be4c"
+      }
+    },
+    "wayfinder": {
+      "path": "skills/engineering/wayfinder",
+      "files": {
+        "SKILL.md": "e28cf3018906d6d60fc5b25390b4eeea035dd290",
+        "agents/openai.yaml": "b37544751e0570f9df8de6c02aef238de8c3e1e0"
+      }
+    },
+    "wizard": {
+      "path": "skills/engineering/wizard",
+      "files": {
+        "SKILL.md": "c4294ad8298b9b95fc727496b1b802b1f7363fba",
+        "agents/openai.yaml": "b601bdf3a321e7d32d5714681540b811287d3988",
+        "template.sh": "081ed3da860729c5e6fb1e7126c86b07b0ed56f0"
+      }
+    },
+    "writing-for-agents": {
+      "path": "skills/productivity/writing-for-agents",
+      "files": {
+        "SKILL-MECHANICS.md": "9cdbdb22aadc438755392216e75ad9a14cc9832e",
+        "SKILL.md": "a37608daf6e835e767deecfb498facecaaba82ba",
+        "agents/openai.yaml": "079c933b75743dec18b5d0c01006def20b6aad26"
+      }
+    }
+  },
+  "not_copied": {
+    "ask-matt": {
+      "path": "skills/engineering/ask-matt",
+      "why": "no job (#390 row 1: a router for a person who does not remember the skills; the layer's flow is fixed)",
+      "files": {
+        "PHASE-BOUNDARIES.md": "fb58ef9febcfd558cdb4517e370f19034869ba26",
+        "SKILL.md": "4bfeeb61dae548b8b7754c4fba7bd40ab3926099",
+        "agents/openai.yaml": "5c60d51b5b1248d7210bff8c6b42a5a06524b8a4"
+      }
+    },
+    "chief-of-staff": {
+      "path": "skills/in-progress/chief-of-staff",
+      "why": "hidden (#390 6.1, 6.2, 6.4, 6.5: a second coordinator with its own decision wiki beside the brain and ORCH)",
+      "files": {
+        "SKILL.md": "97da622d09acaaacebbb4482663c907e241f4594",
+        "agents/openai.yaml": "080598b44ad9c843dc3457b6e0e32368aaeec84d"
+      }
+    },
+    "claude-handoff": {
+      "path": "skills/in-progress/claude-handoff",
+      "why": "hidden (#390 5.33: starts background sessions past the launcher)",
+      "files": {
+        "SKILL.md": "77f82fc59c89c3a83ed5a92521dc2869f0533724",
+        "agents/openai.yaml": "0a7aa5da50d0e73248fc17fb8fe82409ec071eaf"
+      }
+    },
+    "git-guardrails-claude-code": {
+      "path": "skills/misc/git-guardrails-claude-code",
+      "why": "hidden (#390 5.38: a hook blocking every push; the pull request flow needs pushes)",
+      "files": {
+        "SKILL.md": "58bcdd875b164093b95f436fa32a65c6cb5eb572",
+        "agents/openai.yaml": "3f5d756f1b9b97d94cef1473fb480ccda5fdfbc1",
+        "scripts/block-dangerous-git.sh": "c40b59cb47880fc9da8fe4179bd742f51f09d17d"
+      }
+    },
+    "grill-me": {
+      "path": "skills/productivity/grill-me",
+      "why": "no job (#390 row 21: the brain calls grilling directly; grill-with-docs covers a repo)",
+      "files": {
+        "SKILL.md": "3947ff9c4ad980d14fc07fccbf659d47c114e81d",
+        "agents/openai.yaml": "4d6fb0c746c5d21364dce5d0cf8c51eab9712e7b"
+      }
+    },
+    "loop-me": {
+      "path": "skills/in-progress/loop-me",
+      "why": "hidden (#390 5.44: a parallel registry of recurring loops)",
+      "files": {
+        "SKILL.md": "e58a474ca80feffdeb28842bc3bdee37da6510e7",
+        "agents/openai.yaml": "1a4f4111192ff75b4771e8a248c603994d5eafdc"
+      }
+    },
+    "migrate-to-shoehorn": {
+      "path": "skills/misc/migrate-to-shoehorn",
+      "why": "no job (#390 row 29: TypeScript tests)",
+      "files": {
+        "SKILL.md": "ae4f965e204fc93cedbc4e2c306e92829d93f800",
+        "agents/openai.yaml": "3bd79ee2b502075c6d1fe40e6fe98f4fe3f3c5f5"
+      }
+    },
+    "scaffold-exercises": {
+      "path": "skills/misc/scaffold-exercises",
+      "why": "no job (#390 row 30: his course tooling)",
+      "files": {
+        "SKILL.md": "d87df28e7d8abb4e57ecc6e47d71c274d16054c7",
+        "agents/openai.yaml": "963723a58973effa256cbfe0f23a7bcc03a374b8"
+      }
+    },
+    "setup-pre-commit": {
+      "path": "skills/misc/setup-pre-commit",
+      "why": "no job (#390 row 31: Node tooling)",
+      "files": {
+        "SKILL.md": "1b9708168263067adb4684d06ebb8f4ccfe9682c",
+        "agents/openai.yaml": "e5a1c63df9e0703893cdad799bd5e2a6b5e6939d"
+      }
+    },
+    "setup-ts-deep-modules": {
+      "path": "skills/in-progress/setup-ts-deep-modules",
+      "why": "no job (#390 row 35: TypeScript targets only)",
+      "files": {
+        "SKILL.md": "7e30047eaeda175de5d93886596a37baf365bb90",
+        "agents/openai.yaml": "5d0581bdd4f9337cfb1e13feb7e1e18f43ea9db1",
+        "dependency-cruiser.config.cjs": "54030ede7d36b7f72fc0f645fa414efa9b6f63ed"
+      }
+    },
+    "teach": {
+      "path": "skills/productivity/teach",
+      "why": "no job (#390 row 24: the owner's personal learning workspace)",
+      "files": {
+        "GLOSSARY-FORMAT.md": "fdd7e366ad9760588b28981e42b3d3b561e56aca",
+        "LEARNING-RECORD-FORMAT.md": "953c61422776b47612c3c945920358ad7b5daee7",
+        "MISSION-FORMAT.md": "45250bb1bad70988bf381625931df64645e10246",
+        "RESOURCES-FORMAT.md": "18b588c8b6f96a50ae2352f264928c643d2782e4",
+        "SKILL.md": "493fa3bae0dada971c4dfb965790e56920b1dced",
+        "agents/openai.yaml": "3452a850e3b0c1f0a3d41b2bfd45164d2d38d7f6"
+      }
+    },
+    "to-questionnaire": {
+      "path": "skills/productivity/to-questionnaire",
+      "why": "no job (#390 row 25: the layer has one person to ask, through the brain)",
+      "files": {
+        "SKILL.md": "dadd0c00d6a350acaa15bb9ca1b96b20ead684ca",
+        "agents/openai.yaml": "a58d14765beb4acb4c9708b516310558e1308a22"
+      }
+    },
+    "wait-what": {
+      "path": "skills/productivity/wait-what",
+      "why": "no job (#390 row 26: no fixed step; 5.35 puts the owner's language above its English re-pitch)",
+      "files": {
+        "SKILL.md": "9b15cd1a7dda0854ca093e29e3e0de57e241b2ac",
+        "agents/openai.yaml": "6f7a9c33f99ec4ba70d986d6fc0de06c8b811bc3"
+      }
+    },
+    "writing-beats": {
+      "path": "skills/in-progress/writing-beats",
+      "why": "no job (#390 row 36: the owner's writing)",
+      "files": {
+        "SKILL.md": "3d3b25b605491adc5c62ae5423127717a94b9632",
+        "agents/openai.yaml": "e8eaa188d4c70b582eed2d1775fe4c4ea3562b25"
+      }
+    },
+    "writing-fragments": {
+      "path": "skills/in-progress/writing-fragments",
+      "why": "no job (#390 row 37: the owner's writing)",
+      "files": {
+        "SKILL.md": "c7c889b880cf9c8d289119dea5ff240641b615ca",
+        "agents/openai.yaml": "be3713e91e3ddc6c71e04e6b512b6ad6502d7cc8"
+      }
+    },
+    "writing-shape": {
+      "path": "skills/in-progress/writing-shape",
+      "why": "no job (#390 row 38: the owner's writing)",
+      "files": {
+        "SKILL.md": "02f2866d13e72504e010f2ad3458eb9b36b876db",
+        "agents/openai.yaml": "87e0c736be148002f9db275258cd2f405643ad7b"
+      }
+    }
+  }
+}
