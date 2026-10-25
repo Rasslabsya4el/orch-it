@@ -226,16 +226,17 @@ def test_a_store_inside_a_git_work_tree_is_refused_with_exit_code_2(tmp_path, ca
     assert not (tmp_path / "work" / "events").exists()
 
 
-# --- events import (the importer is another branch's module; here a fake stands in) --------------
+# --- events import ------------------------------------------------------------------------------
 
 def fake_transcripts(monkeypatch, calls):
+    from orch_it.events import transcripts
+
     def import_transcripts(folder, store, **kwargs):
         calls.append((folder, store, kwargs))
-        return types.SimpleNamespace(written=12, already_stored=3, sessions=2, bad_lines=1, pending_lines=4)
+        return types.SimpleNamespace(written=12, already_stored=3, sessions=2, bad_lines=1,
+                                     pending_lines=4, refused_events=0, unreadable_files=0)
 
-    module = types.ModuleType("orch_it.events.transcripts")
-    module.import_transcripts = import_transcripts
-    monkeypatch.setitem(sys.modules, "orch_it.events.transcripts", module)
+    monkeypatch.setattr(transcripts, "import_transcripts", import_transcripts)
 
 
 def test_import_hands_the_options_to_the_importer_and_prints_its_counts(store, capsys, monkeypatch, tmp_path):
@@ -245,7 +246,8 @@ def test_import_hands_the_options_to_the_importer_and_prints_its_counts(store, c
                          "--subagent-role", "researcher-find", "--ticket", "393", "--session", "abc",
                          "--quiet-minutes", "45")
     assert (code, err) == (0, "")
-    assert out == "written=12 already_stored=3 sessions=2 bad_lines=1 pending_lines=4\n"
+    assert out == ("written=12 already_stored=3 sessions=2 bad_lines=1 pending_lines=4"
+                   " refused_events=0 unreadable_files=0\n")
     [(folder, given, kwargs)] = calls
     assert folder == tmp_path / "chat" and given.root == store.root
     assert kwargs == {"repo": REPO, "role": "orch", "subagent_role": "researcher-find", "ticket": 393,
@@ -258,6 +260,28 @@ def test_import_defaults_to_the_worker_role_and_30_quiet_minutes(store, capsys, 
     assert run(capsys, store, "import", str(tmp_path), "--repo", REPO)[0] == 0
     assert calls[0][2] == {"repo": REPO, "role": "worker", "subagent_role": None, "ticket": None,
                            "session": None, "quiet_minutes": 30}
+
+
+def test_import_then_session_cost_reads_a_real_transcript(store, capsys, tmp_path):
+    import json
+    folder = tmp_path / "projects" / "p"
+    folder.mkdir(parents=True)
+    first = {"type": "user", "sessionId": "s-1", "timestamp": "2026-10-25T17:50:00.000Z",
+             "message": {"role": "user", "content": "go"}}
+    turn = {"type": "assistant", "sessionId": "s-1", "timestamp": "2026-10-25T18:00:00.000Z",
+            "message": {"id": "msg_1", "model": "claude-opus-5-5", "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 10000, "output_tokens": 100000}, "content": []}}
+    (folder / "s-1.jsonl").write_text(json.dumps(first) + "\n" + json.dumps(turn) + "\n", "utf-8")
+    code, out, err = run(capsys, store, "import", str(folder), "--repo", REPO, "--role", "worker-strong")
+    assert (code, err) == (0, "") and out.startswith("written=3 already_stored=0 sessions=1")
+    code, out, _ = run(capsys, store, "session-cost", "--session", "s-1")
+    # (10000 in x 4 + 100000 out x 20) per million = 2.04 USD; 17:50 -> 18:00 is 10.0 minutes
+    assert code == 0 and "2.04" in out and "10.0" in out
+
+
+def test_import_of_a_missing_folder_is_an_error_with_its_code(store, capsys, tmp_path):
+    code, _, err = run(capsys, store, "import", str(tmp_path / "nowhere"), "--repo", REPO)
+    assert code == 2 and err.startswith("error: no_transcript_folder")
 
 
 def test_import_needs_its_repo(store, capsys, tmp_path):

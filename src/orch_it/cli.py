@@ -1,20 +1,19 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9).
 
-Commands print a result as an aligned text table (header, then rows). A `EventError`,
-`StoreError` or `SettingsError` prints `error: <code>` (plus the field or detail) to stderr and
+Commands print a result as an aligned text table (header, then rows). An `EventError`,
+`StoreError`, `SettingsError` or the importer's `ImportError_` prints `error: <code>` (plus the field or detail) to stderr and
 the exit code is 2.
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib
 import math
 import sys
 from pathlib import Path
 
 from orch_it import settings
-from orch_it.events import queries, schema
+from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
@@ -128,15 +127,14 @@ def _run(args) -> str:
             "usd_per_pct": args.usd_per_pct, "plan": args.plan, "measured": args.measured})
         return ""
     if command == "import":
-        # the importer is a module of its own part; it is looked for only when this command runs
-        transcripts = importlib.import_module("orch_it.events.transcripts")
         done = transcripts.import_transcripts(
             Path(args.folder), _store(args), repo=args.repo, role=args.role,
             subagent_role=args.subagent_role, ticket=args.ticket, session=args.session,
             quiet_minutes=args.quiet_minutes)
         return (f"written={done.written} already_stored={done.already_stored}"
                 f" sessions={done.sessions} bad_lines={done.bad_lines}"
-                f" pending_lines={done.pending_lines}\n")
+                f" pending_lines={done.pending_lines} refused_events={done.refused_events}"
+                f" unreadable_files={done.unreadable_files}\n")
     raise AssertionError(command)
 
 
@@ -147,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         return e.code if isinstance(e.code, int) else EXIT_ERROR
     try:
         text = _run(args)
-    except (schema.EventError, StoreError, settings.SettingsError) as e:
+    except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     sys.stdout.write(text)
