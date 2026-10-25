@@ -1,0 +1,88 @@
+"""The shape rules (#398 decision 2, acceptance row 1): one function returns every violation of
+a ticket, each with its code; a good body has none."""
+
+import random
+import time
+
+import pytest
+
+from orch_it import tickets
+from ticket_fixtures import EXPECTED, FIXTURES, fixture
+
+
+def codes_of(title, body) -> list[str]:
+    return [v.code for v in tickets.violations(tickets.parse(body, title=title))]
+
+
+def test_the_fixture_set_holds_twenty_bodies_and_one_per_rule():
+    assert len(EXPECTED) >= 20
+    assert {path.stem for path in FIXTURES.glob("*.md")} == set(EXPECTED)
+    assert set(tickets.RULES) <= {code for codes in EXPECTED.values() for code in codes}
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_every_violation_is_found_with_its_code_and_none_on_a_good_body(name):
+    assert sorted(codes_of(*fixture(name))) == sorted(EXPECTED[name])
+
+
+def test_every_code_found_is_a_rule_and_each_violation_says_where():
+    for name in EXPECTED:
+        for violation in tickets.violations(tickets.parse(fixture(name)[1], title=fixture(name)[0])):
+            assert violation.code in tickets.RULES
+            assert violation.message.startswith(f"{violation.code}: ")
+
+
+def test_a_body_written_on_windows_reads_as_the_same_body():
+    title, body = fixture("bad_human_field_order")
+    assert codes_of(title, body.replace("\n", "\r\n")) == codes_of(title, body)
+    assert codes_of(*fixture("good_basic")) == codes_of(fixture("good_basic")[0],
+                                                        fixture("good_basic")[1].replace("\n", "\r\n"))
+
+
+def test_a_field_out_of_place_names_the_field():
+    found = tickets.violations(tickets.parse(fixture("bad_human_field_order")[1]))
+    assert [(v.code, v.detail) for v in found if v.code == "human_field_order"] == [
+        ("human_field_order", "Goal")]
+
+
+def test_a_title_left_out_is_not_judged():
+    assert codes_of(None, fixture("good_basic")[1]) == []
+
+
+def test_a_half_written_body_never_raises_and_a_huge_one_is_read_in_time():
+    _, body = fixture("real_395")
+    for end in range(0, len(body), 97):
+        tickets.violations(tickets.parse(body[:end], title=body[:end][:90]))
+    noise = random.Random(398)
+    junk = "".join(noise.choice("|#-*:` \n\tабвxyz()[]0123456789") for _ in range(20_000))
+    tickets.violations(tickets.parse(junk, title=junk[:200]))
+    huge = body * 40  # about a megabyte, past GitHub's own 65,536-character body limit
+    started = time.monotonic()
+    tickets.violations(tickets.parse(huge))
+    assert time.monotonic() - started < 5
+
+
+def test_an_empty_or_headless_body_is_refused_never_raised():
+    for body in (None, "", "﻿", "\n\n\n", "## For the human", "## For the agent"):
+        found = codes_of("Fine title", body)
+        assert "human_block_missing" in found or "agent_block_missing" in found
+
+
+@pytest.mark.parametrize("weight, codes", [("1", []), ("10", []), ("7 (two parts)", []), ("0", ["weight_bad"]),
+                                           ("3.5", ["weight_bad"]), ("", ["weight_bad"]), ("1000", ["weight_bad"])])
+def test_the_weight_is_a_whole_number_from_one_to_ten(weight, codes):
+    title, body = fixture("good_basic")
+    assert codes_of(title, body.replace("Weight: 3", f"Weight: {weight}")) == codes
+
+
+def test_a_field_written_twice_is_out_of_order():
+    title, body = fixture("good_basic")
+    twice = body.replace("- **Undo:**", "- **What:** ещё раз то же самое.\n- **Undo:**")
+    assert codes_of(title, twice) == ["human_field_order"]
+
+
+def test_a_pipe_escaped_in_a_cell_stays_in_the_cell():
+    title, body = fixture("good_basic")
+    ticket = tickets.parse(body.replace("| 1 | cart shipping cost for 10115 |", r"| 1 | cart cost for 10115 \| 10117 |"))
+    assert ticket.acceptance[0].check == r"cart cost for 10115 \| 10117"
+    assert ticket.acceptance[0].passes == "equals the payment page cost for 10115"
