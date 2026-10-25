@@ -64,11 +64,19 @@ def git_output(work_tree: Path | str, *args: str) -> str | None:
     git, not a work tree, no commit yet, a timeout): the fact is then unknown, not an error."""
 
     try:
-        done = subprocess.run(["git", "-C", str(work_tree), *args], capture_output=True, text=True,
-                              timeout=GIT_TIMEOUT_SECONDS, creationflags=NO_WINDOW)
-    except (OSError, subprocess.TimeoutExpired):
+        done = subprocess.run(["git", "-C", str(work_tree), *args], capture_output=True,
+                              encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT_SECONDS,
+                              creationflags=NO_WINDOW)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
-    return done.stdout.strip() if done.returncode == 0 else None
+    return (done.stdout or "").strip() if done.returncode == 0 else None
+
+
+def _branch(work_tree: Path) -> str | None:
+    """The checked-out branch; None on a detached HEAD or outside git."""
+
+    name = git_output(work_tree, "rev-parse", "--abbrev-ref", "HEAD")
+    return None if name in (None, "", "HEAD") else name
 
 
 def selection_of(ids: list[str] | None) -> str:
@@ -108,7 +116,7 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
             "place": chosen, "chosen": chosen, "reason": "forced" if place else None,
             "selection": selection_of(ids), "commit": commit,
             "dirty": None if status is None else bool(status),
-            "branch": git_output(work_tree, "rev-parse", "--abbrev-ref", "HEAD"), "pr": None,
+            "branch": _branch(work_tree), "pr": None,
             "workers": None, "part": None, "run_os": adapter.os,
             "settings_hash": environment.settings_hash(settings.command, settings.bound_minutes,
                                                        settings.test_env),
@@ -120,6 +128,9 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
                 return _unfinished(writer, envelope, chosen, "refused", e.code)
             except PlaceVanished:
                 return _unfinished(writer, envelope, chosen, "lost", "place_vanished")
+            except BaseException:  # stopped by a person (Ctrl-C) or a crash: never left live
+                _unfinished(writer, envelope, chosen, "stopped", None)
+                raise
             run_end = outcome.judge(place_end.report, requested_ids=ids, cut=place_end.cut,
                                     slept=place_end.slept)
             for detail in run_end.result_details():

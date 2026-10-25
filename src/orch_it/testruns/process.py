@@ -3,10 +3,13 @@
 `run_bounded` starts the command with no console window, waits until it exits or its bound
 passes, and then kills its whole process tree either way, so no process of the run is left: on
 Windows every process of the run sits in one job object (the command starts suspended, joins
-the job, then resumes); elsewhere the command leads its own process group. The bound is wall
-time, so a machine that sleeps through it still cuts the run; a jump of the wall clock between
-two polls longer than `SLEEP_GAP_SECONDS` that carries the run past its bound marks it `slept`
-(a short sleep long before the bound does not).
+the job, then resumes); elsewhere the command leads its own process group (a process that
+starts its own session escapes it). The bound passes when either the monotonic clock or the
+wall clock says so: a wall clock stepping back never stretches it, and a machine that sleeps
+through it still cuts the run. A jump of the wall clock between two polls longer than
+`SLEEP_GAP_SECONDS` that carries the run past its bound marks it `slept` (a short sleep long
+before the bound does not). The command's output is read through a pipe and only its last
+`LOG_TAIL_BYTES` are kept.
 """
 
 from __future__ import annotations
@@ -14,13 +17,16 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
 POLL_SECONDS = 0.5
 SLEEP_GAP_SECONDS = 60.0
 KILL_WAIT_SECONDS = 30.0
+LOG_TAIL_BYTES = 8192
 
 
 @dataclass(frozen=True)
@@ -29,40 +35,71 @@ class Finished:
     cut: bool
     slept: bool
     seconds: float
+    log_tail: str = ""
 
 
 class CommandMissing(Exception):
-    """The command's program could not be started (not found, not executable)."""
+    """The command could not be started (not found, not executable, not a valid argument)."""
 
 
-def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str], bound_seconds: float,
-                log_path: Path, wall=time.time, poll_seconds: float = POLL_SECONDS) -> Finished:
-    with open(log_path, "wb") as log:
+def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str] | None, bound_seconds: float,
+                wall=time.time, poll_seconds: float = POLL_SECONDS) -> Finished:
+    try:
+        tree = _Tree.start(argv, cwd, env)
+    except (OSError, ValueError) as e:
+        raise CommandMissing(f"{argv[0] if argv else ''}: {e}") from None
+    tail = _Tail(tree.process.stdout)
+    started_wall = last = wall()
+    started_mono = time.monotonic()
+    deadline = started_wall + bound_seconds
+    slept = cut = False
+    try:
+        while True:
+            try:
+                tree.process.wait(timeout=poll_seconds)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            now = wall()
+            if now - last > poll_seconds + SLEEP_GAP_SECONDS and last < deadline <= now:
+                slept = True  # the machine slept across the bound
+            last = now
+            if now >= deadline or time.monotonic() - started_mono >= bound_seconds:
+                cut = True
+                break
+    finally:
+        tree.kill()
+        tail.join()
+    seconds = max(time.monotonic() - started_mono, wall() - started_wall, 0.0)
+    return Finished(None if cut else tree.process.returncode, cut, slept, seconds, tail.text())
+
+
+class _Tail:
+    """Reads a pipe to its end on a thread of its own, keeping its last `LOG_TAIL_BYTES`."""
+
+    def __init__(self, pipe):
+        self.chunks: deque[bytes] = deque()
+        self.size = 0
+        self.pipe = pipe
+        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.thread.start()
+
+    def _read(self) -> None:
         try:
-            tree = _Tree.start(argv, cwd, env, log)
-        except OSError as e:
-            raise CommandMissing(f"{argv[0]}: {e}") from None
-        started = last = wall()
-        deadline = started + bound_seconds
-        slept = cut = False
-        try:
-            while True:
-                try:
-                    tree.process.wait(timeout=poll_seconds)
-                    break
-                except subprocess.TimeoutExpired:
-                    pass
-                now = wall()
-                if now - last > poll_seconds + SLEEP_GAP_SECONDS and last < deadline <= now:
-                    slept = True  # the machine slept across the bound
-                last = now
-                if now >= deadline:
-                    cut = True
-                    break
-        finally:
-            tree.kill()
-        seconds = max(wall() - started, 0.0)
-    return Finished(None if cut else tree.process.returncode, cut, slept, seconds)
+            while chunk := self.pipe.read1(65536):
+                self.chunks.append(chunk)
+                self.size += len(chunk)
+                while self.size - len(self.chunks[0]) >= LOG_TAIL_BYTES:
+                    self.size -= len(self.chunks.popleft())
+        except (OSError, ValueError):
+            pass
+
+    def join(self) -> None:
+        self.thread.join(timeout=KILL_WAIT_SECONDS)
+        self.pipe.close()
+
+    def text(self) -> str:
+        return b"".join(self.chunks)[-LOG_TAIL_BYTES:].decode("utf-8", "replace")
 
 
 class _Tree:
@@ -73,15 +110,20 @@ class _Tree:
         self.job = job
 
     @classmethod
-    def start(cls, argv, cwd, env, log) -> _Tree:
-        common = {"cwd": cwd, "env": env, "stdin": subprocess.DEVNULL, "stdout": log,
+    def start(cls, argv, cwd, env) -> _Tree:
+        common = {"cwd": cwd, "env": env, "stdin": subprocess.DEVNULL, "stdout": subprocess.PIPE,
                   "stderr": subprocess.STDOUT}
         if sys.platform != "win32":
             return cls(subprocess.Popen(argv, start_new_session=True, **common))
         process = subprocess.Popen(argv, creationflags=_win.CREATE_SUSPENDED | _win.CREATE_NO_WINDOW,
                                    **common)
-        job = _win.job_for(process)
-        _win.resume(process)
+        try:
+            job = _win.job_for(process)
+            _win.resume(process)
+        except BaseException:  # never leave a suspended process nobody kills
+            process.kill()
+            process.wait(timeout=KILL_WAIT_SECONDS)
+            raise
         return cls(process, job)
 
     def kill(self) -> None:

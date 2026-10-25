@@ -53,4 +53,21 @@ def test_machines_are_read_in_settings_order():
 def test_a_value_of_the_wrong_shape_is_refused_naming_it(raw, field):
     with pytest.raises(SettingsError) as refused:
         TestSettings.from_settings(raw, REPO)
-    assert refused.value.code == "bad_setting" and str(refused.value).endswith(field)
+    assert refused.value.code == "bad_setting" and str(refused.value) == f"bad_setting: {field}"
+
+
+@pytest.mark.parametrize("raw, field", [
+    ({"test_run_bound_minutes": int("1" + "0" * 400)}, "test_run_bound_minutes"),
+    ({"test_run_bound_minutes": 10_081}, "test_run_bound_minutes"),
+    ({"test_env": {"A": "x\u0000y"}}, "test_env"),
+    ({"test_command": ["python", "-c", "x\u0000"]}, "test_command"),
+])
+def test_an_absurd_bound_or_a_nul_is_refused_as_a_bad_setting(raw, field):
+    with pytest.raises(SettingsError) as refused:
+        TestSettings.from_settings(raw, REPO)
+    assert refused.value.code == "bad_setting" and str(refused.value) == f"bad_setting: {field}"
+
+
+def test_a_repo_s_override_matches_its_name_whatever_the_case():
+    raw = {"repos": {"rasslabsya4el/ORCH-IT": {"test_run_bound_minutes": 3}}}
+    assert TestSettings.from_settings(raw, REPO).bound_minutes == 3

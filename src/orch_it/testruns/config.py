@@ -5,8 +5,9 @@ Keys (each optional): `test_command` (argv list; `{python}`, `{report}`, `{ids_f
 (default 15), `test_env` (name -> value), `github_tests` (default off), `test_machines` (one
 entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1), `python`,
 `on` (true)), `own_capacity` (1) and `github_capacity` (20, GitHub's concurrent job cap on a
-free account). A key under `repos.<owner/name>` overrides the same key for that repo. A value of
-the wrong shape raises `SettingsError("bad_setting")` naming the key.
+free account). A key under `repos.<owner/name>` (any case) overrides the same key for that repo.
+A value of the wrong shape (a NUL in a command or `test_env` value, a bound over a week
+included) raises `SettingsError("bad_setting")` naming the key.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from orch_it.settings import SettingsError
 
 DEFAULT_COMMAND = ("{python}", "-m", "pytest", "-q", "-p", "orch_it_ids", "--junitxml={report}")
 OSES = ("linux", "windows", "macos")
+MAX_BOUND_MINUTES = 7 * 24 * 60  # a week: a longer bound is no bound
 _MACHINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -56,14 +58,16 @@ class TestSettings:
         repos = raw.get("repos", {})
         if not isinstance(repos, dict):
             raise SettingsError("bad_setting", "repos")
-        own = repos.get(repo, {})
+        # GitHub's owner/name is the same repo whatever its case
+        own = next((value for key, value in repos.items() if str(key).lower() == repo.lower()), {})
         if not isinstance(own, dict):
             raise SettingsError("bad_setting", f"repos.{repo}")
         merged |= own
         values = {}
         if "test_command" in merged:
             command = merged["test_command"]
-            if not (isinstance(command, list) and command and all(isinstance(a, str) for a in command)):
+            if not (isinstance(command, list) and command
+                    and all(isinstance(a, str) and "\x00" not in a for a in command)):
                 raise SettingsError("bad_setting", "test_command")
             values["command"] = tuple(command)
         if "test_run_bound_minutes" in merged:
@@ -71,7 +75,8 @@ class TestSettings:
         if "test_env" in merged:
             env = merged["test_env"]
             if not (isinstance(env, dict) and all(isinstance(k, str) and _ENV_NAME.fullmatch(k)
-                                                  and isinstance(v, str) for k, v in env.items())):
+                                                  and isinstance(v, str) and "\x00" not in v
+                                                  for k, v in env.items())):
                 raise SettingsError("bad_setting", "test_env")
             values["test_env"] = dict(env)
         if "github_tests" in merged:
@@ -87,11 +92,17 @@ class TestSettings:
 
 
 def _positive(key: str, value: object) -> float:
+    """A bound in minutes: more than 0, at most `MAX_BOUND_MINUTES`."""
+
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise SettingsError("bad_setting", key)
-    if not (math.isfinite(value) and value > 0):
+    try:
+        minutes = float(value)
+    except OverflowError:
+        raise SettingsError("bad_setting", key) from None
+    if not (math.isfinite(minutes) and 0 < minutes <= MAX_BOUND_MINUTES):
         raise SettingsError("bad_setting", key)
-    return float(value)
+    return minutes
 
 
 def _count(key: str, value: object) -> int:

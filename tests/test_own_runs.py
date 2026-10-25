@@ -121,6 +121,65 @@ def test_an_ids_file_naming_only_collected_tests_is_passed(tmp_path):
     assert (done.outcome, done.collected) == ("passed", 2)
 
 
+ID_FORMS = """
+    import pytest
+
+    class TestC:
+        def test_a(self):
+            pass
+
+    @pytest.mark.parametrize("x", ["a", "a]b::c]"])
+    def test_p(x):
+        pass
+    """
+
+
+@pytest.mark.parametrize("wanted, collected", [
+    ("./tests/test_x.py", 3),
+    ("tests\\test_x.py", 3),
+    ("tests", 3),
+    ("./tests/test_x.py::TestC::test_a", 1),
+    ("tests\\test_x.py::TestC::test_a", 1),
+    ("tests/test_x.py::TestC", 1),
+    ("tests/test_x.py::test_p", 2),
+    ("tests/test_x.py::test_p[a]b::c]]", 1),
+    ("tests.test_x::test_p[a]", 1),
+])
+def test_the_plugin_and_the_judge_agree_on_every_id_form(tmp_path, wanted, collected):
+    root = tmp_path / "repo"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_x.py").write_text(textwrap.dedent(ID_FORMS), "utf-8")
+    ids = tmp_path / "ids.txt"
+    ids.write_text(wanted + "\n", "utf-8")
+    _, done = run_of(tmp_path, root, ids_file=ids)
+    assert (done.outcome, done.collected, done.missing_ids) == ("passed", collected, ())
+
+
+class Interrupted:
+    id, os = "own", "linux"
+
+    def run(self, request, scratch):
+        raise KeyboardInterrupt
+
+
+def test_a_run_interrupted_by_a_person_ends_stopped_and_is_not_left_live(tmp_path):
+    root = suite(tmp_path)
+    store = Store.open(tmp_path / "store")
+    with pytest.raises(KeyboardInterrupt):
+        run_tests(store, work_tree=root, repo=REPO, settings=TestSettings(), places={"own": Interrupted()})
+    assert [row[1:3] for row in ended(store)] == [("stopped", None)]
+
+
+def test_the_work_tree_placeholder_is_an_absolute_path(tmp_path, monkeypatch):
+    root = suite(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    write = 'import os, sys; open(sys.argv[2], "w").write(str(os.path.isabs(sys.argv[1])))'
+    seen = tmp_path / "seen.txt"
+    settings = TestSettings(command=("{python}", "-c", write, "{work_tree}", str(seen)))
+    run_of(tmp_path, root.relative_to(tmp_path), settings)
+    assert seen.read_text() == "True"
+
+
 def test_a_command_that_writes_no_report_is_summary_missing_never_failed(tmp_path):
     root = suite(tmp_path)
     settings = TestSettings(command=("{python}", "-c", "raise SystemExit(1)"))

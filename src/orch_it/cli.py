@@ -21,6 +21,7 @@ from orch_it.testruns.runner import RunError, git_output, run_tests
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
+EXIT_INTERRUPTED = 130
 # `tests run` exits 0 on passed, 1 on failed, 3 on any other outcome (no result, refused, lost,
 # stopped): a script tells "red" from "no answer" without reading the line
 TESTS_EXIT = {"passed": 0, "failed": 1}
@@ -206,5 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             queries.QueryError, CommandError, RunError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
+    except KeyboardInterrupt:  # a run stopped by a person has already written its end
+        print("error: interrupted", file=sys.stderr)
+        return EXIT_INTERRUPTED
     sys.stdout.write(text)
     return code

@@ -9,7 +9,6 @@ run and `PlaceVanished` when it is lost mid-run; the runner turns those into the
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -76,8 +75,12 @@ def test_process_env(test_env: dict[str, str], ids_file: str | None, plugin_fold
     and the folder of the `orch_it_ids` plugin ahead of any `PYTHONPATH` of `test_env`."""
 
     env = environment.clean_environment(test_env, source=source, os_name=os_name)
-    separator = ";" if (os_name or environment.this_os()) == "windows" else ":"
-    env["PYTHONPATH"] = separator.join(p for p in (plugin_folder, test_env.get("PYTHONPATH")) if p)
+    windows = (os_name or environment.this_os()) == "windows"
+    own_path = None
+    for name in list(env):  # on Windows a variable's name has no case: one PYTHONPATH only
+        if name == "PYTHONPATH" or (windows and name.upper() == "PYTHONPATH"):
+            own_path = env.pop(name)
+    env["PYTHONPATH"] = (";" if windows else ":").join(p for p in (plugin_folder, own_path) if p)
     if ids_file:
         env[ENV_IDS] = ids_file
     return env
@@ -89,32 +92,20 @@ class OwnPlace:
     os: str = field(default_factory=environment.this_os)
 
     def run(self, request: Request, scratch: Path) -> PlaceEnd:
+        work_tree = Path(request.work_tree).absolute()
         report = scratch / "junit.xml"
         ids_file = None
         if request.ids is not None:
             ids_file = scratch / "ids.txt"
             ids_file.write_text("".join(f"{i}\n" for i in request.ids), "utf-8")
         argv = fill(request.command, {"python": sys.executable, "report": str(report),
-                                      "ids_file": str(ids_file or ""),
-                                      "work_tree": str(request.work_tree)})
+                                      "ids_file": str(ids_file or ""), "work_tree": str(work_tree)})
         env = test_process_env(request.test_env, str(ids_file) if ids_file else None,
                                str(PLUGIN_FOLDER))
-        log = scratch / "output.log"
         try:
-            done = process.run_bounded(argv, cwd=request.work_tree, env=env,
-                                       bound_seconds=request.bound_seconds, log_path=log)
+            done = process.run_bounded(argv, cwd=work_tree, env=env,
+                                       bound_seconds=request.bound_seconds)
         except process.CommandMissing as e:
             return PlaceEnd(None, False, False, None, 0.0, 0.0, str(e)[-LOG_TAIL_CHARS:])
         return PlaceEnd(report if report.exists() else None, done.cut, done.slept, done.rc, 0.0,
-                        done.seconds, _tail(log))
-
-
-def _tail(path: Path) -> str:
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            f.seek(max(f.tell() - LOG_TAIL_CHARS * 4, 0))
-            text = f.read().decode("utf-8", "replace")
-    except OSError:
-        return ""
-    return text[-LOG_TAIL_CHARS:]
+                        done.seconds, done.log_tail[-LOG_TAIL_CHARS:])
