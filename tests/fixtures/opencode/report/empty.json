@@ -1,0 +1,68 @@
+{
+ "about": "the model answered with no text",
+ "require_reddit": true,
+ "expect": {
+  "report_from": null,
+  "reason": "empty",
+  "compactions": 0,
+  "last_chars": 0
+ },
+ "messages": [
+  {
+   "info": {
+    "id": "msg_0002",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000000000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0001",
+     "type": "text",
+     "text": "Brief: three questions."
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0006",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "stop",
+    "time": {
+     "created": 1700000001000,
+     "completed": 1700000001500
+    },
+    "tokens": {
+     "total": 900,
+     "input": 900,
+     "output": 0,
+     "reasoning": 0,
+     "cache": {
+      "write": 0,
+      "read": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0003",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0004",
+     "type": "text",
+     "text": ""
+    },
+    {
+     "id": "prt_0005",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  }
+ ]
+}
