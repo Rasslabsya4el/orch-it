@@ -141,3 +141,64 @@ def test_something_not_an_object_is_refused():
 def test_every_code_is_distinct_and_named():
     from orch_it.events import schema
     assert len(set(schema.ERROR_CODES)) == len(schema.ERROR_CODES)
+
+
+def test_a_generic_reason_goes_only_with_its_outcome():
+    e = event(kind="step.ended", step="wait", detail={"outcome": "passed", "reason": "lease_lost"})
+    assert refused(e) == "bad_code"
+    ok = event(kind="step.ended", step="wait", detail={"outcome": "lost", "reason": "lease_lost"})
+    assert validate(ok) == ok
+
+
+def test_a_reason_with_no_list_written_takes_no_code_yet():
+    assert refused(event(kind="hook.ran", detail={"reason": "anything"})) == "bad_code"
+    e = event(kind="step.ended", step="launch", detail={"outcome": "failed", "reason": "timed_out"})
+    assert refused(e) == "bad_code"
+
+
+def test_progress_belongs_to_a_step():
+    assert refused(event(kind="step.progressed", step=None, detail={})) == "step_missing"
+    ok = event(kind="step.progressed", step="test_run", run="r1", detail={"parts_done": 3})
+    assert validate(ok) == ok
+
+
+def test_detail_must_be_plain_json():
+    for bad in (float("nan"), float("inf"), b"bytes", {1: 2}, {"a": {None: 1}}, {"x"}, "\ud800"):
+        assert refused(event(detail={"value": bad})) == "bad_type", bad
+
+
+def test_a_deeply_nested_detail_is_refused_or_passed_without_crashing():
+    deep = []
+    for _ in range(100_000):
+        deep = [deep]
+    assert refused(event(kind="hook.ran", detail={"action": deep})) == "bad_code"
+    assert validate(event(detail={"tree": deep}))["detail"]["tree"] is deep
+
+
+def test_a_bounded_field_must_be_text():
+    assert refused(event(kind="tool.called", detail={"args_head": ["x" * 1000] * 9})) == "bad_type"
+
+
+def test_the_error_names_the_field_never_the_value():
+    with pytest.raises(EventError) as caught:
+        validate(event(kind="tool.called", detail={"args_head": "secret " * 100}))
+    assert "secret" not in str(caught.value) and caught.value.field == "detail.args_head"
+
+
+def test_an_error_survives_a_trip_between_processes():
+    import pickle
+    error = pickle.loads(pickle.dumps(EventError("unknown_kind", "kind")))
+    assert (error.code, error.field) == ("unknown_kind", "kind")
+
+
+def test_odd_repos_and_tickets_are_refused():
+    for repo in ("a/b\n", "./.", "../..", "a/b/c", "/b"):
+        assert refused(event(repo=repo)) == "bad_repo", repo
+    for ticket in (0, -5, 10**30):
+        assert refused(event(ticket=ticket)) == "bad_type", ticket
+
+
+def test_ats_that_are_not_iso_with_a_zone_are_refused():
+    for at in ("2026-10-25X14:40:36Z", "2026-10-25T14:40:36\x00Z", "0001-01-01T00:00:00+14:00",
+               "2016-12-31T23:59:60Z", "2026-10-25T14:40:36z", "2026-10-25"):
+        assert refused(event(at=at)) == "bad_at", at

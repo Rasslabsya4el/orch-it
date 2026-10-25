@@ -92,7 +92,7 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 | `external_call` | `target` (`call_target`), `command` | `rc`, `transient`, `retries`, `timed_out` | which calls fail or are slow, per machine |
 | `check` | `check` (`check`), `target` | `findings`, `facts` | a periodic or start-up check and what it found |
 | `sweep` | `tickets_read` | none | the brain's sweep pass and its outcomes |
-| `test_map` | `sha`, `place` (`place`) | `tests` | the test-selection map build |
+| `test_map` | `sha`, `place` | `tests` | the test-selection map build |
 | `keepalive_install` | `task` | `triggers_kept`, `triggers_left_out` | the boot start of the launcher |
 | `acceptance` | `rows_total` | `rows_passed`, `rows_failed`, `rows_na` | was the acceptance run before the PR |
 | `ticket_write` | `ticket`, `write_ticket_called` | `shape_check` | the brain's writing of a ticket and its shape check |
@@ -102,14 +102,17 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 | `close` | `ticket`, `pr` | `reason` (`close_reason`) | the workflow that closes a ticket after its PR merges |
 | `reconcile` | `run` | `repairs` (`repair`) | the scheduled repair of every mismatch |
 
-Every `step.ended` also carries `outcome` (from `outcome`) and `reason`, from the step's own list plus `step_ended_any`.
+Every `step.ended` also carries `outcome` (from `outcome`) and may carry `reason`, from the step's own list plus
+`step_ended_any` (`suspended` only with `no_result`, `lease_lost` only with `lost`). A `reason` is always a code (the
+list's rule 5): a `reason` with no list written takes no code yet, and the part that first writes one adds its list to
+`closed_sets.json` and here.
 
 ## Point kinds
 
 | kind | fields | answers |
 |---|---|---|
 | `turn.used` | `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `usd`, `price_table`, `tickets_held`, `reason` (`turn_reason`) | every dollar and token; cost per ticket, role, model, step, week |
-| `test.result` | `test_id`, `outcome` (`outcome`), `skip_reason`, `ms`, `attempt`, `load_verdict` (`load_verdict`) | per test: flaky retries, slow tests, skips by reason |
+| `test.result` | `test_id`, `outcome`, `skip_reason`, `ms`, `attempt`, `load_verdict` (`load_verdict`) | per test: flaky retries, slow tests, skips by reason |
 | `hook.ran` | `hook`, `action` (`hook_action`), `reason` | what a hook did or why it did nothing |
 | `run.checked` | `checked_run`, `result` (`run_check_result`) | a live run checked by another session |
 | `ticket.transferred` | `from_repo`, `from_number`, `to_repo`, `to_number` | a ticket moved between repos |
@@ -162,5 +165,7 @@ Every `step.ended` also carries `outcome` (from `outcome`) and `reason`, from th
 detail field): `not_an_object`, `unknown_field` (a top-level field outside the envelope), `missing_field`, `null_field`
 (null where the envelope forbids it), `bad_type`, `unknown_kind`, `unknown_step`, `step_missing` (a `step.*` event with
 no `step`), `bad_at`, `at_without_zone`, `bad_repo` (not `owner/name`), `bad_code` (a value outside its code list),
-`missing_outcome`, `bad_outcome`, `too_long`. A code written `<prefix>:<id>` in a list (`machine:<id>`) takes any value
+`missing_outcome`, `bad_outcome`, `too_long`. Every value is plain JSON (string keys, finite numbers, UTF-8 text),
+else `bad_type`; `ticket` is a positive integer; `at` is `YYYY-MM-DDTHH:MM:SS[.ffffff]` with `Z` or `±HH:MM` (a leap second
+is refused). A code written `<prefix>:<id>` in a list (`machine:<id>`) takes any value
 after its prefix.
