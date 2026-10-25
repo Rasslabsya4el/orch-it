@@ -17,7 +17,9 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).parents[1]
+from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo
+
+ROOT =Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
@@ -147,3 +149,97 @@ def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_do
     windows = "\n".join(step_named(steps_of(jobs["windows"]), "pytest"))
     assert re.search(r'^\s+ORCH_IT_REQUIRE_SSHD: "1"$', linux, re.M)
     assert "ORCH_IT_REQUIRE_SSHD" not in windows
+
+
+# --- the scan of a pull request's commits (#395 row 7) ---------------------------------------
+
+PRIVATE_DATA_STEP = "private data in the pull request's commits"
+SCAN_COMMAND = ('python -m orch_it guards scan --range "$BASE..$HEAD" --machine-independent'
+                ' --allow-email-of "$AUTHOR" --allow-email-of "$OWNER"')
+SCAN_ENV = {
+    "GH_TOKEN": "${{ github.token }}",
+    "BASE": "${{ github.event.pull_request.base.sha }}",
+    "HEAD": "${{ github.event.pull_request.head.sha }}",
+    "AUTHOR": "${{ github.event.pull_request.user.login }}",
+    "OWNER": "${{ github.repository_owner }}",
+}
+
+
+def step_env(step: list[str]) -> dict[str, str]:
+    """The `env:` mapping of a step: the `KEY: value` lines indented under its `env:` key."""
+
+    head = next(i for i, line in enumerate(step) if line.strip() == "env:")
+    indent = len(step[head]) - len(step[head].lstrip())
+    env = {}
+    for line in step[head + 1:]:
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+        key, _, value = line.strip().partition(": ")
+        env[key] = value
+    return env
+
+
+def test_the_scan_step_is_in_the_linux_job_only_and_only_for_pull_requests():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    linux = steps_of(jobs["linux"])
+    step = step_named(linux, PRIVATE_DATA_STEP)
+    text = "\n".join(step)
+    assert "if: github.event_name == 'pull_request'" in text
+    assert re.search(r"^\s+shell: bash$", text, re.M)
+    assert step_env(step) == SCAN_ENV
+    assert run_script(step).strip() == SCAN_COMMAND
+    install = next(i for i, s in enumerate(linux) if any("pip install" in line for line in s))
+    assert linux.index(step) > install
+    assert PRIVATE_DATA_STEP not in "\n".join(jobs["windows"])
+
+
+def test_both_jobs_check_out_the_whole_history():
+    for name, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
+        [checkout] = [s for s in steps_of(lines) if any("uses: actions/checkout@v4" in line for line in s)]
+        assert re.search(r"^\s+fetch-depth: 0$", "\n".join(checkout), re.M), name
+
+
+def pull_request_with(tmp_path, head_files):
+    """A repository whose base commit holds a leak that was already there and whose head commit
+    adds `head_files`: (the repository, the base sha, the head sha)."""
+
+    repo = Repo(tmp_path / "repo")
+    base = repo.commit({"old.txt": f"already on the base: {GITHUB_TOKEN}\n"})
+    head = repo.commit(head_files, message="the pull request's work")
+    return repo, base, head
+
+
+def run_scan_step(tmp_path, repo, base, head):
+    """The step's own script under bash, in the repository, with the step's environment filled
+    in for a pull request of fake logins; `python` is the interpreter running the tests, on this
+    checkout's source, and `gh` can reach nothing."""
+
+    step = step_named(steps_of(job_lines(WORKFLOW.read_text("utf-8"))["linux"]), PRIVATE_DATA_STEP)
+    filled = {"BASE": base, "HEAD": head, "AUTHOR": "fake-author", "OWNER": "fake-owner"}
+    assert set(step_env(step)) == set(filled) | {"GH_TOKEN"}
+    script = 'python() { "$PYTHON_FOR_TEST" "$@"; }\n' + run_script(step)
+    quiet = {key: value for key, value in os.environ.items()
+             if key not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")}
+    env = quiet | filled | {"PYTHON_FOR_TEST": sys.executable, "PYTHONPATH": str(ROOT / "src"),
+                            "GH_CONFIG_DIR": str(tmp_path / "gh"), "PYTHONIOENCODING": "utf-8"}
+    return subprocess.run([a_bash(), "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=repo.path,
+                          env=env, creationflags=NO_WINDOW)
+
+
+def test_the_scan_step_fails_on_a_pull_request_that_adds_private_data_without_printing_it(tmp_path):
+    repo, base, head = pull_request_with(tmp_path, {
+        "notes.txt": f"fine\n{GITHUB_TOKEN}\nsee {SOMEONE_HOME}/work\n"})
+    done = run_scan_step(tmp_path, repo, base, head)
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert done.stdout == (f"{head[:12]} content notes.txt:2 github_token\n"
+                           f"{head[:12]} content notes.txt:3 home_path\nhits=2 commits=1\n")
+    assert GITHUB_TOKEN not in done.stdout + done.stderr
+    assert SOMEONE_HOME not in done.stdout + done.stderr
+    assert "warning: email_of_unreadable: fake-author" in done.stderr
+
+
+def test_the_scan_step_passes_a_pull_request_whose_own_commits_are_clean(tmp_path):
+    repo, base, head = pull_request_with(tmp_path, {"notes.txt": "fine\nuses: actions/checkout@v4\n"})
+    done = run_scan_step(tmp_path, repo, base, head)
+    assert (done.returncode, done.stdout) == (0, "hits=0 commits=1\n"), done.stderr

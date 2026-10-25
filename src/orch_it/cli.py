@@ -1,5 +1,6 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
-7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9).
+7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9), and `python -m orch_it guards scan` (#395
+decision 4: it prints one line per private value found and exits 1 when there is any).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -16,6 +17,7 @@ from pathlib import Path
 from orch_it import settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
+from orch_it.guards import scanner
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
@@ -29,6 +31,7 @@ TESTS_EXIT = {"passed": 0, "failed": 1}
 TESTS_EXIT_OTHER = 3
 
 
+_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 _INTEGER = re.compile(r"-?(0|[1-9][0-9]*)")
 _DECIMAL = re.compile(r"-?(0|[1-9][0-9]*)\.[0-9]+")
 
@@ -124,6 +127,24 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
     p.add_argument("--ticket", type=int)
     p.add_argument("--role", default="script")
+
+    guards = commands.add_parser("guards", help="guards of the public repo").add_subparsers(
+        dest="command", required=True)
+    p = guards.add_parser("scan", help="look for private data in commits or in a tree")
+    what = p.add_mutually_exclusive_group(required=True)
+    what.add_argument("--range", dest="rev_range", metavar="A..B", help="the commits of a range")
+    what.add_argument("--tree", action="store_true", help="every tracked file at --rev")
+    what.add_argument("--all", action="store_true", help="every commit reachable from HEAD")
+    p.add_argument("--rev", metavar="REV", help="the revision --tree reads (default: HEAD)")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--machine-independent", action="store_true",
+                   help="only what holds on any machine: no home, host name or word of this one")
+    p.add_argument("--allow-email", action="append", default=[], metavar="ADDR",
+                   help="an address that is no hit")
+    p.add_argument("--allow-email-of", action="append", default=[], metavar="LOGIN",
+                   help="allow the public email of this GitHub account")
+    p.add_argument("--words-file", metavar="PATH",
+                   help="the private words (default: the setting `private_words_file`)")
     return root
 
 
@@ -163,6 +184,54 @@ def _tests_run(args) -> tuple[str, int]:
     line = (f"run={done.run} place={done.place} outcome={done.outcome} reason={done.reason or '-'}"
             f" collected={done.collected} failed={done.failed}\n")
     return line, TESTS_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
+
+
+def _email_of(login: str) -> str | None:
+    """The public email of a GitHub account, or None (with a warning) when it cannot be read or
+    the account shows none."""
+
+    email = None
+    if _LOGIN.fullmatch(login):
+        try:
+            email = github.run_gh(["api", f"users/{login}", "--jq", ".email"]).strip()
+        except github.GithubError:
+            pass
+    if not email or email == "null" or "@" not in email:
+        print(f"warning: email_of_unreadable: {login}", file=sys.stderr)
+        return None
+    return email
+
+
+def _guards_scan(args) -> tuple[str, int]:
+    """`guards scan`: one line per hit, then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits."""
+
+    if args.rev and not args.tree:
+        raise CommandError("bad_options", "--rev goes with --tree")
+    if args.words_file and args.machine_independent:
+        raise CommandError("bad_options", "--words-file goes with the machine's own patterns")
+    allowed = [*args.allow_email, *filter(None, map(_email_of, args.allow_email_of))]
+    if args.machine_independent:
+        patterns = scanner.Patterns.machine_independent(allowed_emails=allowed)
+    else:
+        patterns = scanner.Patterns.of_machine(
+            allowed_emails=allowed, words_file=Path(args.words_file) if args.words_file else None)
+    work_tree = Path(args.work_tree)
+    if args.tree:
+        hits, commits = scanner.scan_tree(work_tree, patterns, args.rev or "HEAD"), 1
+    else:
+        shas = scanner.commits_of_range(work_tree, "HEAD" if args.all else args.rev_range)
+        hits, commits = scanner.scan_commits(work_tree, shas, patterns), len(shas)
+    lines = [f"{hit.commit[:12]} {hit.where} {_one_line(hit.file)}:"
+             f"{'-' if hit.line is None else hit.line} {hit.kind}\n" for hit in hits]
+    text = "".join(lines) + f"hits={len(hits)} commits={commits}\n"
+    # a console that cannot show a file name's letters shows them escaped, not an error
+    text = text.encode(sys.stdout.encoding or "utf-8", "backslashreplace").decode(
+        sys.stdout.encoding or "utf-8")
+    return text, 1 if hits else 0
+
+
+def _one_line(path: str | None) -> str:
+    return "-" if path is None else path.replace("\n", "\\n").replace("\r", "\\r")
 
 
 def _run(args) -> str:
@@ -219,10 +288,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.group == "tests":
             text, code = _tests_run(args)
+        elif args.group == "guards":
+            text, code = _guards_scan(args)
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, CommandError, RunError) as e:
+            queries.QueryError, github.GithubError, CommandError, RunError, scanner.ScanError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
