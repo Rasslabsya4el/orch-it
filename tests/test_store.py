@@ -353,3 +353,18 @@ def test_the_store_folder_goes_missing_before_the_first_write(tmp_path):
     with store.writer() as writer:
         writer.write(envelope())
     assert len(lines_of(tmp_path / "events")) == 1
+
+
+def test_a_change_of_the_closed_sets_rebuilds_the_index_and_checks_every_line_again(tmp_path, monkeypatch):
+    import copy
+    from orch_it.events import schema
+    store = Store.open(tmp_path)
+    with store.writer() as writer:
+        writer.write(envelope())
+    assert store.refresh().bad_lines == 0
+    narrower = copy.deepcopy(schema._sets())
+    narrower["codes"]["role"].remove("script")  # same columns, one code fewer
+    monkeypatch.setattr(schema, "_sets", lambda: narrower)
+    report = store.refresh()
+    assert report.rebuilt and report.bad_lines == 1
+    assert store.query("SELECT count(*) FROM events").rows == [(0,)]
