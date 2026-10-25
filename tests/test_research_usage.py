@@ -35,7 +35,7 @@ class Tree:
         return usage.meter(self.root, children=self.children, messages=self.messages)
 
 
-def fields(tokens_in, tokens_out, reasoning, cache_read, cache_write, prefix=""):
+def token_fields(tokens_in, tokens_out, reasoning, cache_read, cache_write, prefix=""):
     return {f"{prefix}tokens_in": tokens_in, f"{prefix}tokens_out": tokens_out,
             f"{prefix}tokens_reasoning": reasoning, f"{prefix}tokens_cache_read": cache_read,
             f"{prefix}tokens_cache_write": cache_write}
@@ -43,26 +43,26 @@ def fields(tokens_in, tokens_out, reasoning, cache_read, cache_write, prefix="")
 
 def test_a_helper_of_a_helper_is_counted_in_every_field():
     detail = Tree("depth-3").meter().detail()
-    assert detail == (fields(1000, 200, 30, 5000, 100)
-                      | fields(320500, 12050, 1600, 2070000, 4103, prefix="helper_")
+    assert detail == (token_fields(1000, 200, 30, 5000, 100)
+                      | token_fields(320500, 12050, 1600, 2070000, 4103, prefix="helper_")
                       | {"helper_sessions": 3, "helper_depth": 2, "unread_sessions": 0, "search_429": 0})
 
 
-def test_the_tree_s_total_is_the_run_and_its_helpers():
+def test_the_total_of_a_tree_is_the_run_and_its_helpers():
     metered = Tree("depth-3").meter()
     assert metered.total == usage.Usage(321500, 12250, 1630, 2075000, 4203)
 
 
 def test_the_380_helpers_are_counted_beside_the_run():
     detail = Tree("depth-1-helpers").meter().detail()
-    assert detail == (fields(82027, 10703, 5001, 248832, 0)
-                      | fields(907170, 33431, 71118, 7072768, 0, prefix="helper_")
+    assert detail == (token_fields(82027, 10703, 5001, 248832, 0)
+                      | token_fields(907170, 33431, 71118, 7072768, 0, prefix="helper_")
                       | {"helper_sessions": 4, "helper_depth": 1, "unread_sessions": 0, "search_429": 0})
 
 
 def test_a_run_with_no_helper_has_zero_helper_tokens():
     detail = Tree("depth-0").meter().detail()
-    assert detail == (fields(12000, 900, 150, 40000, 512) | fields(0, 0, 0, 0, 0, prefix="helper_")
+    assert detail == (token_fields(12000, 900, 150, 40000, 512) | token_fields(0, 0, 0, 0, 0, prefix="helper_")
                       | {"helper_sessions": 0, "helper_depth": 0, "unread_sessions": 0, "search_429": 0})
 
 
@@ -123,15 +123,17 @@ def test_user_messages_carry_no_tokens_and_a_compaction_summary_does():
 
 def test_search_429s_are_counted_across_the_tree():
     tree = Tree("depth-3")
-    limited = {"type": "tool", "tool": "websearch",
-               "state": {"status": "error", "error": "Exa search failed: 429 Too Many Requests"}}
-    other = {"type": "tool", "tool": "websearch", "state": {"status": "error", "error": "timeout"}}
-    tree.sessions["run"]["messages"][1]["parts"] += [limited, other]
-    tree.sessions["g1"]["messages"][2]["parts"] += [limited, limited]
+    limited = {"type": "tool", "tool": "websearch",  # as opencode records Exa's refusal
+               "state": {"status": "error", "error": "StatusCode: non 2xx status code (429 POST https://mcp.exa.ai/mcp)"}}
+    others = [{"type": "tool", "tool": "websearch", "state": {"status": "error", "error": "timeout"}},
+              {"type": "tool", "tool": "websearch", "state": {"status": "error", "error": "port 14290 refused"}},
+              {"type": "tool", "tool": "webfetch", "state": {"status": "completed", "output": "HTTP 429 explained"}}]
+    tree.sessions["run"]["messages"][-1]["parts"] += [limited, *others]
+    tree.sessions["g1"]["messages"][-1]["parts"] += [limited, limited]
     assert tree.meter().detail()["search_429"] == 3
 
 
-def test_the_ended_event_carries_the_tree_s_numbers_into_the_store(tmp_path):
+def test_the_ended_event_carries_the_numbers_of_the_tree_into_the_store(tmp_path):
     store = Store.open(tmp_path / "events")
     detail = Tree("depth-3").meter().detail()
     with store.writer() as writer:
@@ -152,3 +154,39 @@ def test_a_wide_tree_is_walked_without_recursion():
     metered = usage.meter("run", children=lambda sid: sessions.get(sid, []), messages=lambda sid: one)
     assert metered.detail()["helper_sessions"] == 3000
     assert metered.helpers.input == 3000
+
+
+def test_a_session_whose_children_cannot_be_listed_keeps_its_tokens_and_its_task_children():
+    tree = Tree("depth-3")
+
+    def children(sid):
+        if sid == "c1":
+            raise ConnectionError("gone")
+        return tree.children(sid)
+
+    metered = usage.meter("run", children=children, messages=tree.messages, read_errors=(ConnectionError,))
+    assert metered.detail()["helper_tokens_in"] == 320500  # c1 kept, g1 found through c1's task call
+    assert metered.detail()["unread_sessions"] == 1
+
+
+def test_a_reply_that_is_no_list_is_counted_unread():
+    tree = Tree("depth-3")
+    metered = usage.meter("run", children=tree.children,
+                          messages=lambda sid: {"messages": []} if sid == "c2" else tree.messages(sid))
+    assert metered.detail()["unread_sessions"] == 1 and metered.detail()["helper_tokens_in"] == 320000
+
+
+def test_children_listed_by_opencode_alone_are_found():
+    tree = Tree("depth-3")
+    for session in tree.sessions.values():
+        for message in session["messages"]:
+            message["parts"] = [part for part in message["parts"] if part.get("tool") != "task"]
+    assert tree.meter().detail()["helper_tokens_in"] == 320500
+
+
+def test_a_tree_that_never_ends_is_cut_at_the_cap():
+    made = iter(range(10**9))
+    metered = usage.meter("run", children=lambda sid: [f"s{next(made)}", f"s{next(made)}"],
+                          messages=lambda sid: [])
+    assert metered.helper_sessions == usage.MAX_SESSIONS - 1
+    assert metered.unread_sessions > 0

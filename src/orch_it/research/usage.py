@@ -6,17 +6,24 @@ row of 82,027 (#380 F3). `meter` walks the whole tree, breadth first and without
 any depth: a session's children are the ones opencode lists for it plus any its own `task` calls
 name, each session read once however often it is named (a cycle included). Each assistant
 message's `info.tokens` counts, the compaction summary included (its tokens were spent): input,
-output, reasoning, cache read and cache write, every one recorded. A session whose read fails
-with one of the caller's `read_errors` is counted in `unread_sessions` and the rest summed.
+output, reasoning, cache read and cache write, every one recorded (a count that is no
+non-negative integer counts as nothing). A session whose message list cannot be read (an error of
+the caller's `read_errors`, or a reply that is no list) is counted in `unread_sessions` and the
+rest summed; one whose children cannot be listed keeps its tokens, is counted unread and is still
+followed through its own `task` calls. The meter also counts the web searches the search
+provider refused with HTTP 429 (a `websearch` call ending in error with `429` in its error, as
+opencode records Exa's refusals: #380 F4, 98 of 116), over the whole tree.
 """
 
 from __future__ import annotations
 
+import re
 from collections import deque
 from dataclasses import dataclass, fields
 from typing import Callable
 
-MAX_SESSIONS = 100_000  # a tree past this is no real run; the walk stops and counts the rest unread
+MAX_SESSIONS = 10_000  # a tree past this is no real run; the walk stops and counts the rest unread
+_429 = re.compile(r"(?<![0-9])429(?![0-9])")
 
 
 @dataclass(frozen=True)
@@ -66,32 +73,39 @@ def meter(root: str, *, children: Callable[[str], list], messages: Callable[[str
     own = helpers = Usage()
     seen = {root}
     queue = deque([(root, 0)])
-    helper_sessions = depth = unread = limited = 0
+    helper_sessions = deepest = unread = refused_searches = 0
     while queue:
         sid, level = queue.popleft()
-        try:
-            listed = messages(sid)
-            named = children(sid)
-        except read_errors:
-            unread += 1
-            continue
-        listed = listed if isinstance(listed, list) else []
-        used = sum((_tokens(message) for message in listed), Usage())
-        limited += sum(map(_is_429, _tool_parts(listed)))
+        session_messages, listed_children = _read(messages, sid, read_errors), _read(children, sid, read_errors)
+        unread += session_messages is None or listed_children is None
+        session_messages = session_messages or []
+        used = sum((_tokens(message) for message in session_messages), Usage())
+        refused_searches += sum(map(_is_429, _tool_parts(session_messages)))
         if level == 0:
             own = used
         else:
             helpers += used
             helper_sessions += 1
-            depth = max(depth, level)
-        for child in [*(named if isinstance(named, list) else []), *_task_children(listed)]:
+            deepest = max(deepest, level)
+        for child in [*(listed_children or []), *_task_children(session_messages)]:
             if isinstance(child, str) and child and child not in seen:
                 if len(seen) >= MAX_SESSIONS:
                     unread += 1
                     continue
                 seen.add(child)
                 queue.append((child, level + 1))
-    return TreeUsage(own, helpers, helper_sessions, depth, unread, limited)
+    return TreeUsage(own, helpers, helper_sessions, deepest, unread, refused_searches)
+
+
+def _read(reader: Callable[[str], list], sid: str, read_errors) -> list | None:
+    """What `reader` returns for `sid`, or None when it fails with one of `read_errors` or
+    returns something that is no list."""
+
+    try:
+        found = reader(sid)
+    except read_errors:
+        return None
+    return found if isinstance(found, list) else None
 
 
 def _count(value) -> int:
@@ -132,4 +146,5 @@ def _task_children(listed: list) -> list:
 
 def _is_429(part: dict) -> bool:
     state = part["state"]
-    return part.get("tool") == "websearch" and state.get("status") == "error" and "429" in str(state.get("error"))
+    return (part.get("tool") == "websearch" and state.get("status") == "error"
+            and _429.search(str(state.get("error"))) is not None)
