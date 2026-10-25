@@ -1,8 +1,8 @@
 """The far side of a machine place (#394 decision 4): what runs on the test machine.
 
-The local side sends this module, `process`, `environment`, `places` and the `orch_it_ids`
-plugin as one bundle on the first line of stdin, so the far machine needs nothing but git, Python
-and the repo's test dependencies. The second line is the request (JSON). `main` then takes a
+The local side sends this module, `process` (and the `proctree` it starts commands through),
+`environment`, `places` and the `orch_it_ids` plugin as one bundle on the first line of stdin,
+so the far machine needs nothing but git, Python and the repo's test dependencies. The second line is the request (JSON). `main` then takes a
 free checkout slot, puts its folder at the commit, runs the command once under its bound in the
 clean environment of this OS, and prints protocol lines on stdout, each starting `ORCH-IT `:
 
