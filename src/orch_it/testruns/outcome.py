@@ -20,8 +20,10 @@ the same report.
 
 A requested id matches a case by its test id (`<classname>::<name>`, as `test.result` writes
 it), by a pytest node id (`tests/test_x.py::TestC::test_y[a::b]` is
-`tests.test_x.TestC::test_y[a::b]`), or, with no `::`, as a file, module, package or suite:
-every case whose classname is it or under it.
+`tests.test_x.TestC::test_y[a::b]`), or, with no `::`, as a file, folder, module, package or
+suite: every case whose classname is it or under it. A runner that is not pytest is asked by its
+own test ids as `test.result` writes them (a jest file path or a Maven `Class#method` names
+nothing its report holds, so it reads as not collected). Blank ids are no ids.
 """
 
 from __future__ import annotations
@@ -108,27 +110,35 @@ def judge(report_path: Path | None, *, requested_ids: list[str] | None = None,
 
 def _not_collected(requested: list[str], cases: tuple[junit.Case, ...]) -> tuple[str, ...]:
     ids = {case.test_id for case in cases}
-    classnames = {case.classname for case in cases}
+    prefixes = set()  # every classname and each dotted head of it: `a.b.c` gives a, a.b, a.b.c
+    for classname in {case.classname for case in cases}:
+        parts = classname.split(".")
+        prefixes.update(".".join(parts[:n]) for n in range(1, len(parts) + 1))
     missing = []
     for wanted in requested:
+        wanted = wanted.strip()
+        if not wanted:
+            continue
         if "::" in wanted:
             if wanted not in ids and _from_node_id(wanted) not in ids:
                 missing.append(wanted)
             continue
-        prefix = _module_of(wanted)
-        if wanted in ids or any(c == prefix or c.startswith(prefix + ".") for c in classnames):
+        if wanted in ids or wanted in prefixes or _module_of(wanted) in prefixes:
             continue
         missing.append(wanted)
     return tuple(dict.fromkeys(missing))
 
 
 def _module_of(path: str) -> str:
-    """`tests/sub/test_x.py` -> `tests.sub.test_x` (pytest's classname of a file); any other
-    text unchanged."""
+    """A file or folder as pytest's classname of it: `./tests/sub/test_x.py` and `tests\\sub\\`
+    give `tests.sub.test_x` and `tests.sub`."""
 
-    if not path.endswith(".py"):
-        return path
-    return path[:-3].replace("\\", "/").strip("/").replace("/", ".")
+    path = path.replace("\\", "/").strip("/")
+    while path.startswith("./"):
+        path = path[2:]
+    if path.endswith(".py"):
+        path = path[:-3]
+    return path.replace("/", ".")
 
 
 def _split_node_id(node_id: str) -> list[str]:

@@ -3,6 +3,8 @@
 Each case writes a small report by hand, the way pytest writes one, and asks `judge` for the
 run's outcome and reason; the expected values are the decision's table."""
 
+import time
+
 from orch_it.events import schema
 from orch_it.testruns.outcome import judge
 
@@ -81,6 +83,27 @@ def test_requested_ids_match_by_pytest_node_id_and_by_bare_file(tmp_path):
         "tests/sub/test_more.py",                   # a bare file: every test of it
         "tests.test_math::test_adds"])              # a test id as test.result writes it
     assert (end.outcome, end.reason, end.missing_ids) == ("passed", None, ())
+
+
+def test_requested_folders_and_dot_slash_paths_match_their_tests(tmp_path):
+    path = report(tmp_path, passing("test_p", "tests.my.pkg.test_p"), passing("test_adds"))
+    end = judge(path, requested_ids=["tests/my.pkg", "tests/my.pkg/", "tests\\my.pkg",
+                                     "./tests/test_math.py", "./tests/test_math.py::test_adds", "tests"])
+    assert (end.outcome, end.missing_ids) == ("passed", ())
+
+
+def test_blank_requested_ids_are_no_ids(tmp_path):
+    end = judge(report(tmp_path, passing("test_adds")), requested_ids=["", "   ", "tests.test_math::test_adds"])
+    assert (end.outcome, end.missing_ids) == ("passed", ())
+
+
+def test_many_unmatched_ids_over_many_suites_are_checked_quickly(tmp_path):
+    cases = [passing("t", f"pkg{i}.mod") for i in range(20_000)]
+    path = report(tmp_path, *cases)
+    started = time.monotonic()
+    end = judge(path, requested_ids=[f"other{i}" for i in range(2_000)])
+    assert end.reason == "ids_not_collected" and len(end.missing_ids) == 2_000
+    assert time.monotonic() - started < 10
 
 
 def test_a_bare_file_with_no_test_collected_is_not_collected(tmp_path):

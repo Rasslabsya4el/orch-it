@@ -70,6 +70,41 @@ def test_a_report_that_cannot_be_read_whole_is_refused_with_its_code(tmp_path, t
     assert refused.value.code == code
 
 
+@pytest.mark.parametrize("encoding", ["gbk", "nope"])
+def test_a_report_in_an_encoding_the_parser_cannot_read_is_broken(tmp_path, encoding):
+    path = tmp_path / "r.xml"
+    path.write_bytes(f'<?xml version="1.0" encoding="{encoding}"?><testsuite/>'.encode())
+    with pytest.raises(junit.ReportUnreadable) as refused:
+        junit.read(path)
+    assert refused.value.code == "broken"
+
+
+@pytest.mark.parametrize("time", ["1e306", "1e20", "1,5", "1_0"])
+def test_an_absurd_or_ambiguous_time_is_unknown(tmp_path, time):
+    path = write(tmp_path, f'<testsuite><testcase name="a" time="{time}"/></testsuite>')
+    [case] = junit.read(path)
+    assert case.seconds is None
+    assert case.result_detail(1)["ms"] is None
+
+
+def test_a_huge_name_is_cut_to_a_bounded_test_id(tmp_path):
+    path = write(tmp_path, f'<testsuite><testcase classname="{"c" * 50_000}" name="{"n" * 50_000}"/></testsuite>')
+    [case] = junit.read(path)
+    assert len(case.test_id) <= 2 * junit.NAME_CHARS + 2
+
+
+def test_a_suite_level_error_is_a_red_case(tmp_path):
+    path = write(tmp_path, '<testsuites><testsuite name="calc.test.js"><error message="Cannot find module"/>'
+                           '</testsuite><testsuite name="ok"><testcase name="a"/></testsuite></testsuites>')
+    assert outcomes(path) == [("calc.test.js::(suite)", "error"), ("a", "passed")]
+
+
+def test_a_suite_declaring_more_failures_than_its_cases_show_gets_a_red_case(tmp_path):
+    path = write(tmp_path, '<testsuite name="s" failures="2" errors="1"><testcase name="a"><failure/></testcase>'
+                           '<testcase name="b"/></testsuite>')
+    assert outcomes(path) == [("a", "failed"), ("b", "passed"), ("s::(suite)", "error")]
+
+
 def test_a_missing_report_is_refused_as_missing(tmp_path):
     with pytest.raises(junit.ReportUnreadable) as refused:
         junit.read(tmp_path / "gone.xml")
