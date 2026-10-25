@@ -1,7 +1,7 @@
 # orch-it
 
-The orchestration layer: Claude sessions, scripts and GitHub working tickets in a repo. Everything the layer does is
-recorded as events, so its work is read and fixed from the record, never from a new hand measurement.
+The orchestration layer: Claude sessions, scripts and GitHub working tickets in a repo. Its work is read and fixed
+from its events, never from a new hand measurement.
 
 ## Events
 
@@ -10,39 +10,39 @@ One fact of the layer's work at one moment, written once and never changed.
 _Avoid_: log line, record, entry
 
 **Kind**:
-The name of what an event is, `<noun>.<verb_past>` in lower case, from a closed list.
+The name of what an event is, one of a closed list.
 _Avoid_: type, event type, category
 
 **Envelope**:
-The fields every event carries whatever its kind: who, where, when, about which repo and ticket.
+The fields every event has whatever its kind.
 _Avoid_: header, metadata, common fields
 
 **Detail**:
-The fields of an event beyond its envelope, particular to its kind; a writer may add one without changing the store.
+The fields of an event beyond its envelope, particular to its kind; their set stays open.
 _Avoid_: payload, data, extra
 
 **Step pair**:
-A step that takes time, written as two events, its start and its end, sharing one step id.
+The two events of a step that takes time, its start and its end, under one step id.
 _Avoid_: span, interval, duration event
 
 **Outcome**:
-How a step pair ended, one of a closed set of six: passed, failed, no_result, refused, lost, stopped.
+How a step ended, one of a closed set.
 _Avoid_: status, result, verdict
 
 **Reason code**:
-A word from a closed list written next to its field, saying why; free text never stands in for one.
+A word from the closed list beside a field, saying why.
 _Avoid_: reason text, cause, message
 
 ## Storage
 
 **Store**:
-All the events of one machine, for every repo on it, kept as files only ever appended to.
-_Avoid_: database, log, event log
+All the events of one machine, for every repo on it.
+_Avoid_: database, event log
 
 **Writer**:
-One process appending events to its own file of the store.
+One process that adds events to the store.
 _Avoid_: producer, emitter, logger
 
 **Index**:
-A queryable copy of the store, rebuilt from the store's files whenever it is lost.
-_Avoid_: database, cache table, read model
+The queryable copy of a store, derived from it alone.
+_Avoid_: cache table, read model

@@ -117,7 +117,11 @@ def _upsert_sql() -> str:
 
 
 def _schema_key() -> str:
-    return hashlib.sha256("\n".join(_schema_sql()).encode("utf-8")).hexdigest()
+    """The table definitions and the closed sets together: a change of either rebuilds the
+    index, so every line is checked again against the sets in force."""
+
+    closed_sets = json.dumps(schema._sets(), sort_keys=True)
+    return hashlib.sha256("\n".join([*_schema_sql(), closed_sets]).encode("utf-8")).hexdigest()
 
 
 def utc_at(at: str) -> str:
