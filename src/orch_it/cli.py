@@ -18,7 +18,7 @@ from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
-from orch_it.testruns.runner import RunError, git_output, run_tests
+from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
@@ -116,7 +116,7 @@ def _parser() -> argparse.ArgumentParser:
 
     tests = commands.add_parser("tests", help="test runs").add_subparsers(dest="command", required=True)
     p = tests.add_parser("run", parents=[common], help="run the repo's tests at a test place")
-    p.add_argument("--os", default="any", choices=["any", "linux", "windows", "macos"],
+    p.add_argument("--os", default="any", choices=NEED_OSES,
                    help="the OS the run needs (default: any)")
     p.add_argument("--ids-file", metavar="PATH", help="run only the tests named in this file")
     p.add_argument("--place", help="force a place (own, machine:<id>, github); default: the place rule")

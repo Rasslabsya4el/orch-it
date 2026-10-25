@@ -6,7 +6,7 @@ start overheads of the place's last 10 ended runs)."""
 from datetime import UTC, datetime, timedelta
 
 from orch_it.events.store import Store
-from orch_it.testruns.place_rule import LIVE_GRACE_MINUTES, MEASURED_RUNS, read_facts
+from orch_it.testruns.place_rule import LIVE_GRACE_MINUTES, Measured, read_facts
 
 REPO = "Rasslabsya4el/orch-it"
 NOW = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
@@ -23,11 +23,13 @@ class Runs:
         self.n = 0
 
     def add(self, place, *, ago=30, outcome="passed", run_minutes=5.0, start_minutes=1.0,
-            repo=REPO, selection="full", run_os="linux", ended=True, bound=15):
+            repo=REPO, selection="full", run_os="linux", ended=True, bound=15, machine=None):
         self.n += 1
         envelope = {"repo": repo, "ticket": None, "role": "script", "session": None,
                     "parent_session": None, "turn": None, "step": "test_run", "run": f"r{self.n}",
                     "note": None}
+        if machine:
+            envelope["machine"] = machine
         self.writer.write(envelope | {"kind": "step.started", "at": at(ago), "detail": {
             "place": place, "selection": selection, "run_os": run_os, "bound_minutes": bound}})
         if ended:
@@ -90,5 +92,29 @@ def test_an_empty_store_gives_no_live_run_and_no_measurement(tmp_path):
     assert Runs(tmp_path).facts() == ({}, {})
 
 
-def test_the_window_sizes_are_the_decision_s():
-    assert MEASURED_RUNS == 10
+def test_absurd_numbers_in_the_store_are_no_measurement_and_no_bound(tmp_path):
+    runs = Runs(tmp_path)
+    runs.add("own", ago=5, ended=False, bound=1e300)  # read as the default bound: still live
+    runs.add("github", run_minutes=1e308, start_minutes=10 ** 400)
+    runs.add("github", run_minutes=3.0, start_minutes=1.0)
+    live, measured = runs.facts()
+    assert live == {"own": 1}
+    assert measured["github"] == Measured((1.0,), (3.0,))
+
+
+def test_a_start_dated_in_the_future_is_no_live_run(tmp_path):
+    runs = Runs(tmp_path)
+    runs.add("own", ago=-2 * 24 * 60, ended=False)
+    runs.add("own", ago=-(LIVE_GRACE_MINUTES - 1), ended=False)  # a little clock skew is live
+    assert runs.facts()[0] == {"own": 1}
+
+
+def test_another_machine_s_own_runs_are_neither_live_here_nor_measured_here(tmp_path):
+    runs = Runs(tmp_path)
+    runs.add("own", ago=5, ended=False, machine="ffffffffffffffff")
+    runs.add("own", ago=30, run_minutes=99.0, machine="ffffffffffffffff")
+    runs.add("own", ago=40, run_minutes=4.0)
+    runs.add("machine:box", ago=5, ended=False, machine="ffffffffffffffff")  # a shared place
+    live, measured = runs.facts()
+    assert live == {"machine:box": 1}
+    assert measured["own"].runs == (4.0,)

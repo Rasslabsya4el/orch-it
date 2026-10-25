@@ -111,6 +111,11 @@ CASES = [
      {"own": OWN_12, "machine:box": Measured((0.0,), (1.0,))}, {},
      "own", "earliest_finish",
      [("own", 12.0, None), ("machine:box", None, "busy")]),
+    # 17. box has measured runs but no measured start: start 0 + run 4 = 4; own 12: box
+    ("a place with runs but no measured start starts at 0", "linux", [OWN, BOX], {},
+     {"own": OWN_12, "machine:box": Measured((), (4.0,))}, {},
+     "machine:box", "earliest_finish",
+     [("own", 12.0, None), ("machine:box", 4.0, None)]),
 ]
 
 
