@@ -110,7 +110,10 @@ def test_a_place_that_refused_busy_or_has_no_capacity_is_not_waited_for(tmp_path
         done = run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=settings, places=places,
                          sleep=sleeps.append)
         assert (done.outcome, sleeps) == ("refused", [])
-        assert store.query("SELECT count(*) FROM events WHERE step = 'wait'").rows == [(0,)]
+        # no place left still writes its wait on test_place (decision 5), ended at once
+        assert store.query("SELECT reason FROM events WHERE step = 'wait' AND kind = 'step.started'").rows == [
+            ("test_place",)]
+        assert ends(store, "wait") == [("no_result", None)]
 
 
 def test_a_wait_stopped_by_a_person_is_ended_stopped(tmp_path):

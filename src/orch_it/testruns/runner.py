@@ -117,9 +117,9 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     """One run of the repo's test command at the place the rule picks (or `place`, forced).
     `places` maps a place id to its adapter (default: the own place). A place lost or refusing
     mid-run is left out and the rule picks again, until a place finishes the run or none is
-    left. With no place left and one of them busy, the run waits on `test_place` up to
-    `wait_minutes` (default: the bound), re-deciding every `WAIT_POLL_SECONDS`; giving up, or no
-    busy place to wait for, ends it `refused`."""
+    left. No place left writes a `wait` on `test_place`: while a place it can free is busy it
+    lasts up to `wait_minutes` (default: the bound), re-deciding every `WAIT_POLL_SECONDS`, else
+    it ends at once; a wait that finds no place ends the run `refused`."""
 
     work_tree = Path(work_tree)
     if not work_tree.is_dir():
@@ -140,8 +140,10 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
         last = None
         while True:
             decision = run.decide(excluded)
-            if decision.chosen is None and run.may_free(decision, excluded):
-                decision = run.wait(writer, excluded, _polls(settings, wait_minutes), sleep)
+            if decision.chosen is None:  # no place left: a wait on test_place, polled only while
+                # a place it can free is busy, else ended at once
+                polls = _polls(settings, wait_minutes) if run.may_free(decision, excluded) else 0
+                decision = run.wait(writer, excluded, polls, sleep)
             if decision.chosen is None:
                 # after a lost or refused attempt, that attempt ends the run; else one refusal
                 return last if last is not None else run.refused(writer, decision)
