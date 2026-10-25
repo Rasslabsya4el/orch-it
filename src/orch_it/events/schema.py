@@ -44,6 +44,12 @@ _AT_NO_ZONE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?")
 _MAX_TICKET = 2**63 - 1
 
 
+def is_repo(text: object) -> bool:
+    """Whether `text` is a repo as the envelope writes it: `owner/name`."""
+
+    return isinstance(text, str) and _REPO.fullmatch(text) is not None
+
+
 class EventError(ValueError):
     """An event outside the closed sets. `code` is one of `ERROR_CODES`; `field` names the
     offending field (dotted for a detail field) or is None. The offending value is never part
