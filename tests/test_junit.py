@@ -113,7 +113,7 @@ def test_a_missing_report_is_refused_as_missing(tmp_path):
     assert refused.value.code == "missing"
 
 
-@pytest.mark.slow
+@pytest.mark.slow  # nightly only: it writes and reads a report of some 40 MB
 def test_a_report_of_half_a_million_cases_is_read_whole_in_under_a_minute(tmp_path):
     path = tmp_path / "huge.xml"
     with open(path, "w", encoding="utf-8") as f:
