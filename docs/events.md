@@ -63,6 +63,9 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `release_reason` | `closed`, `parked`, `handed_off`, `session_ended` |
 | `park_on` | `pr_ended`, `ticket_closed`, `date`, `run_ended`, `owner_answer`, `layer_version` |
 | `unpark_by` | `event`, `hand` |
+| `wait_end_reason` | `kind_unknown`, `ref_bad`, `until_bad`, `date_after_until`, `until_past`, `ticket_missing`, `ticket_not_open`, `already_parked`, `ref_missing`, `ref_not_pr`, `ref_not_ticket`, `ref_self`, `ref_parent`, `event_passed`, `park_mismatch`, `ticket_changed`, `body_too_long`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
+| `park_return` | `due`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
+| `park_unreadable` | `line_missing`, `line_bad`, `lines_many`, `label_missing`, `ref_missing` |
 | `comment_kind` | `checkpoint`, `send_back`, `accepted`, `owner_answer`, `brain_answer`, `resolution`, `closing`, `machine` |
 | `close_via` | `close_command`, `github_keyword`, `manual` |
 | `state_reason` | `completed`, `not_planned` |
@@ -85,7 +88,7 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 |---|---|---|---|
 | `session` | `model`, `effort`, `agent_file`, `title`, `launched_by` (`launched_by`) | `reason` (`session_end_reason`), `held_tickets`, `checkpoint_written` | cost and time per session; why it ended; tickets left held by a dead session |
 | `subagent` | `model`, `effort`, `agent_file`, `title`, `launched_by` (`launched_by`), `unit`, `worktree`, `prompt_has`, `prompt_chars` | `reason` (`session_end_reason`), `held_tickets`, `checkpoint_written`, `delivered` (`delivered`), `report_lines_owed`, `report_lines_present` | does a delegation give the subagent what it needs; subagents with no report |
-| `wait` | `reason` (`wait_reason`), `on` | none | where the hours go between steps |
+| `wait` | `reason` (`wait_reason`), `on` | `reason` (`wait_end_reason`) | where the hours go between steps |
 | `test_run` | `place` (`place`), `selection`, `commit`, `branch`, `pr`, `workers`, `settings_hash`, `part`, `run_os` (`test_os`), `places_offered`, `chosen` (`place`), `reason` (`place_reason`) | `reason` (`test_run_reason`), `collected`, `passed`, `failed`, `skipped`, `summary_seen`, `billed_minutes`, `start_minutes`, `run_minutes` | did the tests run where and on what; a cut run is no_result, never red |
 | `review` | `axis` (`review_axis`), `unit`, `diff_ref` | `findings`, `fixed` | review cost and yield per axis |
 | `unit` | `unit`, `assigned_role` (`role`), `model` | `commit`, `note_present`, `reason` (`unit_reason`) | a unit's life from assignment to hand-back or send-back |
@@ -136,8 +139,8 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `ticket.claimed` | `weight`, `capacity_used` | who holds what; turns split across held tickets |
 | `ticket.released` | `reason` (`release_reason`) | a ticket freed and why |
 | `ticket.parked` | `on` (`park_on`), `on_ref`, `until` | a parked ticket and the one event that returns it |
-| `ticket.unparked` | `by` (`unpark_by`), `on_ref`, `late_minutes` | how late a return came |
-| `park.unreadable` | `reason` | a park nobody can return |
+| `ticket.unparked` | `by` (`unpark_by`), `on_ref`, `late_minutes`, `returned_as` (`park_return`) | how late a return came |
+| `park.unreadable` | `reason` (`park_unreadable`) | a park nobody can return |
 | `comment.written` | `comment_kind` (`comment_kind`) | the state that lives in comment text |
 | `attempt.counted` | `reason`, `counted`, `in_a_row` | failed attempts, and which were not the ticket's fault |
 | `ticket.closed` | `via` (`close_via`), `state_reason` (`state_reason`), `rows_total`, `rows_passed`, `comments_unanswered` | closes past the acceptance check |
@@ -212,6 +215,10 @@ It prints one line per hit, `<sha12> <where> <file or ->:<line or -> <kind>` (th
 `python -m orch_it hook pre-tool-use`: the Claude Code PreToolUse guard. It reads the hook's JSON on stdin (the tool, its command, the session id and the cwd), reads the command into its delete, move and stop actions, judges each against the object (the real path against the repo's worktrees, the real process tree), writes a `guard.fired` per triggered action, and prints the deny decision that refuses the tool call when one is refused; a guard that crashes lets the call through and writes `error.raised` with `failed_open`. It is wired in orch-it's `.claude/settings.json` for the Bash and PowerShell tools.
 
 `python -m orch_it labels sync [--repo R]`: make the repo's labels match the layer's set (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `parked`, `priority`, each with a colour and description from `labels/labels.json`; default repo the work tree's GitHub origin): a missing label is created, one with another colour, description or letter case is updated, an equal one is kept, every other label is listed `foreign` and never changed or deleted; prints `label`, `action` rows.
+
+`python -m orch_it [--store PATH] tickets park <n> <kind> <ref> --until <YYYY-MM-DD> [--repo R] [--role script]`: the one way a ticket is parked: the line `Parked: <kind> <ref> until <date>` (kind one of `park_on`) and the `parked` label in one write, every other label kept; a park that could never return is refused with a `wait_end_reason` code and writes a `wait` pair ended `refused`; a park writes `ticket.parked` and starts its `wait` (run `park:<repo>#<n>@<label time>`). `tickets unpark <n> [--repo R] [--role script]` takes line and label off together (`ticket.unparked` by `hand`).
+
+`python -m orch_it [--store PATH] tickets parks [--repo R] [--role script]`: the one reader (the setting `owner_login` names whose comment answers an `owner_answer` park, default the repo owner): every open ticket with the `parked` label, reported `waiting`, `due` (back to its queue), `other_way`, `late`, `comment`, `unreadable` (each to the brain: `needs-triage` and a comment) or `failed` (read again next run); writes the end of each `wait`, `ticket.unparked`, `park.unreadable` or a `step.progressed`.
 
 `python -m orch_it [--store PATH] skills shadowed`: the SessionStart hook of `.claude/settings.json`. It reads the hook's JSON from stdin, compares the project's skills (`CLAUDE_PROJECT_DIR`, else the work tree around `cwd`) with the personal ones (`$CLAUDE_CONFIG_DIR/skills`, default `~/.claude/skills`), letter case aside, and writes one `skill.shadowed` per clash: `copy` true for his copy, false for ours, null when the manifest cannot be read; `same_text` when the two `SKILL.md` are byte-equal. A resumed or compacted session writes nothing new. It prints nothing and exits 0 whatever happens, an error on stderr.
 
