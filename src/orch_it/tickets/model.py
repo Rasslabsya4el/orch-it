@@ -40,6 +40,7 @@ _AFTER_MERGE = "after merge"
 _NOT_IN_HEADING = "not in this ticket"
 _NONE = re.compile(r"none\b\s*(?:\((?P<paren>.*)\)\s*\.?|[-–—:,;]\s*(?P<after>.*)|\.?)",
                    re.IGNORECASE | re.DOTALL)
+_LINE_ENDS = re.compile(r"(?<=\n)|(?<=\r)(?!\n)")
 _WEIGHT = re.compile(r"([0-9]{1,3})(?:\s.*)?", re.DOTALL)  # ASCII digits only
 
 
@@ -153,6 +154,19 @@ def _label_names(labels: object) -> frozenset[str]:
     except TypeError:  # not iterable
         pass
     return frozenset(names)
+
+
+def without_park_lines(body: str) -> str:
+    """The body with its `Parked:` lines (those `parse` reads: outside fenced code) and the blank
+    lines that then open it taken out; every other line kept as written, its line end too."""
+
+    lines = _LINE_ENDS.split(body.removeprefix("﻿"))  # each line with its own end: \r\n, \n or \r
+    plain = _outside_fences([line.rstrip("\r\n") for line in lines])
+    gone = {i for i, line in plain if line.strip().startswith(PARK_PREFIX)}
+    kept = [line for i, line in enumerate(lines) if i not in gone]
+    while kept and not kept[0].strip():
+        kept.pop(0)
+    return "".join(kept)
 
 
 def none_reason(text: str | None) -> str | None:
