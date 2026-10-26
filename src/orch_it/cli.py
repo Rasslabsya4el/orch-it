@@ -189,6 +189,8 @@ def _parser() -> argparse.ArgumentParser:
                              help="the PreToolUse guard; reads the hook's JSON on stdin")
     hook_commands.add_parser("subagent-stop", parents=[common],
                              help="the SubagentStop hold of report lines; reads the hook's JSON on stdin")
+    hook_commands.add_parser("prompt-submit", parents=[common],
+                             help="the UserPromptSubmit check of a session's context line; reads the hook's JSON")
     p = hook_commands.add_parser("pre-push", parents=[common],
                                  help="the git pre-push guard; git passes the remote's name and url "
                                       "and writes the refs on stdin")
@@ -360,6 +362,14 @@ def _guards_install(args) -> tuple[str, int]:
 
 
 def _hook(args) -> tuple[str, int]:
+    if args.command == "prompt-submit":
+        try:  # a prompt is never stopped by this check, whatever goes wrong
+            from orch_it.roles.context import run_prompt_submit
+
+            raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+            return run_prompt_submit(raw, open_store=lambda: _store(args))
+        except Exception:
+            return "", 0
     if args.command == "subagent-stop":
         # the hold never blocks a stop by an error: whatever goes wrong lets the stop through
         try:

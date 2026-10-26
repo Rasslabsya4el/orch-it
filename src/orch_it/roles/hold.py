@@ -82,7 +82,7 @@ class TranscriptUnreadable(Exception):
     """The subagent's transcript cannot be read at all: the stop goes through with an event."""
 
 
-def _records(path: str) -> list[dict]:
+def transcript_records(path: str) -> list[dict]:
     """The transcript's JSON objects; a half-written, broken or too deeply nested line is skipped."""
 
     records = []
@@ -190,7 +190,7 @@ def _report_lines(text: str) -> list[str]:
     return kept
 
 
-def _context(records: list[dict]) -> int:
+def largest_prompt(records: list[dict]) -> int:
     largest = 0
     for record in records:
         message = record.get("message")
@@ -234,12 +234,12 @@ def judge(payload: dict, roles: RoleSet, *, work_tree: str | Path | None = None)
     agent = payload.get("agent_type")
     role = agent.rsplit(":", 1)[-1] if isinstance(agent, str) else None
     role_settings = roles.roles.get(role) if role else None
-    if role_settings is None or role_settings.report is None:
+    if role_settings is None or role_settings.report is None or not role_settings.inputs:  # a session is no subagent
         return None
     path = payload.get("agent_transcript_path")
     if not isinstance(path, str) or not path:
         raise TranscriptUnreadable("no transcript path")
-    records = _records(path)
+    records = transcript_records(path)
     rule = role_settings.report
     cwd = work_tree or payload.get("cwd")
     worktree = Path(cwd) if isinstance(cwd, (str, Path)) and str(cwd) else None
@@ -247,7 +247,7 @@ def judge(payload: dict, roles: RoleSet, *, work_tree: str | Path | None = None)
     uses = _tool_uses(records)
     called = _skills(uses)
     edits = _code_edits(uses, worktree)
-    verdict = Verdict(role, _spawn_run(records), context_tokens=_context(records))
+    verdict = Verdict(role, _spawn_run(records), context_tokens=largest_prompt(records))
     claims = _claims(_report_lines(final))
     verdict.present = [label for label in claims if label != "table"]
     for label, values in claims.items():
