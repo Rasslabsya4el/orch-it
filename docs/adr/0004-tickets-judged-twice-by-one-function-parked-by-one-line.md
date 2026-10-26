@@ -1,4 +1,4 @@
-# A ticket is judged by one shape function in the session and on GitHub, and parked by one line that one command writes and one reader reads
+# A ticket is judged by one shape function twice, and a park is one line with one reader
 
 A ticket's form is judged by one function, `orch_it.tickets.violations`, at two places: a PreToolUse hook refuses a
 `gh issue create` or `gh issue edit` with any violation (and a create in a session that never called the

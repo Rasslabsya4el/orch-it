@@ -72,23 +72,23 @@ _Avoid_: timeout, limit, deadline
 ## Tickets
 
 **Ticket**:
-One GitHub issue written in the layer's form: a human block, then an agent block.
-_Avoid_: issue (for the form), task, card
+One issue of a repo written in the layer's form: a human block, then an agent block.
+_Avoid_: task, card, story
 
 **Human block**:
-The five Russian lines a person decides from: What, Goal, Plan, Result, Undo.
-_Avoid_: summary, TL;DR, header
+The five lines a person decides from, in the owner's language: what changes, the goal, the plan, the result, the undo.
+_Avoid_: summary, TL;DR, abstract
 
 **Agent block**:
 The spec an agent works from: facts with their sources, the rule, the acceptance rows and the line fields.
-_Avoid_: description, details, body
+_Avoid_: description, body, spec section
 
 **Acceptance row**:
-One check of a ticket with what passing it means, in the ticket's acceptance table.
+One check of a ticket with what passing it means.
 _Avoid_: criterion, test case, requirement
 
 **After merge**:
-The mark of an acceptance row that can only be checked once the change is on `main`.
+The mark of an acceptance row that can only be checked once the change is on the main line.
 _Avoid_: post-merge check, deferred row
 
 **Outside case**:
@@ -100,33 +100,37 @@ The writer's account of every other part that acts on what the change touches, a
 _Avoid_: dependencies, impact, side effects
 
 **Weight**:
-How much work a ticket is, a whole number from 1 to 10.
+How much work a ticket is, on a scale from 1 to 10.
 _Avoid_: size, estimate, points
 
 **Shape rule**:
-One rule a ticket's form must keep, with the code that names it; one function holds them all.
+One rule a ticket's form must keep before an agent may take it.
 _Avoid_: lint, validation, template check
 
 **Violation**:
-One shape rule a ticket breaks, with its code and where.
+One shape rule a ticket breaks.
 _Avoid_: error, problem, finding
 
-**Ready label**:
-`ready-for-agent`: the label that offers a ticket to agents, and the moment its shape is judged on GitHub.
+**Ready**:
+A ticket offered to agents; making a ticket ready is the moment its shape is judged again.
 _Avoid_: approved, open for work
 
 **Label set**:
-The labels every repo of the layer carries, each with its colour and meaning.
+The labels every repo of the layer carries, each with one meaning.
 _Avoid_: label config, taxonomy
 
 **Park**:
-A ticket waiting on one named event until a date, and back to its queue or to the brain when it comes.
-_Avoid_: block, hold, snooze, wait (for a ticket)
+A ticket's wait on one named event until a last day, after which it goes back to its queue or to triage.
+_Avoid_: block, hold, snooze
+
+**Park kind**:
+Which event a park waits on: a pull request ending, a ticket closing, a day, a run ending, the owner's answer, a layer version.
+_Avoid_: park type, trigger
 
 **Park line**:
-The one line at the top of a parked ticket naming its event and its date, written only with the `parked` label.
+The one line at the top of a parked ticket naming its park, written and removed only together with the parked label.
 _Avoid_: parked note, wait marker
 
-**Reader** (of parks):
-The one command that reads every park and returns, sends to the brain or leaves waiting each ticket.
+**Park reader**:
+The one reader that looks at every park and returns, sends to triage or leaves waiting each parked ticket.
 _Avoid_: unparker, dispatcher, poller
