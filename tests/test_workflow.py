@@ -243,3 +243,23 @@ def test_the_scan_step_passes_a_pull_request_whose_own_commits_are_clean(tmp_pat
     repo, base, head = pull_request_with(tmp_path, {"notes.txt": "fine\nuses: actions/checkout@v4\n"})
     done = run_scan_step(tmp_path, repo, base, head)
     assert (done.returncode, done.stdout) == (0, "hits=0 commits=1\n"), done.stderr
+
+
+# a default host name, put together at run time so none stands in this committed file
+DEFAULT_HOST_NAME = "WI" + "N-OHK3JQ5AM84"
+
+
+def test_the_scan_step_fails_on_a_pull_request_that_adds_a_default_host_name_without_printing_it(tmp_path):
+    repo, base, head = pull_request_with(tmp_path, {
+        "run.xml": f'<testsuite name="x"\n  hostname="{DEFAULT_HOST_NAME}" tests="1"/>\n'})
+    done = run_scan_step(tmp_path, repo, base, head)
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert done.stdout == f"{head[:12]} content run.xml:2 host_name\nhits=1 commits=1\n"
+    assert DEFAULT_HOST_NAME not in done.stdout + done.stderr
+
+
+def test_the_scan_step_passes_names_that_only_look_like_a_default_host_name(tmp_path):
+    lookalikes = f"WINDOWS and desktop and WIN-abc and MY-{DEFAULT_HOST_NAME} and Win-Server\n"
+    repo, base, head = pull_request_with(tmp_path, {"notes.txt": lookalikes})
+    done = run_scan_step(tmp_path, repo, base, head)
+    assert (done.returncode, done.stdout) == (0, "hits=0 commits=1\n"), done.stderr
