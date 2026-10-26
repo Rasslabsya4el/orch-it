@@ -74,7 +74,8 @@ def refers_to(body: str) -> int | None:
 
 
 def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: str, branch: str, base: str,
-            git: Git, settings: MergeSettings, now: datetime, role: str = ROLE) -> Opened:
+            git: Git, settings: MergeSettings, now: datetime, role: str = ROLE, notes: str = "") -> Opened:
+    """`notes`: ORCH's report lines, put in the body of a pull request it opens, under its rows."""
     for name in (branch, base):
         if not branch_ok(name):
             raise PrError("branch_bad", f"{name[:60]!r} is no branch name git would read as one")
@@ -109,7 +110,7 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
         measured = git(["rev-parse", "--verify", "--end-of-options", f"{branch}^{{commit}}"]).strip()
     except GitError as e:
         raise PrError("git_failed", str(e)) from None
-    texts = [messages, issue.title, *((mine.title, mine.body) if mine else ())]
+    texts = [messages, issue.title, notes, *((mine.title, mine.body) if mine else ())]
     closing = [found for text in texts for found in marks.closing_keywords(text)]
     if closing:
         raise PrError("closing_keyword", f"{', '.join(dict.fromkeys(closing))}: write `Refs #{number}`")
@@ -119,7 +120,8 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
         raise PrError("push_failed", str(e)) from None
 
     reused = mine is not None
-    pr = mine.number if reused else hub.create_pull(repo, base, branch, issue.title, _pr_body(number, issue.title, rows))
+    pr = mine.number if reused else hub.create_pull(repo, base, branch, issue.title,
+                                                    _pr_body(number, issue.title, rows, notes))
     pull = hub.pull(repo, pr)
     if pull is None or pull.head_sha != measured:
         # the rows were measured on the work tree's head; another one would land unmeasured
@@ -194,7 +196,8 @@ def _parked_on(lines: tuple[str, ...], repo: str, mine: Pull | None) -> bool:
     return mine is not None and ref is not None and ref.names(repo, mine.number, repo)
 
 
-def _pr_body(number: int, title: str, rows: list[marks.ResultRow]) -> str:
+def _pr_body(number: int, title: str, rows: list[marks.ResultRow], notes: str) -> str:
     table = "".join(f"| {row.id} | {row.result} |\n" for row in rows)
+    tail = f"\n{notes.strip()}\n" if notes.strip() else ""
     return (f"Refs #{number}\n\n{title}\n\nThe acceptance rows, checked before this pull request "
-            f"(the ticket's acceptance comment holds their evidence):\n\n| row | result |\n|---|---|\n{table}")
+            f"(the ticket's acceptance comment holds their evidence):\n\n| row | result |\n|---|---|\n{table}{tail}")
