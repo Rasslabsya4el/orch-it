@@ -34,6 +34,7 @@ class Simple:
     stdin: str | None = None        # the heredoc body fed to it, if any
     stdin_to_shell: bool = False    # its heredoc line pipes into a shell, which runs the body
     text: str = ""                  # the segment as written (heredoc markers removed)
+    redirects: list = field(default_factory=list)  # `>` targets that overwrite (None: unreadable)
 
 
 # a command nested deeper than this (substitutions or `-c` wrappers inside one another) is read
@@ -106,6 +107,7 @@ class _PosixSplit:
             self._simple(segment)
 
     def _simple(self, segment: str) -> None:
+        extra_subs: list[Simple] = []
         if segment[:1] == "(" and segment[-1:] == ")":
             if self.walker.depth >= MAX_DEPTH:
                 self.walker.out.append(_too_deep(self.cwd, "posix"))  # nested too deep to follow
@@ -126,8 +128,17 @@ class _PosixSplit:
             # delete in a function defined and then called cannot hide
             self._simple(defined.group("body"))
             return
-        tokens = _posix_tokens(segment)
+        raw_redirects: list[str] = []
+        tokens = _posix_tokens(segment, raw_redirects)
+        written: list[str | None] = []
+        for raw in raw_redirects:
+            text, redirect_subs = self._expand_word(raw)
+            written.append(text)
+            extra_subs += redirect_subs
         if not tokens:
+            if written or extra_subs:  # `> file` alone empties the file
+                self.walker.out.append(Simple([], self.cwd, "posix", extra_subs, None, False,
+                                              _HD_FIND.sub("", segment), written))
             return
         held = [self.heredocs[int(k)] for k in _HD_FIND.findall(segment)
                 if int(k) < len(self.heredocs)]
@@ -137,6 +148,7 @@ class _PosixSplit:
         if not rest:
             return
         words, subs = self._expand_all(rest)
+        subs += extra_subs
         if words and words[0] is not None:
             head = words[0]
             name = posixpath.basename(head)
@@ -153,7 +165,7 @@ class _PosixSplit:
         self.walker.out.append(Simple(
             words, self.cwd, "posix", subs,
             "\n".join(h.body for h in held) if held else None,
-            any(h.to_shell for h in held), _HD_FIND.sub("", segment)))
+            any(h.to_shell for h in held), _HD_FIND.sub("", segment), written))
 
     def _change_dir(self, words: list[str | None]) -> None:
         args = words[1:]
@@ -293,7 +305,7 @@ class _WindowsSplit:
                 return
             if name in ("popd", "pop-location"):
                 return
-        self.walker.out.append(Simple(words, self.cwd, "windows"))
+        self.walker.out.append(Simple(words, self.cwd, "windows", text=segment))
 
     def _change_dir(self, words: list[str | None]) -> None:
         target = next((w for w in words[1:] if not (w or "").startswith(("-", "/"))), None)
@@ -504,6 +516,8 @@ def _split_top(command, operators, *, quotes, expansions, windows) -> list[str]:
             continue
         if depth == 0:
             matched = next((op for op in operators if command.startswith(op, i)), None)
+            if matched == "|" and expansions and buf and buf[-1][-1:] == ">":
+                matched = None  # `>|` is one redirection operator, not a pipe
             if matched:
                 segments.append("".join(buf))
                 buf = []
@@ -546,10 +560,11 @@ def _skip_paren(text: str, i: int) -> int:
     return n
 
 
-def _posix_tokens(segment: str) -> list[str]:
+def _posix_tokens(segment: str, redirects: list | None = None) -> list[str]:
     """A simple command split into word tokens on unquoted whitespace, each token keeping its
     quotes and expansions for later reading. A trailing heredoc redirection is dropped (its body
-    is not a word); `>file` and `2>&1` redirections are dropped too."""
+    is not a word); `>file` and `2>&1` redirections are dropped too, but when `redirects` is
+    given the raw target of each single `>` (one that overwrites) is added to it."""
 
     tokens: list[str] = []
     buf: list[str] = []
@@ -588,6 +603,10 @@ def _posix_tokens(segment: str) -> list[str]:
             if buf_token and not buf_token.isdigit():  # a bare fd number (`2` of `2>&1`) is part
                 tokens.append(buf_token)               # of the redirect, not a word
             buf = []
+            if ch == ">" and redirects is not None:
+                target = _overwrite_target(segment, i)
+                if target:
+                    redirects.append(target)
             i = _skip_redirect(segment, i)
             continue
         buf.append(ch)
@@ -595,6 +614,29 @@ def _posix_tokens(segment: str) -> list[str]:
     if buf:
         tokens.append("".join(buf))
     return [t for t in tokens if t]
+
+
+def _overwrite_target(segment: str, i: int) -> str | None:
+    """The raw file word of the `>` at `segment[i]` when it overwrites a file: not `>>` (appends),
+    not `>&2` (a descriptor copy), not `>(cmd)` (a process substitution)."""
+
+    n = len(segment)
+    j = i + 1
+    if segment[i:i + 2] == ">>" or (j < n and segment[j] in "&("):
+        return None
+    if j < n and segment[j] == "|":
+        j += 1
+    while j < n and segment[j] in " \t":
+        j += 1
+    start = j
+    while j < n and segment[j] not in " \t|;&<>":
+        if segment[j] in "'\"":
+            j = _skip_quote(segment, j, segment[j])
+        elif segment[j:j + 2] == "$(":
+            j = _skip_paren(segment, j + 1)
+        else:
+            j += 1
+    return segment[start:j] or None
 
 
 def _skip_redirect(segment: str, i: int) -> int:
