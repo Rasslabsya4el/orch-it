@@ -63,6 +63,9 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `release_reason` | `closed`, `parked`, `handed_off`, `session_ended` |
 | `park_on` | `pr_ended`, `ticket_closed`, `date`, `run_ended`, `owner_answer`, `layer_version` |
 | `unpark_by` | `event`, `hand` |
+| `wait_end_reason` | `kind_unknown`, `ref_bad`, `until_bad`, `date_after_until`, `until_past`, `ticket_missing`, `ticket_not_open`, `already_parked`, `ref_missing`, `ref_not_pr`, `ref_not_ticket`, `ref_self`, `ref_parent`, `event_passed`, `park_mismatch`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
+| `park_return` | `due`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
+| `park_unreadable` | `line_missing`, `line_bad`, `lines_many`, `ref_missing` |
 | `comment_kind` | `checkpoint`, `send_back`, `accepted`, `owner_answer`, `brain_answer`, `resolution`, `closing`, `machine` |
 | `close_via` | `close_command`, `github_keyword`, `manual` |
 | `state_reason` | `completed`, `not_planned` |
@@ -85,7 +88,7 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 |---|---|---|---|
 | `session` | `model`, `effort`, `agent_file`, `title`, `launched_by` (`launched_by`) | `reason` (`session_end_reason`), `held_tickets`, `checkpoint_written` | cost and time per session; why it ended; tickets left held by a dead session |
 | `subagent` | `model`, `effort`, `agent_file`, `title`, `launched_by` (`launched_by`), `unit`, `worktree`, `prompt_has`, `prompt_chars` | `reason` (`session_end_reason`), `held_tickets`, `checkpoint_written`, `delivered` (`delivered`), `report_lines_owed`, `report_lines_present` | does a delegation give the subagent what it needs; subagents with no report |
-| `wait` | `reason` (`wait_reason`), `on` | none | where the hours go between steps |
+| `wait` | `reason` (`wait_reason`), `on` | `reason` (`wait_end_reason`) | where the hours go between steps |
 | `test_run` | `place` (`place`), `selection`, `commit`, `branch`, `pr`, `workers`, `settings_hash`, `part`, `run_os` (`test_os`), `places_offered`, `chosen` (`place`), `reason` (`place_reason`) | `reason` (`test_run_reason`), `collected`, `passed`, `failed`, `skipped`, `summary_seen`, `billed_minutes`, `start_minutes`, `run_minutes` | did the tests run where and on what; a cut run is no_result, never red |
 | `review` | `axis` (`review_axis`), `unit`, `diff_ref` | `findings`, `fixed` | review cost and yield per axis |
 | `unit` | `unit`, `assigned_role` (`role`), `model` | `commit`, `note_present`, `reason` (`unit_reason`) | a unit's life from assignment to hand-back or send-back |
@@ -135,8 +138,8 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `ticket.claimed` | `weight`, `capacity_used` | who holds what; turns split across held tickets |
 | `ticket.released` | `reason` (`release_reason`) | a ticket freed and why |
 | `ticket.parked` | `on` (`park_on`), `on_ref`, `until` | a parked ticket and the one event that returns it |
-| `ticket.unparked` | `by` (`unpark_by`), `on_ref`, `late_minutes` | how late a return came |
-| `park.unreadable` | `reason` | a park nobody can return |
+| `ticket.unparked` | `by` (`unpark_by`), `on_ref`, `late_minutes`, `return` (`park_return`) | how late a return came |
+| `park.unreadable` | `reason` (`park_unreadable`) | a park nobody can return |
 | `comment.written` | `comment_kind` (`comment_kind`) | the state that lives in comment text |
 | `attempt.counted` | `reason`, `counted`, `in_a_row` | failed attempts, and which were not the ticket's fault |
 | `ticket.closed` | `via` (`close_via`), `state_reason` (`state_reason`), `rows_total`, `rows_passed`, `comments_unanswered` | closes past the acceptance check |
