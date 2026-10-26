@@ -6,6 +6,10 @@ cmd); wrappers switch between them. Nothing here decides anything about safety.
 A word that cannot be read in full — it holds a command substitution `$(...)` or a backtick, an
 unset or computed variable, or a glob the guard will not expand — is `None`, so a caller never
 mistakes "could not read this" for "a safe literal".
+
+A command nested past `MAX_DEPTH` is not dropped: it stands as one `Simple` whose head and one
+argument are both `None` (`UNREADABLE`), so the trigger reads it as an opaque command, never as
+nothing (#395 unit 2b).
 """
 
 from __future__ import annotations
@@ -34,15 +38,24 @@ class Simple:
 MAX_DEPTH = 40
 
 
+def _too_deep(cwd: str | None, dialect: str) -> Simple:
+    """What stands for a command nested past `MAX_DEPTH`: an unreadable head with an unreadable
+    argument."""
+
+    return Simple([None, None], cwd, dialect)
+
+
 def simple_commands(command, *, tool: str, cwd: str | None, env, windows: bool,
                     depth: int = 0) -> list[Simple]:
     """Every simple command `command` runs, in order, each with its words expanded and its cwd
     tracked. `tool` "PowerShell" or a `windows` Git Bash both reach the Windows wrappers. Never
     raises: a non-string command, or nesting past `MAX_DEPTH`, yields what could be read."""
 
-    if not isinstance(command, str) or depth > MAX_DEPTH:
+    if not isinstance(command, str):
         return []
     dialect = "windows" if tool == "PowerShell" else "posix"
+    if depth > MAX_DEPTH:
+        return [_too_deep(cwd, dialect)] if command.strip() else []
     walker = _Walker(dict(env or {}), windows, depth)
     walker.run(command, dialect, cwd)
     return walker.out
@@ -67,6 +80,11 @@ class _Walker:
 _POSIX_OPERATORS = (";", "&&", "||", "|&", "|", "&", "\n")
 
 
+_FUNCTION_DEF = re.compile(
+    r"^(?:function\s+[^\s(){}]+\s*(?:\(\s*\))?|[^\s(){}=]+\s*\(\s*\))\s*"
+    r"(?P<body>\{.*\}|\(.*\))$", re.S)
+
+
 class _PosixSplit:
     """Splits a POSIX command list into simple commands, tracking `cd` and assignments at the
     list level, and recursing into `( )`, `{ }` and command substitutions."""
@@ -84,7 +102,8 @@ class _PosixSplit:
     def _simple(self, segment: str) -> None:
         if segment[:1] == "(" and segment[-1:] == ")":
             if self.walker.depth >= MAX_DEPTH:
-                return  # nested too deep to follow
+                self.walker.out.append(_too_deep(self.cwd, "posix"))  # nested too deep to follow
+                return
             child = _PosixSplit(_Walker(self.env, self.walker.windows, self.walker.depth + 1))
             child.walker.out = self.walker.out  # a subshell's cd/assignments do not leak out
             child.env = dict(self.env)
@@ -93,6 +112,12 @@ class _PosixSplit:
         if segment[:1] == "{" and segment[-1:] == "}":
             for inner in _posix_segments(segment[1:-1]):  # a brace group runs in this shell
                 self._simple(inner)
+            return
+        defined = _FUNCTION_DEF.match(segment)
+        if defined and self.walker.depth < MAX_DEPTH:
+            # `function f { ...; }` / `f() { ...; }`: the body is read as if it ran here, so a
+            # delete in a function defined and then called cannot hide
+            self._simple(defined.group("body"))
             return
         tokens = _posix_tokens(segment)
         if not tokens:
@@ -203,7 +228,7 @@ class _PosixSplit:
 
     def _parse_sub(self, body: str) -> list[Simple]:
         if self.walker.depth >= MAX_DEPTH:
-            return []  # nested too deep: the inner command is left unread, the word already None
+            return [_too_deep(self.cwd, "posix")]  # nested too deep: left unread, as opaque
         sink = _Walker(self.env, self.walker.windows, self.walker.depth + 1)
         inner = _PosixSplit(sink)
         inner.env = dict(self.env)
@@ -231,6 +256,7 @@ class _WindowsSplit:
     def _simple(self, segment: str) -> None:
         if segment[:1] == "(" and segment[-1:] == ")":
             if self.walker.depth >= MAX_DEPTH:
+                self.walker.out.append(_too_deep(self.cwd, "windows"))
                 return
             self.walker.depth += 1
             for inner in _windows_segments(segment[1:-1]):

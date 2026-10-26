@@ -23,7 +23,7 @@ RULE_IDS = ("rm", "rmdir", "del", "unlink", "remove-item", "find-delete", "find-
             "python-c", "node-e", "mv", "move", "move-item", "ren", "rename-item",
             "git-worktree-move", "kill", "pkill", "killall", "taskkill", "tskill",
             "stop-process", "wmic-terminate", "cim-terminate", "python-os-kill",
-            "node-process-kill")
+            "node-process-kill", "unreadable-command")
 MATCHER_KINDS = ("name_glob", "name_regex", "cmdline_regex")
 
 
@@ -108,19 +108,68 @@ _SKIP_WHOLE = {"for", "while", "until", "if", "case", "fi", "done", "esac", "in"
 
 
 def _read_simple(simple: shell.Simple, windows: bool, out: list[Action], depth: int = 0) -> None:
-    words = list(simple.argv)
-    while words and words[0] in _LEAD_KEYWORDS:
-        words = words[1:]
+    words = _arm_commands(list(simple.argv))
     if words and words[0] in _SKIP_WHOLE:
         return  # a control-flow header (`for x in ...`) runs no delete itself
     argv = _unwrap(words, simple.dialect, windows, out, simple.cwd, depth)
-    if argv is None:
+    if not argv:  # None: the wrapper's work is done; []: nothing left to read
         return
-    if not argv or argv[0] is None:
+    if argv[0] is None:
+        out.append(_opaque_head(argv, simple))
         return
-    action = _match(argv, simple, windows)
-    if action is not None:
-        out.append(action)
+    _emit(_match(argv, simple, windows), out)
+
+
+_CASE_LABEL = re.compile(r"^\(?[^()\s]*\)(.*)$", re.S)
+
+
+def _arm_commands(words: list) -> list:
+    """The words of the command itself: shell keywords that lead it dropped, a `case ... in`
+    header dropped (the arm's own words follow), and a case arm's label (`a)`, `(a)`, `*)`,
+    `a)rm`) dropped, so each arm's command is read as the simple command it is. A header with no
+    `in`, or a label with nothing after it, leaves nothing."""
+
+    for _ in range(64):
+        while words and words[0] in _LEAD_KEYWORDS:
+            words = words[1:]
+        if not words or words[0] is None:
+            return words
+        if words[0] == "case":
+            if "in" not in words:
+                return []
+            words = words[words.index("in") + 1:]
+            continue
+        found = _CASE_LABEL.match(words[0])
+        if found is None:
+            return words
+        words = ([found.group(1)] if found.group(1) else []) + words[1:]
+    return []
+
+
+def _emit(found, out: list[Action]) -> None:
+    """Add what a matcher found: nothing, one action, or several."""
+
+    if found is None:
+        return
+    if isinstance(found, list):
+        out.extend(found)
+    else:
+        out.append(found)
+
+
+def _opaque_head(argv, simple: shell.Simple) -> Delete:
+    """A command whose head word cannot be read (`$(echo rm) -rf x`, `rm${IFS}-rf${IFS}x`, or
+    nesting past `shell.MAX_DEPTH`) is one opaque delete over every argument that is not a pure
+    option flag, so the guard refuses it only when one of them is a protected path. With no
+    argument left the word itself may hold the path, so the target is unreadable (None)."""
+
+    targets = tuple(w for w in argv[1:] if w is None or (w != "--" and not _is_flag(w)))
+    return Delete(targets or (None,), simple.cwd, True, True, True, "unreadable-command",
+                  _segment(argv))
+
+
+def _is_flag(word: str) -> bool:
+    return len(word) > 1 and word.startswith("-")
 
 
 # --- wrappers --------------------------------------------------------------------------------
@@ -224,7 +273,7 @@ def _run_inner_string(rest, dialect, windows, out, cwd, depth):
 
 
 def _name(word: str, windows: bool) -> str:
-    base = (ntpath.basename(word) if windows else posixpath.basename(word)).lower()
+    base = ntpath.basename(word).lower() if windows else posixpath.basename(word)
     if windows:
         for suffix in (".exe", ".cmd", ".bat", ".ps1", ".com"):
             if base.endswith(suffix):
@@ -349,10 +398,14 @@ _MOVE = {"mv", "move", "move-item", "ren", "rename", "rename-item"}
 _RECURSIVE_FLAGS_POSIX = {"-r", "-R", "--recursive", "-rf", "-fr", "-Rf", "-fR"}
 
 
-def _match(words: list[str | None], simple: shell.Simple, windows: bool) -> Action | None:
-    head = _name(words[0], windows or simple.dialect == "windows")
-    segment = _segment(words)
+def _match(words: list[str | None], simple: shell.Simple, windows: bool):
+    """The action(s) one simple command performs: None, one action, or a list."""
+
     is_win = windows or simple.dialect == "windows"
+    head = _name(words[0], is_win)
+    segment = _segment(words)
+    if _asks_help(head, words):
+        return None
     if head in _RM:
         return _delete(words, simple, segment, rule=_rm_rule(head), recursive=_rm_recursive(head, words))
     if head in _RMDIR:
@@ -376,6 +429,23 @@ def _match(words: list[str | None], simple: shell.Simple, windows: bool) -> Acti
     if head in ("node", "nodejs", "deno", "bun"):
         return _node_e(words, simple, segment, is_win)
     return None
+
+
+def _asks_help(head: str, words) -> bool:
+    """`rm --help`, `taskkill /?`: the command prints its usage and acts on nothing. `-h` counts
+    only with no target beside it (it is `human-readable` to `rsync`). An interpreter's flags are
+    not read: its body is code."""
+
+    if head in _INTERPRETERS or re.fullmatch(r"python[0-9.]*|py|pypy[0-9.]*", head):
+        return False
+    rest = words[1:]
+    if any(w in ("--help", "/?", "-?") for w in rest):
+        return True
+    return "-h" in rest and all(w is not None and (w == "--" or _is_flag(w))
+                                 for w in rest)
+
+
+_INTERPRETERS = {"node", "nodejs", "deno", "bun", "perl", "ruby", "pwsh", "powershell"}
 
 
 def _rm_rule(head: str) -> str:
@@ -614,6 +684,8 @@ def _kill(rest, simple, segment):
     job spec or name is unreadable."""
 
     pids, opaque, tree = [], False, False
+    if _kill_lists_or_probes(rest):
+        return None  # `kill -l` lists signals; signal 0 only tests that a pid exists
     rest = _after_kill_signal(rest)  # the leading signal (`-9`, `-s KILL`, `-SIGTERM`) is no pid
     for word in rest:
         if word is None:
@@ -634,6 +706,17 @@ def _kill(rest, simple, segment):
         else:
             opaque = True  # a job spec %1, a name, $(...)
     return _finish_stop(pids, [], opaque, tree, "kill", segment)
+
+
+def _kill_lists_or_probes(rest) -> bool:
+    if not rest or rest[0] is None:
+        return False
+    first = rest[0]
+    if first in ("-l", "-L", "--list", "--table"):
+        return True
+    if first == "-0" or first in ("--signal=0", "-s0", "-n0"):
+        return True
+    return first in ("-s", "--signal", "-n") and len(rest) > 1 and rest[1] == "0"
 
 
 def _after_kill_signal(rest):
