@@ -92,8 +92,8 @@ def test_a_signal_option_is_not_read_as_a_pid():
     assert stops("kill -9 123")[0].pids == (123,)
     assert stops("kill -2 123")[0].pids == (123,)
     assert stops("kill -s KILL 123")[0].pids == (123,) and not stops("kill -s KILL 123")[0].opaque
-    # a liveness probe injects no pid
-    assert stops("kill -0 123")[0].pids == (123,)
+    # a liveness probe (signal 0) stops nothing (#395 unit 2b)
+    assert stops("kill -0 123") == []
 
 
 # --- nested substitution, any depth ----------------------------------------------------------
