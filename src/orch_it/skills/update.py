@@ -1,18 +1,26 @@
-"""The update (#397 decision 4): `skills check` and `skills update`.
+"""The update (#397 decision 4): `skills check`, `skills report` and `skills update`.
 
 `check` fetches his upstream (`main` by default) into a cache folder outside any work tree (built again
 once when broken), reads the pinned commit's skills and the new ones from their blobs, makes sure the
 pinned tree is the one the manifest records file by file, and classifies every skill
 (`orch_it.skills.classify`) with the renames git reports between the two commits.
 
-`update` turns a check with a change into one pull request per upstream commit, and never touches the
-caller's work tree: it fetches `origin/main`, exports its tree to a scratch folder, writes the new
-copies and manifest there (added skills copied, the names his upstream dropped recorded as `gone`),
-runs the references check of decision 5 on it, and builds the commit with a scratch index, then pushes
-it to `skills-upstream/<upstream commit>-<main commit>`. The pull request's body lists every skill with
-its class. A copy renamed, removed or changed in contract labels it
-`needs-triage`: it waits for the brain. Anything else, a skill not copied changing included, merges when green.
-A later run finds the open pull request of the same upstream commit and brings it up to date
+`report` is the daily run: on a change it keeps one issue per upstream commit, "His skills moved to
+<commit>", whose body is the class table; opened with the label `needs-triage` when a copy is renamed,
+removed or changed in contract, else `ready-for-agent`. A later run updates that issue's body (its
+labels are the brain's from then on) rather than opening another, does not open again one the brain
+closed, and closes the issue of an older upstream commit as superseded; with no change, it closes the
+issue of the commit the copies are now at. It opens no pull request: a
+pull request a workflow's own token opens starts no workflow, so its required checks never come (the
+brain's decision on #397, after the probe orch-it #44).
+
+`update` is run by ORCH, working that issue, under the owner's `gh`: it fetches `origin/main`, exports
+its tree to a scratch folder, writes the new copies and manifest there (added skills copied, the names
+his upstream dropped recorded as `gone`), runs the references check of decision 5 on it, builds the
+commit with a scratch index and pushes it to `skills-upstream/<upstream commit>-<main commit>`; the
+caller's work tree is never touched. Its pull request lists every skill with its class and merges as
+any pull request does; one with a copy renamed, removed or changed in contract is labelled
+`needs-triage`. A later run brings the open pull request of the same upstream commit up to date
 instead of opening another, leaves one the brain closed alone, and closes the open one of an older
 upstream commit as superseded. The forge (GitHub) sits behind `Forge`.
 """
@@ -40,6 +48,9 @@ from orch_it.skills.copies import GIT_TIMEOUT_SECONDS, NO_WINDOW, Manifest, Skil
 BRANCH_PREFIX = "skills-upstream/"
 BASE_REF = "main"
 TRIAGE_LABEL = "needs-triage"
+READY_LABEL = "ready-for-agent"
+ISSUE_TITLE = "His skills moved to "
+_ISSUE_TITLE = re.compile(re.escape(ISSUE_TITLE) + r"([0-9a-f]{12})")
 TRIAGE_CLASSES = ("renamed", "removed", "contract_changed")
 _COMMIT = re.compile(r"[0-9a-f]{7,40}")
 _EMPTY_BLOB = "0" * 40
@@ -49,10 +60,12 @@ class Forge(Protocol):
     def update_prs(self) -> list[dict]: ...            # every pull request of a skills-upstream/ branch: url, branch, state
     def create_pr(self, branch: str, title: str, body: str) -> str: ...
     def add_label(self, pr: str, label: str) -> None: ...
-    def merge_when_green(self, pr: str) -> None: ...
     def update_branch(self, pr: str) -> None: ...      # merge main into the pull request's branch
     def close_pr(self, pr: str, comment: str) -> None: ...
-    def dispatch_tests(self, branch: str) -> None: ...
+    def update_issues(self) -> list[dict]: ...         # every issue of any state: url, title, labels, state
+    def create_issue(self, title: str, body: str, label: str) -> str: ...
+    def edit_issue(self, url: str, body: str) -> None: ...
+    def close_issue(self, url: str, comment: str) -> None: ...
 
 
 @dataclass
@@ -79,7 +92,7 @@ class Check:
     @property
     def needs_triage(self) -> bool:
         """A copy renamed, removed or changed in contract (the brain's word on orch-it #35: a skill the
-        layer does not copy is listed, and merges when green)."""
+        layer does not copy is listed, and does not wait for the brain)."""
 
         return any(c.cls in TRIAGE_CLASSES and self.held(c) == "copy" for c in self.changes)
 
@@ -88,7 +101,7 @@ class Check:
 class Done:
     status: str               # no_change, opened, already_open, declined
     new_commit: str
-    pr: str | None = None
+    url: str | None = None    # the pull request (update) or the issue (report)
     labels: list[str] = field(default_factory=list)
 
 
@@ -200,7 +213,8 @@ def render(found: Check) -> str:
     lines += [f"{cls}: {', '.join(names)}" for cls, names in sorted(by_class.items())]
     lines.append(" ".join(f"{cls}={len(names)}" for cls, names in sorted(by_class.items())))
     lines.append("no change" if not found.changed else
-                 (f"{TRIAGE_LABEL}: waits for the brain" if found.needs_triage else "merges when green"))
+                 (f"{TRIAGE_LABEL}: waits for the brain" if found.needs_triage
+                  else f"{READY_LABEL}: no copy waits for the brain"))
     return "\n".join(lines) + "\n"
 
 
@@ -222,25 +236,77 @@ def new_manifest(found: Check) -> Manifest:
     return built
 
 
-def pr_body(found: Check, problems: list[str]) -> str:
+def _class_table(found: Check) -> str:
+    """One row per changed skill, then the unchanged ones on one line, so the body stays short."""
+
     rows = ["| skill | class | in the repo | upstream path | why |", "|---|---|---|---|---|"]
-    for change in found.changes:
+    for change in found.changed:
         held = "copied, called by no role" if change.cls == "added" else found.held(change)
         path = f"{change.old_path} -> {change.new_path}" if change.cls == "renamed" else (change.new_path or change.old_path)
         rows.append(f"| `{change.name}` | {change.cls} | {held} | `{path}` | {', '.join(change.why) or '-'} |")
+    same = sorted(c.name for c in found.changes if c.cls == "same")
+    return "\n".join(rows) + (f"\n\nsame: {', '.join(same)}" if same else "")
+
+
+def _moved(found: Check) -> str:
+    return (f"His upstream `{found.manifest.upstream}` moved from `{found.manifest.commit}` to `{found.new_commit}`"
+            " (#397 decision 4).")
+
+
+def pr_body(found: Check, problems: list[str]) -> str:
     if found.needs_triage:
         rule = (f"Label `{TRIAGE_LABEL}`: a copy is renamed, removed or changed in what it takes or returns."
-                " It waits for the brain; it is not merged by itself.")
+                " It waits for the brain.")
     else:
-        rule = "No copy renamed, removed or changed in contract: it merges when `linux` and `windows` are green."
+        rule = "No copy is renamed, removed or changed in contract: it merges as any pull request, when green."
     refs = ("references: none outside the repo's skills" if not problems else
             "references (decision 5; the tests are red until these are fixed in this pull request):\n"
             + "\n".join(f"- {p}" for p in problems))
     return "\n\n".join([
-        f"His upstream `{found.manifest.upstream}` moved from `{found.manifest.commit}` to `{found.new_commit}`"
-        " (#397 decision 4). The copies and `.claude/skills/pocock.json` are rewritten to the new commit.",
-        rule, "\n".join(rows), refs,
-        "Written by `python -m orch_it skills update`."])
+        _moved(found) + " The copies and `.claude/skills/pocock.json` are rewritten to the new commit.",
+        rule, _class_table(found), refs, "Written by `python -m orch_it skills update`."])
+
+
+def issue_body(found: Check) -> str:
+    if found.needs_triage:
+        rule = (f"Label `{TRIAGE_LABEL}`: a copy is renamed, removed or changed in what it takes or returns;"
+                " the brain decides before the copies move.")
+    else:
+        rule = (f"Label `{READY_LABEL}`: no copy is renamed, removed or changed in contract.")
+    return "\n\n".join([
+        _moved(found), rule, _class_table(found),
+        "To take it: `python -m orch_it skills update` under the owner's `gh` opens the pull request with the new"
+        " copies; its own tests run, and it merges as any pull request.",
+        "Written by `python -m orch_it skills report` (the daily `skills-update` workflow)."])
+
+
+def report(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: str = "main",
+           cache: Path | None = None) -> Done:
+    """The daily run: on a change, one issue per upstream commit, kept up to date; no pull request."""
+
+    found = check(Path(repo), upstream=upstream, ref=ref, cache=cache)
+    ours = [i for i in forge.update_issues() if _ISSUE_TITLE.fullmatch(i["title"])]
+    open_ = [i for i in ours if i["state"] == "OPEN"]
+    if not found.changed:
+        done_title = ISSUE_TITLE + found.manifest.commit[:12]
+        for issue in open_:
+            if issue["title"] == done_title:
+                forge.close_issue(issue["url"], f"Done: the copies are at {found.manifest.commit[:12]}.")
+        return Done("no_change", found.new_commit)
+    title = ISSUE_TITLE + found.new_commit[:12]
+    label = TRIAGE_LABEL if found.needs_triage else READY_LABEL
+    same = [i for i in ours if i["title"] == title]
+    if any(i["state"] == "OPEN" for i in same):
+        url, status = next(i["url"] for i in same if i["state"] == "OPEN"), "already_open"
+        forge.edit_issue(url, issue_body(found))  # its labels are the brain's from now on
+    elif same:
+        url, status = same[0]["url"], "declined"
+    else:
+        url, status = forge.create_issue(title, issue_body(found), label), "opened"
+    for older in open_:
+        if older["title"] != title:
+            forge.close_issue(older["url"], f"Superseded by {url}: his upstream moved on to {found.new_commit[:12]}.")
+    return Done(status, found.new_commit, url, [label] if status == "opened" else [])
 
 
 def _export(repo: Path, commit: str, into: Path) -> None:
@@ -278,29 +344,17 @@ def _commit_skills(repo: Path, base: str, scratch: Path, message: str) -> str:
     return _run(repo, "commit-tree", tree, "-p", base, "-m", message)
 
 
-def _settle(forge: Forge, found: Check, pr: str, branch: str, dispatch_tests: bool) -> list[str]:
-    """Start the tests, then label the pull request or set it to merge when green; every step is
-    tried, the first refusal raised after."""
+def _settle(forge: Forge, found: Check, pr: str) -> list[str]:
+    """Label the pull request `needs-triage` when a copy is renamed, removed or changed in contract."""
 
-    labels, failed = [], []
-    steps = [(lambda: forge.dispatch_tests(branch))] if dispatch_tests else []
-    if found.needs_triage:
-        steps.append(lambda: forge.add_label(pr, TRIAGE_LABEL))
-        labels.append(TRIAGE_LABEL)
-    else:
-        steps.append(lambda: forge.merge_when_green(pr))
-    for step in steps:
-        try:
-            step()
-        except SkillsError as e:
-            failed.append(e)
-    if failed:
-        raise failed[0]
-    return labels
+    if not found.needs_triage:
+        return []
+    forge.add_label(pr, TRIAGE_LABEL)
+    return [TRIAGE_LABEL]
 
 
 def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: str = "main",
-           cache: Path | None = None, dispatch_tests: bool = False) -> Done:
+           cache: Path | None = None) -> Done:
     repo = Path(repo)
     _run(repo, "fetch", "-q", "origin", BASE_REF)
     base = _run(repo, "rev-parse", "--verify", f"origin/{BASE_REF}^{{commit}}")
@@ -322,7 +376,8 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
             pr = mine_open[0]
             failed = _attempt(lambda: forge.update_branch(pr["url"]))
             failed += _attempt(lambda: _supersede(forge, older, pr["url"]))
-            labels = _settle(forge, found, pr["url"], pr["branch"], dispatch_tests)
+            labels: list[str] = []
+            failed += _attempt(lambda: labels.extend(_settle(forge, found, pr["url"])))
             if failed:
                 raise failed[0]
             return Done("already_open", found.new_commit, pr["url"], labels)
@@ -340,7 +395,8 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
         f"{c.cls} {c.name}" for c in found.changed[:4]) + (" ..." if len(found.changed) > 4 else "")
     pr = forge.create_pr(branch, title[:200], pr_body(found, refs))
     failed = _attempt(lambda: _supersede(forge, older, pr))
-    labels = _settle(forge, found, pr, branch, dispatch_tests)
+    labels: list[str] = []
+    failed += _attempt(lambda: labels.extend(_settle(forge, found, pr)))
     if failed:
         raise failed[0]
     return Done("opened", found.new_commit, pr, labels)

@@ -1,11 +1,11 @@
 name: skills-update
 
 # Daily and on demand (#397 decision 4): compare his upstream with the repo's skill copies and, on a
-# change, keep one pull request with the new copies and every skill's class. The log's last line is
-# `no change`, `pull request: <url> ...`, `pull request already open: <url> ...` or `pull request
-# closed unmerged ...`. A pull request opened with this workflow's token starts no workflow, so the
-# update asks for the `tests` workflow on its branch by name (`--dispatch-tests`). The repo must let
-# Actions create pull requests and allow auto-merge.
+# change, keep one issue per upstream commit ("His skills moved to <commit>", the class table in its
+# body, labelled `ready-for-agent` or `needs-triage`). It opens no pull request: one opened with this
+# workflow's token starts no workflow, so its required checks would never come (orch-it #44). ORCH
+# works the issue with `python -m orch_it skills update` under the owner's gh. The log's last line is
+# `no change`, `issue: <url> <label>` or `issue already open: <url> <label>`.
 on:
   schedule:
     - cron: "41 4 * * *"
@@ -16,9 +16,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: read
+  issues: write
 
 jobs:
   update:
@@ -30,11 +29,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e .
-      - name: skills update
+      - name: skills report
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          python -m orch_it skills update --repo "$REPO" --dispatch-tests
+        run: python -m orch_it skills report --repo "$REPO"
