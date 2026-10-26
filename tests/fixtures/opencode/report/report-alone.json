@@ -1,0 +1,69 @@
+{
+ "about": "the report in one message with nothing after it",
+ "require_reddit": true,
+ "expect": {
+  "report_from": "last",
+  "reason": null,
+  "compactions": 0,
+  "chars": 6000,
+  "reddit_urls": 2,
+  "last_chars": 6000
+ },
+ "messages": [
+  {
+   "info": {
+    "id": "msg_0002",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000000000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0001",
+     "type": "text",
+     "text": "Brief: three questions."
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0006",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "stop",
+    "time": {
+     "created": 1700000001000,
+     "completed": 1700000001500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0003",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0004",
+     "type": "text",
+     "text": "# Report\nthe source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small mac\n> quoted passage 0 (https://www.reddit.com/r/selfhosted/comments/x1a0/thread_0/)\n\n> quoted passage 1 (https://www.reddit.com/r/selfhosted/comments/x1a1/thread_1/)\n\n> quoted passage 2 (https://docs.example.org/s1/page-0)\n\n> quoted passage 3 (https://docs.example.org/s1/page-1)\n\n> quoted passage 4 (https://docs.example.org/s1/page-2)\n\n> quoted passage 5 (https://docs.example.org/s1/page-3)\n\n> quoted passage 6 (https://docs.example.org/s1/page-4)\n\n> quoted passage 7 (https://docs.example.org/s1/page-5)\n"
+    },
+    {
+     "id": "prt_0005",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  }
+ ]
+}

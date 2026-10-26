@@ -1,0 +1,420 @@
+{
+ "about": "a report, then five short messages (four with tool calls) after a compaction",
+ "require_reddit": true,
+ "expect": {
+  "report_from": "earlier",
+  "reason": null,
+  "compactions": 1,
+  "chars": 6000,
+  "reddit_urls": 2,
+  "last_chars": 43
+ },
+ "messages": [
+  {
+   "info": {
+    "id": "msg_0002",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000000000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0001",
+     "type": "text",
+     "text": "Brief: three questions."
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0006",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "stop",
+    "time": {
+     "created": 1700000001000,
+     "completed": 1700000001500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0003",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0004",
+     "type": "text",
+     "text": "# Report\nthe source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small mac\n> quoted passage 0 (https://www.reddit.com/r/selfhosted/comments/x1a0/thread_0/)\n\n> quoted passage 1 (https://www.reddit.com/r/selfhosted/comments/x1a1/thread_1/)\n\n> quoted passage 2 (https://docs.example.org/s1/page-0)\n\n> quoted passage 3 (https://docs.example.org/s1/page-1)\n\n> quoted passage 4 (https://docs.example.org/s1/page-2)\n\n> quoted passage 5 (https://docs.example.org/s1/page-3)\n\n> quoted passage 6 (https://docs.example.org/s1/page-4)\n\n> quoted passage 7 (https://docs.example.org/s1/page-5)\n"
+    },
+    {
+     "id": "prt_0005",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0007",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000002000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0008",
+     "type": "compaction",
+     "auto": true,
+     "overflow": false
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0012",
+    "role": "assistant",
+    "agent": "compaction",
+    "mode": "compaction",
+    "finish": "stop",
+    "time": {
+     "created": 1700000003000,
+     "completed": 1700000003500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "summary": true
+   },
+   "parts": [
+    {
+     "id": "prt_0009",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0010",
+     "type": "text",
+     "text": "# Report\nthe source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the s\n> quoted passage 0 (https://www.reddit.com/r/selfhosted/comments/x20a0/thread_0/)\n\n> quoted passage 1 (https://docs.example.org/s20/page-0)\n\n> quoted passage 2 (https://docs.example.org/s20/page-1)\n\n> quoted passage 3 (https://docs.example.org/s20/page-2)\n\n> quoted passage 4 (https://docs.example.org/s20/page-3)\n"
+    },
+    {
+     "id": "prt_0011",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0014",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000004000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0013",
+     "type": "text",
+     "text": "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
+     "synthetic": true,
+     "metadata": {
+      "compaction_continue": true
+     }
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0019",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1700000005000,
+     "completed": 1700000005500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0015",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0016",
+     "type": "text",
+     "text": "Checking item 0 again."
+    },
+    {
+     "id": "prt_0017",
+     "type": "tool",
+     "tool": "webfetch",
+     "state": {
+      "status": "completed",
+      "input": {}
+     }
+    },
+    {
+     "id": "prt_0018",
+     "type": "step-finish",
+     "reason": "tool-calls"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0024",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1700000006000,
+     "completed": 1700000006500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0020",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0021",
+     "type": "text",
+     "text": "Checking item 1 again."
+    },
+    {
+     "id": "prt_0022",
+     "type": "tool",
+     "tool": "webfetch",
+     "state": {
+      "status": "completed",
+      "input": {}
+     }
+    },
+    {
+     "id": "prt_0023",
+     "type": "step-finish",
+     "reason": "tool-calls"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0029",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1700000007000,
+     "completed": 1700000007500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0025",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0026",
+     "type": "text",
+     "text": "Checking item 2 again."
+    },
+    {
+     "id": "prt_0027",
+     "type": "tool",
+     "tool": "webfetch",
+     "state": {
+      "status": "completed",
+      "input": {}
+     }
+    },
+    {
+     "id": "prt_0028",
+     "type": "step-finish",
+     "reason": "tool-calls"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0034",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1700000008000,
+     "completed": 1700000008500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0030",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0031",
+     "type": "text",
+     "text": "Checking item 3 again."
+    },
+    {
+     "id": "prt_0032",
+     "type": "tool",
+     "tool": "webfetch",
+     "state": {
+      "status": "completed",
+      "input": {}
+     }
+    },
+    {
+     "id": "prt_0033",
+     "type": "step-finish",
+     "reason": "tool-calls"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0039",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1700000009000,
+     "completed": 1700000009500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0035",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0036",
+     "type": "text",
+     "text": "Checking item 4 again."
+    },
+    {
+     "id": "prt_0037",
+     "type": "tool",
+     "tool": "webfetch",
+     "state": {
+      "status": "completed",
+      "input": {}
+     }
+    },
+    {
+     "id": "prt_0038",
+     "type": "step-finish",
+     "reason": "tool-calls"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0043",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "stop",
+    "time": {
+     "created": 1700000010000,
+     "completed": 1700000010500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0040",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0041",
+     "type": "text",
+     "text": "All items checked; the report above stands."
+    },
+    {
+     "id": "prt_0042",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  }
+ ]
+}
