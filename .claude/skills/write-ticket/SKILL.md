@@ -49,15 +49,15 @@ The parts, in order:
 - `Same object:`: your conclusion from a list of every other part (role, skill, hook, script, setting, open ticket) acting on each object the change touches (a ticket, a label, a file, a merge, a test run), with file:line, and what happens when both run; or `none (<why>)`.
 - `Not in this ticket:`: what a reader could expect here and must not do.
 - `Weight: <1-10>`: how much work it is (1 a line, 10 a part of the rebuild). Priority is the label `priority`, not a line.
-- `Adds:`: the roles and steps the ticket adds (`Adds: step claim, role launcher`) or `none`. A ticket that adds one names the events it writes, and one acceptance row checks them: its check starts with `events`.
+- `Adds:`: when the ticket adds a role or a step, the line naming them (`Adds: step claim, role launcher`); `Adds: none` or no line otherwise. Such a ticket names the events it writes, and one acceptance row checks them: its check names the `events`.
 
 ## Rules
 
 Title:
 
 - `title_too_long`: at most 80 characters, plain product words that name the change as the human sees it.
-- `title_parked`: never the word "parked": a park is the label and its line, below.
-- `title_issue_number`: no issue number (`#12`, `owner/repo#12`); no file name either.
+- `title_parked`: never "parked", alone or inside a word (`unparked`): a park is the label and its line, below.
+- `title_issue_number`: no issue number (`#12`, `owner/repo#12`). Leave file names out too, though no rule checks that.
 
 Human block:
 

@@ -23,9 +23,15 @@ class Agreement:
     template_violations: list[str]
 
 
+def section(text: str, heading: str) -> str:
+    """Every `## <heading>` section's text, without fenced blocks and HTML comments: what a reader sees."""
+
+    seen = re.sub(r"<!--.*?-->|^```.*?^```", "", text, flags=re.MULTILINE | re.DOTALL)
+    return "".join(re.findall(rf"^## {heading}\n(.*?)(?=^## |\Z)", seen, re.MULTILINE | re.DOTALL))
+
+
 def rules_section(text: str) -> str:
-    found = re.search(r"^## Rules\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
-    return found.group(1) if found else ""
+    return section(text, "Rules")
 
 
 def agreement(text: str) -> Agreement:
@@ -71,10 +77,16 @@ def test_a_skill_with_a_rule_the_code_lacks_or_one_rule_twice_fails_the_check():
     assert agreement(twice).stated_twice == {"weight_bad"}
 
 
-def test_the_skill_names_the_park_commands_and_every_label_of_the_set():
+def test_a_rule_line_a_reader_cannot_see_is_not_stated():
     text = SKILL.read_text("utf-8")
-    for command in ("python -m orch_it tickets park", "python -m orch_it tickets unpark"):
+    hidden = re.sub(r"^(- `weight_bad`:.*\n)", r"<!--\n\1-->\n", text, count=1, flags=re.MULTILINE)
+    assert agreement(hidden).only_in_rules == {"weight_bad"}
+
+
+def test_the_skill_names_the_park_commands_and_each_label_of_the_set_in_its_section():
+    text = SKILL.read_text("utf-8")
+    for command in ("python -m orch_it tickets park", "python -m orch_it tickets unpark", "python -m orch_it tickets parks"):
         assert command in text
-    for label in label_set():
-        assert f"`{label}`" in text, label
-    assert "flow-fix" not in text and "Flow fix" not in text  # dropped in the new layer (decision 2)
+    assert set(re.findall(r"^- `([a-z-]+)`:", section(text, "Labels"), re.MULTILINE)) == set(label_set())
+    for dead in ("flow-fix", "Flow fix", "autopilot", "provisional", "hard-push"):  # not carried (decisions 2, 6)
+        assert dead not in text, dead
