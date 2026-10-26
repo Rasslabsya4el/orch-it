@@ -59,7 +59,8 @@ class FakeHub:
 
     def parked(self, repo):
         return sorted(n for (r, n), issue in self.issues.items()
-                      if r == repo and issue.open and not issue.is_pr and "parked" in issue.labels)
+                      if r == repo and issue.open and not issue.is_pr
+                      and ("parked" in issue.labels or "Parked:" in issue.body))
 
     def write(self, repo, number, body, labels):
         self._check(repo, number)

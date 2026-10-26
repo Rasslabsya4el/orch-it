@@ -54,10 +54,12 @@ def test_an_issue_and_a_pull_request_are_read_with_their_state():
     assert hub.issue(REPO, 13) is None
 
 
-def test_the_parked_issues_are_listed_from_every_page_without_pull_requests():
+def test_the_parked_issues_are_listed_from_every_page_and_from_their_park_lines_without_pull_requests():
     pages = (json.dumps([{"number": 3}, {"number": 4, "pull_request": {}}]) + json.dumps([{"number": 9}]))
-    gh = Gh((["--paginate", f"repos/{REPO}/issues?labels=parked&state=open&per_page=100"], pages))
-    assert GhHub(gh).parked(REPO) == [3, 9]
+    gh = Gh((["--paginate", f"repos/{REPO}/issues?labels=parked&state=open&per_page=100"], pages),
+            (["search/issues", f'q=repo:{REPO} is:issue is:open in:body "Parked:"'],
+             {"total_count": 2, "items": [{"number": 9}, {"number": 15}]}))
+    assert GhHub(gh).parked(REPO) == [3, 9, 15]
 
 
 def test_body_and_labels_go_in_one_patch():

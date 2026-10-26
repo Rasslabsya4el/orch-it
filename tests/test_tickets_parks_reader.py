@@ -9,6 +9,7 @@ from fake_hub import REPO, FakeHub
 from ticket_fixtures import fixture
 
 from orch_it.events.store import Store
+from orch_it.testruns.github import GithubError
 from orch_it.tickets import park as parks
 from orch_it.tickets import reader
 from orch_it.tickets.hub import LAYER_MARK
@@ -74,11 +75,12 @@ def test_each_reader_outcome_is_reported_acted_on_and_written(store):
     assert stored(store, "step", "outcome", "reason", kind="step.ended") == [
         (2, "wait", "passed", None), (3, "wait", "failed", "other_way"), (4, "wait", "passed", None),
         (5, "wait", "no_result", "unreadable"), (6, "wait", "stopped", "comment")]
-    assert stored(store, "\"return\"", "\"by\"", "late_minutes", kind="ticket.unparked") == [
+    assert stored(store, "returned_as", "\"by\"", "late_minutes", kind="ticket.unparked") == [
         (2, "due", "event", 0), (3, "other_way", "event", 0), (4, "due", "event", 60),
         (5, "unreadable", "event", None), (6, "comment", "event", 0)]
     assert stored(store, "reason", kind="park.unreadable") == [(5, "line_bad")]
-    assert stored(store, "step", "run", kind="step.progressed") == [(1, "wait", f"park:{REPO}#1@{PARKED_ON.isoformat()}")]
+    assert stored(store, "step", "run", kind="step.progressed") == [
+        (1, "wait", f"park:{REPO}#1@{PARKED_ON.isoformat()}")]
 
 
 def test_a_park_past_its_until_whose_event_has_not_come_is_late_to_the_brain(store):
@@ -88,7 +90,7 @@ def test_a_park_past_its_until_whose_event_has_not_come_is_late_to_the_brain(sto
     hub.now = datetime(2026, 11, 4, 2, 30, tzinfo=UTC)
     assert read(hub, store)[1].outcome == "late"
     assert set(hub.issues[(REPO, 1)].labels) == {"needs-triage", "priority"}
-    assert stored(store, "\"return\"", "late_minutes", kind="ticket.unparked") == [(1, "late", 150)]
+    assert stored(store, "returned_as", "late_minutes", kind="ticket.unparked") == [(1, "late", 150)]
     assert stored(store, "outcome", "reason", kind="step.ended") == [(1, "no_result", "late")]
 
 
@@ -163,3 +165,80 @@ def test_two_reads_act_once(store):
     read(hub, store)
     assert read(hub, store) == {}
     assert len(hub.notes[(REPO, 1)]) == 1
+
+
+def test_a_return_keeps_every_line_but_the_park_s_own_with_its_line_ends(store):
+    hub = FakeHub(PARKED_ON)
+    hub.add(12, is_pr=True, open=False, merged=True)
+    example = "## For the agent\r\nThe form:\r\n```\r\nParked: <kind> <ref> until <YYYY-MM-DD>\r\n```\r\nWeight: 2\r\n"
+    hub.add(1, "﻿Parked: pr_ended #12 until 2026-11-30\r\n\r\n" + example, ["parked"])
+    hub.add(2, "Parked: pr_ended #12 until 2026-11-30\r\rkept\rtoo", ["parked"])
+    read(hub, store)
+    assert hub.issues[(REPO, 1)].body == example
+    assert hub.issues[(REPO, 2)].body == "kept\rtoo"
+
+
+def test_a_park_line_with_no_label_is_found_and_goes_to_the_brain(store):  # PARK-4, the other way round
+    hub = FakeHub(PARKED_ON)
+    hub.add(12, is_pr=True)
+    hub.add(1, f"Parked: pr_ended #12 until 2026-11-30\n\n{BODY}", ["ready-for-agent"])
+    assert read(hub, store)[1].outcome == "unreadable"
+    assert stored(store, "reason", kind="park.unreadable") == [(1, "label_missing")]
+    assert hub.issues[(REPO, 1)].body == BODY and set(hub.issues[(REPO, 1)].labels) == {"needs-triage"}
+
+
+class EditedWhileRead(FakeHub):
+    """A GitHub where a person rewrites ticket 1 just after the reader first reads it."""
+
+    def __init__(self, now):
+        super().__init__(now)
+        self.reads = 0
+
+    def issue(self, repo, number):
+        found = super().issue(repo, number)
+        if number == 1:
+            self.reads += 1
+            if self.reads == 2:
+                self.issues[(repo, 1)] = type(found)(**{**found.__dict__, "body": found.body + "\nA person's line."})
+        return found if self.reads < 2 or number != 1 else super().issue(repo, number)
+
+
+def test_a_ticket_edited_while_it_was_read_is_left_as_the_person_wrote_it(store):
+    hub = EditedWhileRead(PARKED_ON)
+    hub.add(12, is_pr=True, open=False, merged=True)
+    parked(hub, 1, "Parked: pr_ended #12 until 2026-11-30")
+    assert read(hub, store)[1].outcome == "failed"
+    assert hub.issues[(REPO, 1)].body.endswith("A person's line.") and "parked" in hub.issues[(REPO, 1)].labels
+    assert stored(store, "error_code", kind="error.raised") == [(1, "ticket_changed")]
+
+
+class CommentFails(FakeHub):
+    def comment(self, repo, number, body):
+        raise GithubError("gh_failed", "HTTP 502")
+
+
+def test_a_failed_comment_leaves_the_ticket_parked_for_the_next_run(store):
+    hub = CommentFails(PARKED_ON)
+    hub.add(12, is_pr=True, open=False, merged=True)
+    parked(hub, 1, "Parked: pr_ended #12 until 2026-11-30")
+    assert read(hub, store)[1].outcome == "failed"
+    assert "parked" in hub.issues[(REPO, 1)].labels and hub.writes == []
+    assert stored(store, "step", kind="step.ended") == []
+
+
+def test_the_owner_of_an_org_repo_is_the_login_given(store):
+    hub = FakeHub(PARKED_ON)
+    parked(hub, 1, "Parked: owner_answer #1 until 2026-11-30")
+    hub.later(hours=1)
+    hub.say(1, "Option B.", author="The-Owner")
+    reports = reader.read_parks(hub, store, REPO, now=hub.now, owner="the-owner")
+    assert reports[0].outcome == "due"
+
+
+def test_with_no_time_of_the_park_known_no_comment_counts_as_after_it(store):
+    hub = FakeHub(PARKED_ON)
+    hub.add(12, is_pr=True)
+    parked(hub, 1, "Parked: pr_ended #12 until 2026-11-30")
+    hub.label_times.clear()
+    hub.say(1, "written long before", author="a-person", at=PARKED_ON - timedelta(days=30))
+    assert read(hub, store)[1].outcome == "waiting"

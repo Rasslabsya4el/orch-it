@@ -63,9 +63,9 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `release_reason` | `closed`, `parked`, `handed_off`, `session_ended` |
 | `park_on` | `pr_ended`, `ticket_closed`, `date`, `run_ended`, `owner_answer`, `layer_version` |
 | `unpark_by` | `event`, `hand` |
-| `wait_end_reason` | `kind_unknown`, `ref_bad`, `until_bad`, `date_after_until`, `until_past`, `ticket_missing`, `ticket_not_open`, `already_parked`, `ref_missing`, `ref_not_pr`, `ref_not_ticket`, `ref_self`, `ref_parent`, `event_passed`, `park_mismatch`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
+| `wait_end_reason` | `kind_unknown`, `ref_bad`, `until_bad`, `date_after_until`, `until_past`, `ticket_missing`, `ticket_not_open`, `already_parked`, `ref_missing`, `ref_not_pr`, `ref_not_ticket`, `ref_self`, `ref_parent`, `event_passed`, `park_mismatch`, `ticket_changed`, `body_too_long`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
 | `park_return` | `due`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
-| `park_unreadable` | `line_missing`, `line_bad`, `lines_many`, `ref_missing` |
+| `park_unreadable` | `line_missing`, `line_bad`, `lines_many`, `label_missing`, `ref_missing` |
 | `comment_kind` | `checkpoint`, `send_back`, `accepted`, `owner_answer`, `brain_answer`, `resolution`, `closing`, `machine` |
 | `close_via` | `close_command`, `github_keyword`, `manual` |
 | `state_reason` | `completed`, `not_planned` |
@@ -138,7 +138,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `ticket.claimed` | `weight`, `capacity_used` | who holds what; turns split across held tickets |
 | `ticket.released` | `reason` (`release_reason`) | a ticket freed and why |
 | `ticket.parked` | `on` (`park_on`), `on_ref`, `until` | a parked ticket and the one event that returns it |
-| `ticket.unparked` | `by` (`unpark_by`), `on_ref`, `late_minutes`, `return` (`park_return`) | how late a return came |
+| `ticket.unparked` | `by` (`unpark_by`), `on_ref`, `late_minutes`, `returned_as` (`park_return`) | how late a return came |
 | `park.unreadable` | `reason` (`park_unreadable`) | a park nobody can return |
 | `comment.written` | `comment_kind` (`comment_kind`) | the state that lives in comment text |
 | `attempt.counted` | `reason`, `counted`, `in_a_row` | failed attempts, and which were not the ticket's fault |
@@ -199,6 +199,6 @@ print `run=… place=… outcome=… reason=… collected=… failed=…`; exit 
 
 `python -m orch_it labels sync [--repo R]`: make the repo's labels match the layer's set (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `parked`, `priority`, each with a colour and description from `labels/labels.json`; default repo the work tree's GitHub origin): a missing label is created, one with another colour, description or letter case is updated, an equal one is kept, every other label is listed `foreign` and never changed or deleted; prints `label`, `action` rows.
 
-`python -m orch_it [--store PATH] tickets park <n> <kind> <ref> --until <YYYY-MM-DD> [--repo R]`: the one way a ticket is parked: the line `Parked: <kind> <ref> until <date>` (kind one of `park_on`) and the `parked` label in one write, every other label kept; a park that could never return is refused with a `wait_end_reason` code and writes a `wait` pair ended `refused`; a park writes `ticket.parked` and starts its `wait` (run `park:<repo>#<n>@<label time>`). `tickets unpark <n>` takes line and label off together (`ticket.unparked` by `hand`).
+`python -m orch_it [--store PATH] tickets park <n> <kind> <ref> --until <YYYY-MM-DD> [--repo R] [--role script]`: the one way a ticket is parked: the line `Parked: <kind> <ref> until <date>` (kind one of `park_on`) and the `parked` label in one write, every other label kept; a park that could never return is refused with a `wait_end_reason` code and writes a `wait` pair ended `refused`; a park writes `ticket.parked` and starts its `wait` (run `park:<repo>#<n>@<label time>`). `tickets unpark <n> [--repo R] [--role script]` takes line and label off together (`ticket.unparked` by `hand`).
 
-`python -m orch_it [--store PATH] tickets parks [--repo R]`: the one reader: every open ticket with the `parked` label, reported `waiting`, `due` (back to its queue), `other_way`, `late`, `comment`, `unreadable` (each to the brain: `needs-triage` and a comment) or `failed` (read again next run); writes the end of each `wait`, `ticket.unparked`, `park.unreadable` or a `step.progressed`.
+`python -m orch_it [--store PATH] tickets parks [--repo R] [--role script]`: the one reader (the setting `owner_login` names whose comment answers an `owner_answer` park, default the repo owner): every open ticket with the `parked` label, reported `waiting`, `due` (back to its queue), `other_way`, `late`, `comment`, `unreadable` (each to the brain: `needs-triage` and a comment) or `failed` (read again next run); writes the end of each `wait`, `ticket.unparked`, `park.unreadable` or a `step.progressed`.

@@ -23,18 +23,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from orch_it.events.store import Store
 from orch_it.tickets.hub import Hub, Issue, RunState
-from orch_it.tickets.model import PARK_PREFIX, PARKED_LABEL, parse
+from orch_it.tickets.model import PARK_PREFIX, PARKED_LABEL, parse, without_park_lines
 
 KINDS = ("pr_ended", "ticket_closed", "date", "run_ended", "owner_answer", "layer_version")
 TICKET_KINDS = ("pr_ended", "ticket_closed", "owner_answer")
 ROLE = "script"
+BODY_MAX = 65_536  # GitHub's own bound on an issue body
 
-__all__ = ["KINDS", "Park", "ParkError", "RunState", "TicketRef", "make", "park", "read_line", "unpark"]
-
+# every code but `not_parked` is also a `wait_end_reason`: a refused park writes it to the store
 PARK_ERROR_CODES = (
     "kind_unknown",       # no kind of the six (free text, PARK-1)
     "ref_bad",            # a ref not of its kind's form, or two events (PARK-3)
@@ -51,11 +51,14 @@ PARK_ERROR_CODES = (
     "ref_parent",         # waiting on its own parent, which waits on it (PARK-10)
     "event_passed",       # the event has already happened
     "park_mismatch",      # the read-back does not hold line and label together (PARK-4)
+    "ticket_changed",     # the ticket changed between the read and the write: nothing written
+    "body_too_long",      # the body with its line would pass GitHub's bound
     "not_parked",         # unpark of a ticket that holds no park
 )
 
 _LINE = re.compile(rf"{re.escape(PARK_PREFIX)}\s*(?P<kind>\S*)\s*(?P<ref>.*?)\s*(?:\buntil\s+(?P<until>\S+))?\s*")
-_TICKET_REF = re.compile(r"(?:(?P<repo>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+))?#(?P<number>[1-9][0-9]{0,9})")
+_TICKET_REF = re.compile(
+    r"(?:(?P<repo>[A-Za-z0-9][A-Za-z0-9-]{0,38}/(?!\.\.?#)[A-Za-z0-9_.-]{1,100}))?#(?P<number>[1-9][0-9]{0,9})")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _GITHUB_RUN = re.compile(r"[1-9][0-9]{0,19}")
 _STORE_RUN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -63,9 +66,11 @@ _VERSION = re.compile(r"(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9]
 
 
 class ParkError(ValueError):
-    """A park that cannot be written or read; `code` names why."""
+    """A park that cannot be written or read; `code` is one of `PARK_ERROR_CODES`."""
 
     def __init__(self, code: str, detail: str = ""):
+        if code not in PARK_ERROR_CODES:
+            raise ValueError(f"not a park error code: {code}")
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
 
@@ -77,6 +82,13 @@ class TicketRef:
 
     def in_repo(self, home: str) -> tuple[str, int]:
         return (self.repo or home, self.number)
+
+    def names(self, repo: str, number: int, home: str) -> bool:
+        """Whether this ref is ticket `number` of `repo`; repo names compare as GitHub does,
+        in any letter case."""
+
+        mine, its = self.in_repo(home)
+        return its == number and mine.lower() == repo.lower()
 
 
 @dataclass(frozen=True)
@@ -159,7 +171,10 @@ def _date(text: str) -> date | None:
 def park(hub: Hub, store: Store, repo: str, number: int, kind: str, ref: str, until: str | date, *,
          today: date, role: str = ROLE) -> Park:
     """Park ticket `number` of `repo` on one event until a date, or `ParkError` with the reason
-    it could never return; a refusal writes nothing to GitHub."""
+    it could never return; a refusal writes nothing to GitHub. The ticket is read again just
+    before the write and left alone if it changed meanwhile (`ticket_changed`: a person's edit
+    is never overwritten); after the write it is read back, and a second park that raced this
+    one leaves its loser with `park_mismatch`."""
 
     try:
         made = make(kind, ref, until)
@@ -168,22 +183,25 @@ def park(hub: Hub, store: Store, repo: str, number: int, kind: str, ref: str, un
         issue = _open_ticket(hub, repo, number)
         held = parse(issue.body, labels=issue.labels)
         if held.parked or held.park_lines:
-            raise ParkError("already_parked", (held.park_lines or ("the label `parked`",))[0][:80])
+            raise ParkError("already_parked", (held.park_lines or (f"the label `{PARKED_LABEL}`",))[0][:80])
         _check_it_can_come(hub, store, repo, number, made, today)
+        body = f"{made.line}\n\n{issue.body.removeprefix(chr(0xFEFF)).lstrip()}"
+        if len(body) > BODY_MAX:
+            raise ParkError("body_too_long", f"{len(body)} characters")
+        write_unchanged(hub, issue, body, [*issue.labels, PARKED_LABEL])
     except ParkError as refused:
-        run = f"park-refused:{repo}#{number}@{datetime.now().astimezone().isoformat()}"
+        run = f"park-refused:{repo}#{number}@{datetime.now(UTC).isoformat()}"
         write_events(store, repo, number, role, run, [
-            ("step.started", {"reason": "parked", "on": f"{kind} {ref}"[:120]}),
+            ("step.started", {"reason": PARKED_LABEL, "on": f"{kind} {ref}"[:120]}),
             ("step.ended", {"outcome": "refused", "reason": refused.code})])
         raise
-    hub.write(repo, number, f"{made.line}\n\n{issue.body.lstrip()}", [*issue.labels, PARKED_LABEL])
     back = hub.issue(repo, number)
     written = parse(back.body, labels=back.labels) if back else None
     if written is None or written.park_lines != (made.line,) or not written.parked:
         raise ParkError("park_mismatch", "the ticket read back does not hold the line and the label")
     run = park_run(repo, number, hub.parked_at(repo, number))
     write_events(store, repo, number, role, run, [
-        ("step.started", {"reason": "parked", "on": f"{made.kind} {made.ref}"}),
+        ("step.started", {"reason": PARKED_LABEL, "on": f"{made.kind} {made.ref}"}),
         ("ticket.parked", {"on": made.kind, "on_ref": made.ref, "until": made.until.isoformat()})])
     return made
 
@@ -201,7 +219,7 @@ def unpark(hub: Hub, store: Store, repo: str, number: int, *, now: datetime, rol
     take_off(hub, issue)
     write_events(store, repo, number, role, run, [
         ("step.ended", {"outcome": "stopped", "reason": "hand"}),
-        ("ticket.unparked", {"by": "hand", "return": "hand", "on_ref": found.ref if found else None,
+        ("ticket.unparked", {"by": "hand", "returned_as": "hand", "on_ref": found.ref if found else None,
                              "late_minutes": late_minutes(found, now) if found else None})])
     return found
 
@@ -219,19 +237,24 @@ def held_park(lines: tuple[str, ...]) -> Park | None:
 
 def take_off(hub: Hub, issue: Issue, *, add: tuple[str, ...] = (), remove: tuple[str, ...] = ()) -> None:
     """Write the issue back without its `Parked:` lines and the `parked` label, in one request,
-    adding and removing the labels named (case as GitHub compares)."""
+    adding and removing the labels named (case as GitHub compares); `ticket_changed` when it
+    changed since `issue` was read."""
 
     gone = {PARKED_LABEL, *(label.lower() for label in remove)}
     labels = [label for label in issue.labels if label.lower() not in gone]
     labels += [label for label in add if label.lower() not in {held.lower() for held in labels}]
-    hub.write(issue.repo, issue.number, without_park_lines(issue.body), labels)
+    write_unchanged(hub, issue, without_park_lines(issue.body), labels)
 
 
-def without_park_lines(body: str) -> str:
-    """The body with every `Parked:` line and the blank lines that open it taken out."""
+def write_unchanged(hub: Hub, issue: Issue, body: str, labels: list[str]) -> None:
+    """Write body and labels in one request, only if the issue still holds what `issue` read:
+    the edit of a person (or of another reader) between the read and the write is never lost.
+    What is left is the moment between this read and GitHub's write; the next run sees it."""
 
-    kept = [line for line in body.replace("\r\n", "\n").split("\n") if not line.strip().startswith(PARK_PREFIX)]
-    return "\n".join(kept).lstrip("\n")
+    fresh = hub.issue(issue.repo, issue.number)
+    if fresh is None or fresh.body != issue.body or sorted(fresh.labels) != sorted(issue.labels):
+        raise ParkError("ticket_changed", f"{issue.repo}#{issue.number} changed while it was read")
+    hub.write(issue.repo, issue.number, body, labels)
 
 
 def park_run(repo: str, number: int, parked_at: datetime | None) -> str:
@@ -265,7 +288,7 @@ def _check_it_can_come(hub: Hub, store: Store, repo: str, number: int, made: Par
     ticket = made.ticket
     if ticket is not None:
         target = ticket.in_repo(repo)
-        if target == (repo, number) and made.kind != "owner_answer":
+        if ticket.names(repo, number, repo) and made.kind != "owner_answer":
             raise ParkError("ref_self", made.ref)
         other = hub.issue(*target)
         if other is None:
@@ -275,7 +298,8 @@ def _check_it_can_come(hub: Hub, store: Store, repo: str, number: int, made: Par
         if made.kind == "ticket_closed":
             if other.is_pr:
                 raise ParkError("ref_not_ticket", made.ref)
-            if hub.parent(repo, number) == target:
+            parent = hub.parent(repo, number)
+            if parent is not None and ticket.names(*parent, repo):
                 raise ParkError("ref_parent", f"{made.ref} is the parent of #{number}")
         if made.kind != "owner_answer" and not other.open:
             raise ParkError("event_passed", f"{made.ref} has ended")
@@ -283,10 +307,10 @@ def _check_it_can_come(hub: Hub, store: Store, repo: str, number: int, made: Par
         if made.date <= today:
             raise ParkError("event_passed", made.ref)
     elif made.kind == "run_ended":
-        ended = run_ended(hub, store, repo, made.ref)
-        if ended is None:
+        state = run_ended(hub, store, repo, made.ref)
+        if state is None:
             raise ParkError("ref_missing", made.ref)
-        if ended:
+        if state.ended:
             raise ParkError("event_passed", f"run {made.ref} has ended")
     elif made.kind == "layer_version":
         held = hub.layer_version(repo)
@@ -294,19 +318,18 @@ def _check_it_can_come(hub: Hub, store: Store, repo: str, number: int, made: Par
             raise ParkError("event_passed", f"{repo} runs {held}")
 
 
-def run_ended(hub: Hub, store: Store, repo: str, run: str) -> RunState | bool | None:
-    """Whether the run has ended: a `RunState` for a GitHub run, True/False for a store run,
-    None when no such run is known."""
+def run_ended(hub: Hub, store: Store, repo: str, run: str) -> RunState | None:
+    """The state of a GitHub Actions run of the repo (digits) or of a store run (a UUID, read
+    from its `step` pair); None when no such run is known."""
 
     if _GITHUB_RUN.fullmatch(run):
-        state = hub.run(repo, run)
-        return None if state is None else (state if state.ended else False)
+        return hub.run(repo, run)
     rows = store.query("SELECT kind, outcome FROM events WHERE run = :run AND kind IN ('step.started', 'step.ended')",
                        {"run": run}).rows
     if not rows:
         return None
     ended = [row for row in rows if row[0] == "step.ended"]
-    return RunState(ended=True, passed=ended[0][1] == "passed") if ended else False
+    return RunState(ended=bool(ended), passed=bool(ended) and ended[0][1] == "passed")
 
 
 def version_reached(held: str, wanted: str) -> bool:

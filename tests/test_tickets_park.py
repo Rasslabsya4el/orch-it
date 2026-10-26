@@ -165,10 +165,52 @@ def test_unpark_takes_the_line_and_the_label_off_together_and_keeps_the_rest(hub
     assert set(issue.labels) == {"ready-for-agent", "priority"}
     assert len(hub.writes) == 2
     run = f"park:{REPO}#10@{hub.now.isoformat()}"
-    ended = [row for row in events(store, "step", "outcome", "reason", "\"by\"", "\"return\"", "run")
+    ended = [row for row in events(store, "step", "outcome", "reason", "\"by\"", "returned_as", "run")
              if row[0] in ("step.ended", "ticket.unparked")]
     assert ended == [("step.ended", "wait", "stopped", "hand", None, None, run),
                      ("ticket.unparked", None, None, None, "hand", "hand", run)]
     with pytest.raises(parks.ParkError) as refused:
         parks.unpark(hub, store, REPO, 10, now=hub.now)
     assert refused.value.code == "not_parked"
+
+
+def test_a_ref_naming_the_ticket_in_another_letter_case_is_the_ticket_itself(hub, store):
+    hub.add(5)
+    hub.parents[(REPO, 10)] = (REPO.upper(), 5)
+    with pytest.raises(parks.ParkError) as refused:
+        park(hub, store, "ticket_closed", f"{REPO.upper()}#10")
+    assert refused.value.code == "ref_self"
+    with pytest.raises(parks.ParkError) as refused:
+        park(hub, store, "ticket_closed", "#5")
+    assert refused.value.code == "ref_parent"
+    with pytest.raises(parks.ParkError) as refused:
+        parks.read_line("Parked: ticket_closed owner-x/..#5 until 2026-11-30")
+    assert refused.value.code == "ref_bad"
+
+
+def test_a_body_with_a_bom_keeps_its_human_block_first_when_parked(hub, store):
+    hub.add(40, "﻿" + BODY)
+    hub.add(12, is_pr=True)
+    park(hub, store, "pr_ended", "#12", number=40)
+    from orch_it import tickets
+
+    parked_body = hub.issues[(REPO, 40)].body
+    assert parked_body == "Parked: pr_ended #12 until 2026-11-30\n\n" + BODY
+    assert tickets.violations(tickets.parse(parked_body)) == []
+
+
+def test_a_park_that_would_pass_github_s_body_bound_is_refused(hub, store):
+    hub.add(41, "x" * (parks.BODY_MAX - 10))
+    hub.add(12, is_pr=True)
+    with pytest.raises(parks.ParkError) as refused:
+        park(hub, store, "pr_ended", "#12", number=41)
+    assert refused.value.code == "body_too_long"
+    assert hub.writes == []
+
+
+def test_every_refusal_written_to_the_store_is_a_code_of_the_closed_set():
+    from orch_it.events import schema
+
+    assert set(parks.PARK_ERROR_CODES) - {"not_parked"} <= schema.codes_of("wait.ended", "reason")
+    with pytest.raises(ValueError):
+        parks.ParkError("not_a_code")

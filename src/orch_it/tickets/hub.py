@@ -61,7 +61,8 @@ class Hub(Protocol):
         """The ticket's parent as (repo, number), from GitHub's sub-issues."""
 
     def parked(self, repo: str) -> list[int]:
-        """The numbers of the repo's open issues carrying the `parked` label."""
+        """The numbers of the repo's open issues carrying the `parked` label or a `Parked:` line
+        in their body (a line with no label is a park the reader must see, PARK-4)."""
 
     def write(self, repo: str, number: int, body: str, labels: list[str]) -> None:
         """Set the issue's body and its whole label set in one request."""
@@ -120,8 +121,14 @@ class GhHub:
 
     def parked(self, repo: str) -> list[int]:
         items = self._list(["api", "--paginate", f"repos/{repo}/issues?labels=parked&state=open&per_page=100"])
-        return sorted(item["number"] for item in items if "pull_request" not in item
-                      and isinstance(item.get("number"), int))
+        # GitHub's search finds the body lines; it may lag a write by a minute, the next run sees it
+        found = self._object(["api", "--method", "GET", "search/issues", "-f",
+                              f'q=repo:{repo} is:issue is:open in:body "Parked:"', "-f", "per_page=100"])
+        if not isinstance(found.get("items", []), list):
+            raise GithubError("gh_bad_output", "search/issues: no items")
+        items += [item for item in found.get("items", []) if isinstance(item, dict)]
+        return sorted({item["number"] for item in items if "pull_request" not in item
+                       and isinstance(item.get("number"), int)})
 
     def write(self, repo: str, number: int, body: str, labels: list[str]) -> None:
         self._send(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}"], {"body": body, "labels": labels})
