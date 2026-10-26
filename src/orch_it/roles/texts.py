@@ -3,8 +3,10 @@ from and returns one `Finding` per break of the kinds #382 counted in the old la
 
 The texts read are whatever exist of: `.claude/agents/*.md`, every Markdown file of a skill of ours
 under `.claude/skills/` (a folder the manifest `pocock.json` does not name as his copy), every
-`CLAUDE.md` of the repo, and every Markdown file under `docs/`. Nothing is listed by name, so a role
-file added later is read with no edit here.
+`CLAUDE.md` of the repo, and every Markdown file under `docs/` but the research records of
+`docs/research/` (they quote what they studied, the old layer's texts included, verbatim; no agent
+works from them as rules). Nothing is listed by name, so a role file added later is read with no edit
+here.
 
 What is code in a text: an inline code span (`` `...` ``) and a line of a fenced block (closed by a
 fence of its own kind, at least as long). A path is read from inline code and Markdown links only
@@ -66,6 +68,7 @@ CODES = ("path_missing", "section_missing", "stub", "command_unknown", "flag_unk
 AGENTS = ".claude/agents"
 SKILLS = ".claude/skills"
 RECORDS = "docs/adr/"
+RESEARCH = "docs/research"  # records that quote other texts verbatim: never read as rules
 # the parts #378 (resolution 6397583416) took out of the layer; a text naming one names nobody
 REMOVED = {"unblocker": "#378", "autopilot": "#378"}
 FILE_EXTENSIONS = ("md", "py", "json", "jsonl", "toml", "yml", "yaml", "sql", "txt", "sh", "ps1", "cfg", "ini", "xml")
@@ -232,7 +235,8 @@ def text_files(repo: str | Path) -> list[Path]:
     for folder in [*_ours(repo), repo / "docs"]:
         if folder.is_dir():
             found += [Path(dirpath) / name for dirpath, _, names in os.walk(folder)
-                      for name in names if name.lower().endswith(".md")]
+                      for name in names if name.lower().endswith(".md")
+                      and not Path(dirpath).relative_to(repo).as_posix().startswith(RESEARCH)]
     for dirpath, dirs, names in os.walk(repo):  # every CLAUDE.md: Claude Code reads the one of a folder it works in
         rel = Path(dirpath).relative_to(repo).as_posix()
         dirs[:] = [d for d in dirs if not _skipped(d if rel == "." else f"{rel}/{d}")]

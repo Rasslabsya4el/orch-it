@@ -31,7 +31,8 @@ from orch_it.skills.copies import MANIFEST_NAME, SKILL_FILE, SKILLS_FOLDER, Mani
 
 NAMESPACE = "mattpocock-skills"
 AGENTS_FOLDER = ".claude/agents/"
-NOT_SCANNED_FOLDERS = (".git", "venv", ".claude/worktrees", "build", "dist", "tests/fixtures")
+# `docs/research`: records that quote what they studied verbatim (the old layer's texts included), never rules
+NOT_SCANNED_FOLDERS = (".git", "venv", ".claude/worktrees", "build", "dist", "tests/fixtures", "docs/research")
 NOT_SCANNED_NAMES = (".venv", "node_modules", ".pytest_cache", "__pycache__")
 _SKILL_TOOL = re.compile(r"\b[`*_]{0,2}skill[`*_]{0,2}\s+tool\b", re.IGNORECASE)
 _QUOTED_NAME = re.compile(r"[\"`“]([a-z0-9][a-z0-9:-]*)[\"`”]")
