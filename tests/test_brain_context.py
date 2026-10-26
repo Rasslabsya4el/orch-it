@@ -42,6 +42,41 @@ def test_past_its_line_the_brain_is_told_and_the_crossing_is_an_event(tmp_path):
     assert json.loads(detail) | {"tokens": 0} == {"threshold": "context_line", "tokens": 0, "action_after": "told"}
 
 
+def turns(tmp_path: Path, sizes: list[int]) -> Path:
+    path = tmp_path / "brain.jsonl"
+    records = [{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}],
+                                                 "usage": {"input_tokens": 10, "cache_read_input_tokens": size}}}
+               for size in sizes]
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), "utf-8")
+    return path
+
+
+def test_the_size_is_the_latest_turn_s_so_a_compacted_brain_is_left_alone(tmp_path):
+    store = Store.open(tmp_path / "store")
+    assert run_prompt_submit(payload(turns(tmp_path, [LINE + 50_000, 30_000])), store=store, repo="o/r") == ("", 0)
+
+
+def test_the_crossing_is_one_event_and_each_later_prompt_is_still_told(tmp_path):
+    store = Store.open(tmp_path / "store")
+    for sizes in ([LINE - 10, LINE + 100], [LINE - 10, LINE + 100, LINE + 200], [LINE - 10, LINE + 100, LINE + 300]):
+        out, _ = run_prompt_submit(payload(turns(tmp_path, sizes)), store=store, repo="o/r")
+        assert "hand-off" in out
+    assert store.query("select count(*) from events where kind = 'context.crossed'").rows == [(1,)]
+
+
+def test_a_long_transcript_is_read_from_its_end(tmp_path):
+    import time
+
+    path = tmp_path / "brain.jsonl"
+    line = json.dumps({"type": "user", "message": {"role": "user", "content": "x" * 40}}) + "\n"
+    with path.open("w", encoding="utf-8") as out:
+        out.write(line * 600_000)  # about 50 MB of short records
+        out.write(json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": LINE + 1}}}) + "\n")
+    started = time.monotonic()
+    out, _ = run_prompt_submit(payload(path), store=Store.open(tmp_path / "store"), repo="o/r")
+    assert "hand-off" in out and time.monotonic() - started < 0.5
+
+
 @pytest.mark.parametrize("context, agent", [(1000, "brain"), (10**6, "orch"), (10**6, None)])
 def test_under_its_line_or_in_another_session_nothing_is_said(tmp_path, context, agent):
     store = Store.open(tmp_path / "store")

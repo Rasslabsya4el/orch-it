@@ -190,7 +190,7 @@ def _parser() -> argparse.ArgumentParser:
     hook_commands.add_parser("subagent-stop", parents=[common],
                              help="the SubagentStop hold of report lines; reads the hook's JSON on stdin")
     hook_commands.add_parser("prompt-submit", parents=[common],
-                             help="the UserPromptSubmit check of a session's context line; reads the hook's JSON")
+                             help="the UserPromptSubmit check of a session's context line; reads the hook's JSON on stdin")
     p = hook_commands.add_parser("pre-push", parents=[common],
                                  help="the git pre-push guard; git passes the remote's name and url "
                                       "and writes the refs on stdin")
