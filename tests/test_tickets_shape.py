@@ -63,7 +63,7 @@ def test_a_half_written_body_never_raises_and_a_huge_one_is_read_in_time():
 
 
 def test_an_empty_or_headless_body_is_refused_never_raised():
-    for body in (None, "", "﻿", "\n\n\n", "## For the human", "## For the agent"):
+    for body in (None, "", "\ufeff", "\n\n\n", "## For the human", "## For the agent"):
         found = codes_of("Fine title", body)
         assert "human_block_missing" in found or "agent_block_missing" in found
 
@@ -86,3 +86,40 @@ def test_a_pipe_escaped_in_a_cell_stays_in_the_cell():
     ticket = tickets.parse(body.replace("| 1 | cart shipping cost for 10115 |", r"| 1 | cart cost for 10115 \| 10117 |"))
     assert ticket.acceptance[0].check == r"cart cost for 10115 \| 10117"
     assert ticket.acceptance[0].passes == "equals the payment page cost for 10115"
+
+
+@pytest.mark.parametrize("plan, paths", [
+    ("смотри src/orch_it/tickets/model.py:40", ["src/orch_it/tickets/model.py:40"]),
+    ("смотри Makefile:12 и папку src/orch_it", ["Makefile:12", "src/orch_it"]),
+    ("правило в .claude/skills и в docs/adr", [".claude/skills", "docs/adr"]),
+    (r"смотри C:\repo\tools\x.ps1", [r"C:\repo\tools\x.ps1"]),
+    ("запуск на Node.js, в 10:30, Linux/Windows, и/или 5.5", []),
+])
+def test_a_path_or_file_line_in_a_human_field_is_found_and_a_product_or_a_time_is_not(plan, paths):
+    title, body = fixture("good_basic")
+    written = body.replace("как только введён почтовый индекс.", f"как только введён индекс; {plan}.")
+    found = [v.detail for v in tickets.violations(tickets.parse(written, title=title))]
+    assert found == ([f"Plan: {', '.join(paths)}"] if paths else [])
+
+
+@pytest.mark.parametrize("line, codes", [
+    ("Outside case: 50667 (row #3).", []),
+    ("Outside case: 50667 (rows 2 and 3).", []),
+    ("Outside case: 50667 (3).", ["outside_case_no_row"]),
+    ("Class: none - one fixed cart page", []),
+])
+def test_the_outside_case_names_its_row(line, codes):
+    title, body = fixture("good_basic")
+    written = body.replace("Outside case: 50667, a zone none of 10115 and 20095 is in (row 3).", line)
+    assert codes_of(title, written) == codes
+
+
+def test_an_events_row_is_any_row_whose_check_names_the_events():
+    title, body = fixture("good_adds_events")
+    assert codes_of(title, body.replace("| 5 | events: the", "| 5 | the events of the")) == []
+
+
+@pytest.mark.parametrize("weight", ["7abc", "5-6", "-3"])
+def test_a_weight_that_is_not_one_whole_number_is_bad(weight):
+    title, body = fixture("good_basic")
+    assert codes_of(title, body.replace("Weight: 3", f"Weight: {weight}")) == ["weight_bad"]

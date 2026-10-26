@@ -3,8 +3,8 @@ first, each with its code. The session hook and the GitHub workflow call the sam
 (decision 3), and the `write-ticket` skill states the same rules code for code (decision 7).
 
 A missing block is one violation: with no `## For the human` heading the five fields are not
-judged, with no `## For the agent` heading nothing of the agent block is. A title left out
-(`None`) is not judged; the title rules apply to any title given.
+judged, with no `## For the agent` heading nothing of the agent block is, and with no acceptance
+table the `Outside case:` line is not matched to a row. A title left out (`None`) is not judged.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from orch_it.tickets.model import HUMAN_FIELDS, Ticket
+from orch_it.tickets.model import HUMAN_FIELDS, Ticket, none_reason
 
 TITLE_MAX = 80
 WEIGHT_RANGE = range(1, 11)
@@ -20,20 +20,20 @@ WEIGHT_RANGE = range(1, 11)
 # code -> the rule as the skill states it
 RULES: dict[str, str] = {
     "title_too_long": f"the title is at most {TITLE_MAX} characters",
-    "title_parked": "the title never holds the word \"parked\": a park is the `parked` label and its line",
+    "title_parked": "the title never holds the word \"parked\"",
     "title_issue_number": "the title holds no issue number",
     "human_block_missing": "the body has the heading `## For the human`",
-    "human_block_not_first": "nothing but `Parked:` lines stands above `## For the human`",
+    "human_block_not_first": "above `## For the human` stand only `Parked:` lines",
     "human_field_missing": "each of What, Goal, Plan, Result, Undo is there and not empty",
-    "human_field_order": "the five fields keep the order What, Goal, Plan, Result, Undo",
+    "human_field_order": "the five fields keep the order What, Goal, Plan, Result, Undo, each once",
     "human_field_not_russian": "the text of each human field is Russian",
     "human_field_path": "a human field holds no file path and no file:line",
     "agent_block_missing": "the body has the heading `## For the agent` after the human block",
-    "acceptance_missing": "the agent block has an acceptance table with a `check` and a `pass` column and a row",
-    "outside_case_missing": "the agent block has a line `Outside case: <the case> (row <id>)` or `Class: none (<why>)`",
+    "acceptance_missing": "the agent block has an acceptance table with `check` and `pass` columns",
+    "outside_case_missing": "the agent block has `Outside case: <case> (row <id>)` or `Class: none (<why>)`",
     "outside_case_no_row": "the `Outside case:` line names its acceptance row as `row <id>`",
-    "same_object_missing": "the agent block has a line `Same object: <what else acts on it>` or `Same object: none (<why>)`",
-    "events_row_missing": "a ticket whose `Adds:` line adds a role or a step has an acceptance row whose check starts with `events`",
+    "same_object_missing": "the agent block has `Same object: <what else acts on it>` or `none (<why>)`",
+    "events_row_missing": "a ticket whose `Adds:` line adds a role or a step has an `events` row",
     "weight_missing": "the agent block has a line `Weight: <1-10>`",
     "weight_bad": "the weight is a whole number from 1 to 10",
 }
@@ -58,20 +58,30 @@ _URL = re.compile(r"https?://\S+")
 _UNDO_WORDS = re.compile(r"\b(?:two-way door|one-way door|one revert|touches)\b", re.IGNORECASE)
 _CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 _LATIN = re.compile(r"[A-Za-z]")
-_EXTENSIONS = ("py|pyi|md|js|mjs|ts|tsx|json|jsonl|yml|yaml|toml|sql|txt|sh|ps1|bat|cfg|ini|html|css"
-               "|xml|csv|go|rs|java|rb|lock")
+_EXTENSIONS = ("py|pyi|md|js|mjs|cjs|ts|tsx|jsx|json|jsonl|yml|yaml|toml|sql|txt|sh|ps1|bat|cmd|cfg|ini"
+               "|html|css|xml|csv|go|rs|java|kt|rb|php|cs|c|h|cpp|hpp|swift|lock|log|env")
+_SEGMENT = r"[A-Za-z0-9_.-]"  # ASCII only: a Russian `и/или` is no path
 _PATH = re.compile(
-    rf"(?<![\w.])(?:[A-Za-z]:[\\/]|\.{{0,2}}[\\/])?(?:[\w.-]+[\\/])*[\w-][\w.-]*\.(?:{_EXTENSIONS})\b"
-    r"(?::\d+(?:-\d+)?)?"
-    r"|(?<![\w.])(?:[A-Za-z]:[\\/]|\.{0,2}[\\/])?(?:[\w.-]+[\\/])+[\w.-]+:\d+\b"
+    # a file with a known extension, maybe in folders, maybe with `:line`: `docs/events.md:62`
+    rf"(?<![\w.])(?:[A-Za-z]:[\\/]|\.{{0,2}}[\\/])?(?:{_SEGMENT}+[\\/])*[A-Za-z0-9_-]{_SEGMENT}*"
+    rf"\.(?:{_EXTENSIONS})(?![\w-])(?::\d+(?:-\d+)?)?"
+    # any name with `:line`, like `Makefile:12` or `src/x:40`
+    rf"|(?<![\w.:])(?:{_SEGMENT}+[\\/])*[A-Za-z_]{_SEGMENT}*:\d+(?:-\d+)?(?![\w:])"
+    # folders of the code without an extension: `src/orch_it`, `.claude/skills`
+    rf"|(?<![\w.])(?:\.?[a-z0-9_-]+[\\/])+(?:[a-z0-9_-]*_[a-z0-9_-]*|[a-z0-9_-]+[\\/][a-z0-9_.-]+)"
+    rf"|(?<![\w.])(?:\.claude|\.github|\.git|src|tests|docs|tools|scripts|config)[\\/]{_SEGMENT}*"
     r"|#L\d+")
-_ROW = re.compile(r"\brows?\s+([\w.-]+?)(?=[\s,;:)\]]|\.(?:\s|$)|$)", re.IGNORECASE)
-_EVENTS_CHECK = re.compile(r"\W*events\b", re.IGNORECASE)
+# a product named like a file, `Node.js`, is a name, not a path
+_PRODUCT = re.compile(r"[A-Z][a-z]*\.js")
+_ROW = re.compile(r"\brows?\s+#?([\w.-]+?)(?=[\s,;:)\]]|\.(?:\s|$)|$)", re.IGNORECASE)
+_EVENTS_CHECK = re.compile(r"\bevents\b", re.IGNORECASE)
 _ADDS_ROLE_OR_STEP = re.compile(r"\b(?:role|step)s?\b", re.IGNORECASE)
-_NONE_WITHOUT_WHY = re.compile(r"none\s*(?:\(\s*\))?\s*\.?", re.IGNORECASE)
 
 
 def violations(ticket: Ticket) -> list[Violation]:
+    """Every shape rule the ticket breaks, in the order of `RULES`' groups: title, human
+    block, agent block; empty for a good ticket."""
+
     found = _title(ticket.title)
     found += _human(ticket)
     if ticket.agent is None:
@@ -98,7 +108,7 @@ def _title(title: str | None) -> list[Violation]:
 def _human(ticket: Ticket) -> list[Violation]:
     if not ticket.has_human_block:
         return [Violation("human_block_missing")]
-    found = [] if ticket.human_block_first else [Violation("human_block_not_first")]
+    found = [] if ticket.human_block_on_top else [Violation("human_block_not_first")]
     texts = ticket.human
     for name in HUMAN_FIELDS:
         if not texts.get(name, "").strip():
@@ -112,10 +122,15 @@ def _human(ticket: Ticket) -> list[Violation]:
     for name, text in texts.items():
         if text.strip() and not _is_russian(text):
             found.append(Violation("human_field_not_russian", name))
-        paths = [m.group(0) for m in _PATH.finditer(_URL.sub(" ", text))]
+        paths = _paths(text)
         if paths:
-            found.append(Violation("human_field_path", f"{name}: {', '.join(dict.fromkeys(paths))}"))
+            found.append(Violation("human_field_path", f"{name}: {', '.join(paths)}"))
     return found
+
+
+def _paths(text: str) -> list[str]:
+    found = (m.group(0).rstrip(".") for m in _PATH.finditer(_URL.sub(" ", text)))  # a sentence's dot
+    return list(dict.fromkeys(path for path in found if not _PRODUCT.fullmatch(path)))
 
 
 def _is_russian(text: str) -> bool:
@@ -134,15 +149,15 @@ def _agent(ticket: Ticket) -> list[Violation]:
         found.append(Violation("acceptance_missing"))
     if ticket.outside_case:
         named = {m.group(1).lower() for m in _ROW.finditer(ticket.outside_case)}
-        if not named & {row.id.lower() for row in rows}:
+        if rows and not named & {row.id.lower() for row in rows}:
             found.append(Violation("outside_case_no_row", ", ".join(sorted(named)) or "no row named"))
     elif not ticket.class_none:
         found.append(Violation("outside_case_missing"))
     same = (ticket.same_object or "").strip()
-    if not same or _NONE_WITHOUT_WHY.fullmatch(same):
+    if not same or none_reason(same) == "":
         found.append(Violation("same_object_missing"))
     adds = [item for item in ticket.adds if _ADDS_ROLE_OR_STEP.search(item)]
-    if adds and not any(_EVENTS_CHECK.match(row.check) for row in rows):
+    if adds and not any(_EVENTS_CHECK.search(row.check) for row in rows):
         found.append(Violation("events_row_missing", ", ".join(adds)))
     if ticket.weight_text is None:
         found.append(Violation("weight_missing"))

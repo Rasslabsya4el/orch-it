@@ -1,19 +1,8 @@
 """The ticket model (#398 decision 1): one parser reads a ticket body into its fields, and
 every other part reads tickets only through it."""
 
-from pathlib import Path
-
 from orch_it import tickets
-
-FIXTURES = Path(__file__).parent / "fixtures" / "tickets"
-
-
-def fixture(name: str) -> tuple[str, str]:
-    """(title, body) of a fixture file: its first line is `Title: <title>`, then a blank line."""
-
-    text = (FIXTURES / f"{name}.md").read_text("utf-8")
-    first, _, body = text.partition("\n\n")
-    return first.removeprefix("Title: "), body
+from ticket_fixtures import fixture
 
 
 def test_a_body_is_read_into_its_fields():
@@ -38,3 +27,39 @@ def test_a_body_is_read_into_its_fields():
     assert ticket.adds == ()
     assert ticket.park_lines == ()
     assert ticket.ready and ticket.priority and not ticket.parked
+
+
+def test_the_forms_a_person_writes_on_github_are_read_as_the_same_fields():
+    title, body = fixture("good_basic")
+    written = (body.replace("## For the human", "## for the Human ##")
+               .replace("## For the agent", "## For the agent:")
+               .replace("- **What:**", "* **What**:")
+               .replace("Weight: 3", "- **Weight:** 3")
+               .replace("Outside case:", "**Outside case:**")
+               .replace("| 4 after merge |", "| 4, (after merge) |"))
+    ticket, plain = tickets.parse(written, title=title), tickets.parse(body, title=title)
+    assert ticket.human == plain.human
+    assert ticket.weight == 3 and ticket.outside_case == plain.outside_case
+    assert ticket.acceptance == plain.acceptance
+    assert tickets.violations(ticket) == []
+
+
+def test_comments_and_park_lines_may_stand_above_the_human_block():
+    _, body = fixture("good_basic")
+    ticket = tickets.parse("<!-- written by a template\n  of the repo -->\nParked: date 2026-12-01 until 2026-12-02\n"
+                           + body + "\nParked: free text further down\n")
+    assert ticket.human_block_on_top
+    assert ticket.park_lines == ("Parked: date 2026-12-01 until 2026-12-02", "Parked: free text further down")
+
+
+def test_a_none_line_carries_its_why_in_brackets_or_after_a_dash():
+    assert tickets.parse("## For the agent\nClass: none (one fixed page)").class_none == "one fixed page"
+    assert tickets.parse("## For the agent\nClass: none - one fixed page").class_none == "one fixed page"
+    assert tickets.parse("## For the agent\nClass: none").class_none is None
+    assert tickets.parse("## For the agent\nClass: none ()").class_none is None
+
+
+def test_an_unclosed_fence_hides_the_rest_and_another_fence_mark_does_not_close_it():
+    _, body = fixture("good_basic")
+    ticket = tickets.parse(body.replace("Weight: 3", "~~~\n```\nWeight: 3"))
+    assert ticket.weight_text is None and ticket.outside_case is None
