@@ -248,15 +248,15 @@ _Avoid_: agent type, persona, bot
 
 **Role file**:
 The text a role works from: its job, its inputs, its steps with the skill each calls, its report and the events it
-writes; its rules that matter are held by checks, not by its sentences.
+writes.
 _Avoid_: prompt, agent doc, instructions
 
 **Roles settings**:
-Each role's model, effort, fallback model, inputs and report rules, in one place every repo shares.
+Each role's model, effort, fallback model, inputs and report rules.
 _Avoid_: role config, model table
 
 **Fallback model**:
-The model a role's session takes when its own model's safeguard pauses it.
+The model a role works on when its own model's safety check pauses its work.
 _Avoid_: backup model, second model
 
 **Session**:
@@ -268,8 +268,7 @@ A role started inside a session for one piece of work, with its inputs filled at
 _Avoid_: helper, child agent, sub-session
 
 **Spawn**:
-The one way a subagent starts: its inputs filled from one place and its prompt built from them, or a refusal that
-names the input it lacks.
+The one way a subagent starts, with each of its inputs in hand before its first step.
 _Avoid_: delegation, dispatch, handoff
 
 **Input**:
@@ -297,6 +296,5 @@ The context size past which a role hands its work back as it stands instead of g
 _Avoid_: context limit, token budget
 
 **Stop hold**:
-The check at a subagent's stop that sends its report back once when a report line has no call behind it, an owed
-line is missing, or the report breaks its cap or its context line.
+The check at a subagent's stop that sends its report back once when the report breaks its role's report rules.
 _Avoid_: stop hook, gate, validator

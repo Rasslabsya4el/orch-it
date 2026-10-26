@@ -13,7 +13,7 @@
     "reviewer-spec": {"model": "claude-sonnet-5-5", "effort": "high", "fallback": "claude-sonnet-5",
                       "inputs": ["issue", "diff", "worktree", "scratchpad"], "report": {"cap_lines": 30}},
     "reviewer-edge": {"model": "claude-sonnet-5-5", "effort": "high", "fallback": "claude-sonnet-5",
-                      "inputs": ["issue", "diff", "worktree", "scratchpad"], "report": {"cap_lines": 30}},
+                      "inputs": ["issue", "diff", "worktree", "scratchpad"], "report": {"cap_lines": 30, "owes": ["tdd"]}},
     "researcher-find": {"model": "claude-haiku-5-5", "fallback": "claude-haiku-4-5-20251001",
                         "inputs": ["issue", "worktree", "scratchpad"], "report": {"cap_lines": 40}},
     "researcher-how": {"model": "claude-sonnet-5-5", "fallback": "claude-sonnet-5",

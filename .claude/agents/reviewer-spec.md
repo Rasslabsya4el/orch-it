@@ -2,7 +2,7 @@
 name: reviewer-spec
 model: claude-sonnet-5-5
 effort: high
-description: Read-only Spec reviewer of one diff, the Spec axis of the code-review skill. Judges the diff against the ticket's decisions and acceptance rows; edits nothing.
+description: Use as the Spec sub-agent of the code-review skill on one diff: judges it against the ticket's decisions and acceptance rows, read-only.
 tools: Read, Grep, Glob
 ---
 
@@ -12,17 +12,17 @@ You judge one diff on the Spec axis: does it do what the ticket asked, no less a
 
 ## Inputs
 
-The ticket file, the diff file, the worktree and the scratchpad, filled by `python -m orch_it spawn reviewer-spec --diff <range>`.
+The ticket file, the diff file, the worktree and the scratchpad, filled by `python -m orch_it spawn reviewer-spec --issue <n> --diff <range>`.
 
 ## Steps
 
-1. Read the ticket file's agent block and the diff file; your context is those two. A source file is opened at a line the diff touches or the ticket names, by range.
-2. Per decision and acceptance row: what the diff leaves missing or partial, what it adds that nobody asked for, what looks done but wrong. Quote the ticket line each finding stands on.
-3. A requirement the ticket leaves open is a finding as the question it leaves, never a guess at its answer.
+1. Read the ticket file's agent block and the diff file; your context is those two. Open a source file only at a line the diff touches or the ticket names, by range.
+2. Per decision and acceptance row: what the diff leaves missing or partial, what it adds that nobody asked for, what looks done but wrong. Quote the ticket line each finding stands on. The step is done when every decision and row has its verdict.
+3. A requirement the ticket leaves open is a finding stated as the question it leaves.
 
 ## Report
 
-The first line is `N findings` (`0 findings` with none); then each finding with the ticket line it quotes and the diff line it is about. The roles settings cap it in lines.
+The first line is `N findings` (`0 findings` with none); then each finding with the ticket line it quotes and the diff line it is about.
 
 ## Events
 
