@@ -117,7 +117,8 @@ def test_the_doc_is_read_whole():
     assert len(sets["envelope"]) == 15
     assert len(sets["steps"]) == 23
     assert len(sets["kinds"]) == 48  # 47 of the list, + skill.shadowed (#397)
-    assert sets["steps"]["wait"] == {"started": {"reason": {"codes": "wait_reason"}, "on": {}}, "ended": {}}
+    assert sets["steps"]["wait"] == {"started": {"reason": {"codes": "wait_reason"}, "on": {}},
+                                     "ended": {"reason": {"codes": "wait_end_reason"}}}
     assert sets["kinds"]["tool.called"]["args_head"] == {"max_chars": 120}
     assert sets["kinds"]["machine.booted"] == {}
 
