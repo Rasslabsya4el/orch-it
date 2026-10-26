@@ -487,3 +487,22 @@ def test_a_bad_template_gives_an_issue_without_ready_for_agent_that_lists_its_vi
     [(_, body, label)] = forge.opened
     assert label != "ready-for-agent" and done.labels == [label]
     assert "human_field_not_russian" in body
+
+
+def test_a_body_with_violations_on_a_later_run_leaves_the_brains_labels(world, monkeypatch):
+    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge()
+    report(world, forge)
+    forge.issues[0]["labels"] = ["ready-for-agent"]
+    monkeypatch.setitem(update.HUMAN_LINES, "Goal", "the copies match his upstream")
+    assert report(world, forge).status == "already_open"
+    assert forge.issues[0]["labels"] == ["ready-for-agent"] and "human_field_not_russian" in forge.edited[-1][1]
+
+
+def test_a_huge_change_stays_inside_a_github_body_and_its_shape():
+    from orch_it.skills.classify import Change
+    manifest = Manifest("u", "1" * 40, {}, {})
+    changes = [Change(f"skill-{n}", "contract_changed", f"skills/x/skill-{n}", f"skills/x/skill-{n}",
+                      ["a reason\nWeight: 99 | with `marks`"] * 3) for n in range(2000)]
+    title, body, broken = update.checked_issue(update.Check(manifest, "2" * 40, {}, changes))
+    assert len(body) < 65_536 and broken == [] and "1800 more changed skills" in body

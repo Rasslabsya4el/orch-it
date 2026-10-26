@@ -7,7 +7,8 @@ pinned tree is the one the manifest records file by file, and classifies every s
 
 `report` is the daily run: on a change it keeps one issue per upstream commit, "His skills moved to
 <commit>", a ticket in #398's shape (the Russian human block, the class table, acceptance rows,
-`Outside case:`, `Same object:`, `Weight:`) whose shape rules are run on it at write; opened with the
+`Outside case:`, `Same object:`, `Not in this ticket:`, `Weight:`) whose shape rules are run on it at
+write; opened with the
 label `needs-triage` when a copy is renamed, removed or changed in contract or the body breaks a shape
 rule (the rules it breaks listed in it), else `ready-for-agent`. A later run updates that issue's body (its
 labels are the brain's from then on) rather than opening another, does not open again one the brain
@@ -51,7 +52,7 @@ from orch_it.tickets import model, shape
 BRANCH_PREFIX = "skills-upstream/"
 BASE_REF = "main"
 TRIAGE_LABEL = "needs-triage"
-READY_LABEL = "ready-for-agent"
+READY_LABEL = model.READY_LABEL
 ISSUE_TITLE = "His skills moved to "
 _ISSUE_TITLE = re.compile(re.escape(ISSUE_TITLE) + r"([0-9a-f]{12})")
 TRIAGE_CLASSES = ("renamed", "removed", "contract_changed")
@@ -239,14 +240,29 @@ def new_manifest(found: Check) -> Manifest:
     return built
 
 
+TABLE_ROWS_MAX = 200  # a GitHub body holds 65,536 characters; a row is at most a few hundred
+_CELL = re.compile(r"[\s|`]+")
+
+
+def _cell(text: str) -> str:
+    """Text an upstream gave (a path, a reason) as one table cell: no line break, pipe or backtick."""
+
+    return _CELL.sub(" ", text).strip()[:200]
+
+
 def _class_table(found: Check) -> str:
-    """One row per changed skill, then the unchanged ones on one line, so the body stays short."""
+    """One row per changed skill (at most `TABLE_ROWS_MAX`), then the unchanged ones on one line, so
+    the body stays short."""
 
     rows = ["| skill | class | in the repo | upstream path | why |", "|---|---|---|---|---|"]
-    for change in found.changed:
+    for change in found.changed[:TABLE_ROWS_MAX]:
         held = "copied, called by no role" if change.cls == "added" else found.held(change)
         path = f"{change.old_path} -> {change.new_path}" if change.cls == "renamed" else (change.new_path or change.old_path)
-        rows.append(f"| `{change.name}` | {change.cls} | {held} | `{path}` | {', '.join(change.why) or '-'} |")
+        rows.append(f"| `{change.name}` | {change.cls} | {_cell(held)} | `{_cell(path)}` |"
+                    f" {_cell(', '.join(change.why)) or '-'} |")
+    if len(found.changed) > TABLE_ROWS_MAX:
+        rows.append(f"| ... | {len(found.changed) - TABLE_ROWS_MAX} more changed skills | | | `python -m orch_it"
+                    " skills check` lists them all |")
     same = sorted(c.name for c in found.changes if c.cls == "same")
     return "\n".join(rows) + (f"\n\nsame: {', '.join(same)}" if same else "")
 
@@ -270,23 +286,29 @@ def pr_body(found: Check, problems: list[str]) -> str:
         rule, _class_table(found), refs, "Written by `python -m orch_it skills update`."])
 
 
-# the human block of the issue (#398 decision 2: five fields, Russian, no file path); `{old}`, `{new}`, `{changed}`,
-# `{copies}` filled in per issue
+# the human block of the issue (#398 decision 2: five fields, Russian, no file path; the Undo field's fixed English
+# words, "two-way door" and "touches", are the ones the shape's Russian test leaves out); `{old}`, `{new}`,
+# `{changed}`, `{copies}` filled in per issue
 HUMAN_LINES = {
-    "What": "его апстрим навыков перешёл с `{old}` на `{new}`: изменилось навыков {changed}, из них копий репо {copies}.",
+    "What": "апстрим навыков Покока перешёл с `{old}` на `{new}`: изменилось навыков: {changed}, из них скопировано"
+            " в репо: {copies}.",
     "Goal": "копии навыков в репо совпадают с новой версией его апстрима, и ни одна роль не теряет вызываемый навык молча.",
-    "Plan": "ORCH под gh владельца запускает `python -m orch_it skills update`; тот открывает один пулл-реквест с новыми"
-            " копиями, а тесты репо проверяют копии и ссылки на навыки.",
+    "Plan": "ORCH под `gh` владельца запускает `python -m orch_it skills update`; тот открывает один пулл-реквест с"
+            " новыми копиями, а тесты репо проверяют копии и ссылки на навыки.",
     "Result": "пулл-реквест зелёный на обеих ОС, у 100 % копий хэши совпадают с манифестом новой версии, и каждый навык в нём"
               " отнесён к своему классу.",
     "Undo": "two-way door (один откат пулл-реквеста возвращает прежние копии); touches все роли, которые вызывают эти навыки.",
 }
 
 
+WEIGHT_TRIAGE, WEIGHT_PLAIN = 3, 2  # a copy that moves in what it takes or returns asks the brain first
+OUTSIDE_ROW = "3"                   # the row the outside case names: the classes row
+
+
 def issue(found: Check) -> tuple[str, str]:
     """The title and the body of the issue of `found`, a ticket in #398's shape: the human block, then
     the agent block with the class table, the acceptance rows, `Outside case:`, `Same object:`,
-    `Weight:`."""
+    `Not in this ticket:`, `Weight:`."""
 
     old, new = found.manifest.commit[:12], found.new_commit[:12]
     copies_changed = sum(1 for c in found.changed if found.held(c) == "copy")
@@ -304,15 +326,15 @@ def issue(found: Check) -> tuple[str, str]:
         f" `{new}` (`test_every_copy_is_on_disk_as_its_manifest_hashes_say` green) |",
         "| 2 | references | `test_the_repo_names_no_skill_it_does_not_hold` green on that pull request: the names of a"
         " renamed or removed copy fixed in it |",
-        "| 3 | classes | the class of every skill in the pull request's body equals the table above |"])
+        f"| {OUTSIDE_ROW} | classes | the class of every skill in the pull request's body equals the table above |"])
     agent = "\n\n".join([
         f"{_moved(found)} {rule}", _class_table(found), acceptance,
         "Outside case: a skill changed only inside a support file, with no name or heading change, still stands in"
-        " the table above with its class (row 3)",
+        f" the table above with its class (row {OUTSIDE_ROW})",
         "Same object: `.claude/skills/` and its manifest, and the roles that call these skills by bare name (the"
         " references test holds them); `skills update` writes only the copies and the manifest",
         "Not in this ticket: which role calls an added skill (the brain decides)",
-        f"Weight: {3 if found.needs_triage else 2}",
+        f"Weight: {WEIGHT_TRIAGE if found.needs_triage else WEIGHT_PLAIN}",
         "Written by `python -m orch_it skills report` (the daily `skills-update` workflow)."])
     return ISSUE_TITLE + new, f"## For the human\n\n{human}\n\n## For the agent\n\n{agent}\n"
 
@@ -337,9 +359,9 @@ def report(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
     open_ = [i for i in ours if i["state"] == "OPEN"]
     if not found.changed:
         done_title = ISSUE_TITLE + found.manifest.commit[:12]
-        for issue in open_:
-            if issue["title"] == done_title:
-                forge.close_issue(issue["url"], f"Done: the copies are at {found.manifest.commit[:12]}.")
+        for held in open_:
+            if held["title"] == done_title:
+                forge.close_issue(held["url"], f"Done: the copies are at {found.manifest.commit[:12]}.")
         return Done("no_change", found.new_commit)
     title, body, broken = checked_issue(found)
     label = TRIAGE_LABEL if found.needs_triage or broken else READY_LABEL
