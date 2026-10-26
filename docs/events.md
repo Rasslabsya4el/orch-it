@@ -65,6 +65,8 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `unpark_by` | `event`, `hand` |
 | `wait_end_reason` | `kind_unknown`, `ref_bad`, `until_bad`, `date_after_until`, `until_past`, `ticket_missing`, `ticket_not_open`, `already_parked`, `ref_missing`, `ref_not_pr`, `ref_not_ticket`, `ref_self`, `ref_parent`, `event_passed`, `park_mismatch`, `ticket_changed`, `body_too_long`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
 | `park_return` | `due`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
+| `hook_reason` | `write_ticket_missing`, `park_by_hand`, `body_unreadable`, `command_unreadable`, `issue_unreadable`, `shape`, `passed` |
+| `ticket_rule` | `title_too_long`, `title_parked`, `title_issue_number`, `human_block_missing`, `human_block_not_first`, `human_field_missing`, `human_field_order`, `human_field_not_russian`, `human_field_path`, `agent_block_missing`, `acceptance_missing`, `outside_case_missing`, `outside_case_no_row`, `same_object_missing`, `events_row_missing`, `weight_missing`, `weight_bad`, `write_ticket_missing`, `park_by_hand`, `body_unreadable`, `command_unreadable`, `issue_unreadable` |
 | `park_unreadable` | `line_missing`, `line_bad`, `lines_many`, `label_missing`, `ref_missing` |
 | `comment_kind` | `checkpoint`, `send_back`, `accepted`, `owner_answer`, `brain_answer`, `resolution`, `closing`, `machine` |
 | `close_via` | `close_command`, `github_keyword`, `manual` |
@@ -121,7 +123,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 |---|---|---|
 | `turn.used` | `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `usd`, `price_table`, `tickets_held`, `reason` (`turn_reason`) | every dollar and token; cost per ticket, role, model, step, week |
 | `test.result` | `test_id`, `outcome`, `skip_reason`, `ms`, `attempt`, `load_verdict` (`load_verdict`) | per test: flaky retries, slow tests, skips by reason |
-| `hook.ran` | `hook`, `action` (`hook_action`), `reason` | what a hook did or why it did nothing |
+| `hook.ran` | `hook`, `action` (`hook_action`), `reason` (`hook_reason`), `rules` (`ticket_rule`) | what a hook did or why it did nothing |
 | `run.checked` | `checked_run`, `result` (`run_check_result`) | a live run checked by another session |
 | `ticket.transferred` | `from_repo`, `from_number`, `to_repo`, `to_number` | a ticket moved between repos |
 | `machine.booted` | none | the gap a boot leaves in every running step |

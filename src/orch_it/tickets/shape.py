@@ -93,6 +93,12 @@ def violations(ticket: Ticket) -> list[Violation]:
     return found
 
 
+def title_violations(title: str | None) -> list[Violation]:
+    """The title rules alone, for an edit that rewrites only the title."""
+
+    return _title(title)
+
+
 def _title(title: str | None) -> list[Violation]:
     if title is None:
         return []

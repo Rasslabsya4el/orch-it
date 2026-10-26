@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"s-1","timestamp":"2026-11-02T09:00:00.000Z","message":{"role":"user","content":"Write the ticket for the cart's shipping cost."}}
+{"type":"assistant","sessionId":"s-1","timestamp":"2026-11-02T09:00:05.000Z","message":{"id":"m-1","role":"assistant","content":[{"type":"text","text":"Loading the skill first."},{"type":"tool_use","id":"t-1","name":"Skill","input":{"skill":"write-ticket"}}]}}
+{"type":"user","sessionId":"s-1","timestamp":"2026-11-02T09:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t-1","content":"Launching skill: write-ticket"}]}}
+{"type":"assistant","sessionId":"s-1","timestamp":"2026-11-02T09:01:00.000Z","message":{"id":"m-2","role":"assistant","content":[{"type":"tool_use","id":"t-2","name":"Bash","input":{"command":"gh issue create --title x --body-file body.md"}}]}}
