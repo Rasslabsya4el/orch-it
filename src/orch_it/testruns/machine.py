@@ -62,6 +62,7 @@ def bootstrap_line() -> bytes:
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         bundle.writestr("orch_it/__init__.py", "")
         bundle.writestr("orch_it/testruns/__init__.py", "")
+        bundle.writestr("orch_it/proctree.py", (FOLDER.parent / "proctree.py").read_bytes())
         for name in BUNDLE:
             bundle.writestr(f"orch_it/testruns/{name}", (FOLDER / name).read_bytes())
     packed = base64.b64encode(archive.getvalue()).decode("ascii")

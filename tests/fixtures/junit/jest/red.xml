@@ -8,23 +8,23 @@
 
 Expected: 1
 Received: 0
-    at Object.toBe (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\run\red\math.test.js:7:19)
-    at Promise.finally.completed (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1834:28)
+    at Object.toBe (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\run\red\math.test.js:7:19)
+    at Promise.finally.completed (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1834:28)
     at new Promise (&lt;anonymous&gt;)
-    at callAsyncCircusFn (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1774:10)
-    at _callCircusTest (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1167:40)
+    at callAsyncCircusFn (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1774:10)
+    at _callCircusTest (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1167:40)
     at processTicksAndRejections (node:internal/process/task_queues:103:5)
-    at _runTestInContext (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1103:3)
-    at runTestWithContext (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:996:5)
-    at _runTestsForDescribeBlockOnce (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1008:11)
-    at _runTestsForDescribeBlock (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:824:5)
-    at _runTestsForDescribeBlockOnce (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1003:11)
-    at _runTestsForDescribeBlock (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:824:5)
-    at run (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:789:3)
-    at runAndTransformResultsToJestFormat (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:2300:21)
-    at jestAdapter (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\runner.js:111:19)
-    at runTestInternal (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-runner\build\index.js:247:16)
-    at runTest (C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-runner\build\index.js:315:7)</failure>
+    at _runTestInContext (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1103:3)
+    at runTestWithContext (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:996:5)
+    at _runTestsForDescribeBlockOnce (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1008:11)
+    at _runTestsForDescribeBlock (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:824:5)
+    at _runTestsForDescribeBlockOnce (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:1003:11)
+    at _runTestsForDescribeBlock (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:824:5)
+    at run (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:789:3)
+    at runAndTransformResultsToJestFormat (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\jestAdapterInit.js:2300:21)
+    at jestAdapter (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-circus\build\runner.js:111:19)
+    at runTestInternal (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-runner\build\index.js:247:16)
+    at runTest (C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\jest\node_modules\jest-runner\build\index.js:315:7)</failure>
     </testcase>
     <testcase classname="math skips" name="math skips" time="0">
       <skipped/>
