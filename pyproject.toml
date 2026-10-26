@@ -7,6 +7,7 @@ name = "orch-it"
 version = "0.0.0"
 requires-python = ">=3.12"
 license = "MIT"
+dependencies = ["psutil>=5.9"]  # the one cross-platform reading of the process tree (#395 decision 3)
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
@@ -15,7 +16,7 @@ test = ["pytest>=8"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-orch_it = ["events/*.json", "events/*.sql", "events/queries/*.sql"]
+orch_it = ["events/*.json", "events/*.sql", "events/queries/*.sql", "labels/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

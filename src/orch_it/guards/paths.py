@@ -272,14 +272,15 @@ def _git(cwd: str, *args: str) -> str | None:
     return done.stdout
 
 
-FINDING_RULES = ("protected_root", "ancestor_of_root", "link_outward")
+FINDING_RULES = ("protected_root", "ancestor_of_root", "inside_other_root", "link_outward")
 
 
 @dataclass(frozen=True)
 class Finding:
     """Why a target is protected. `rule` (one of `FINDING_RULES`): `protected_root` (the target
-    is one), `ancestor_of_root` (one lies below it), `link_outward` (its tree holds a link
-    leading outside it); `path`: the protected root, or the link found."""
+    is one), `ancestor_of_root` (one lies below it), `inside_other_root` (it lies inside a
+    protected root that is not the one the command runs in), `link_outward` (its tree holds a
+    link leading outside it); `path`: the protected root, or the link found."""
 
     rule: str
     path: str
@@ -288,24 +289,52 @@ class Finding:
 CaseRule = Callable[[str], bool]
 
 
-def judge(target: str | None, roots, *, windows: bool, roots_too: bool = True,
-          walk_links: bool = True, case_rule: CaseRule = measure_case_rule) -> Finding | None:
+def deepest_root(path: str | None, roots, *, windows: bool,
+                 case_rule: CaseRule = measure_case_rule) -> str | None:
+    """The protected root that holds `path` most closely (a root equal to or above it), the
+    deepest when roots nest — orch-it's worktrees sit inside the main checkout, so a path can
+    be below two roots at once. None when no root holds it. Used to name the worktree a `cwd`
+    runs in (its own root)."""
+
+    if path is None:
+        return None
+    flavour = ntpath if windows else posixpath
+    insensitive = _cached(case_rule)
+    holding = [root for root in roots
+               if _relation(root, path, flavour, insensitive) in ("same", "ancestor")]
+    return max(holding, key=len, default=None)
+
+
+def judge(target: str | None, roots, *, windows: bool, own_root: str | None = None,
+          roots_too: bool = True, walk_links: bool = True,
+          case_rule: CaseRule = measure_case_rule) -> Finding | None:
     """Whether deleting (or moving) the real path `target` reaches a protected object: None
-    when it does not, or it is not there. `roots_too` False lets a root itself through (a
-    filtered `find` deletes only what matches below it); `walk_links` False skips the walk
-    (a move goes through no link). `case_rule(folder)` says whether names in `folder` are
-    case-insensitive; it is measured once per folder per call."""
+    when it does not, or it is not there. A target equal to a root is `protected_root`, one
+    above a root `ancestor_of_root`. With `own_root` given (the worktree the command runs in),
+    a target inside a root other than `own_root` is `inside_other_root`, while one inside
+    `own_root` passes — deleting another session's work is refused, deleting inside one's own
+    worktree allowed; the deepest holding root decides, since roots nest. `roots_too` False
+    lets a root itself through (a filtered `find` deletes only what matches below it);
+    `walk_links` False skips the walk (a move goes through no link). `case_rule(folder)` says
+    whether names in `folder` are case-insensitive; measured once per folder per call."""
 
     if target is None or not os.path.lexists(target):
         return None
     flavour = ntpath if windows else posixpath
     insensitive = _cached(case_rule)
+    inside: list[str] = []
     for root in roots:
         relation = _relation(target, root, flavour, insensitive)
         if relation == "same" and roots_too:
             return Finding("protected_root", root)
         if relation == "ancestor":
             return Finding("ancestor_of_root", root)
+        if relation is None and _relation(root, target, flavour, insensitive) == "ancestor":
+            inside.append(root)
+    if own_root is not None and inside:
+        closest = max(inside, key=len)
+        if _relation(closest, own_root, flavour, insensitive) != "same":
+            return Finding("inside_other_root", closest)
     if walk_links and os.path.isdir(target):
         link = _outward_link(target, flavour, windows, insensitive)
         if link is not None:

@@ -1,10 +1,8 @@
 """One test command run under its bound (#394 decision 2, the `cut` row).
 
-`run_bounded` starts the command with no console window, waits until it exits or its bound
-passes, and then kills its whole process tree either way, so no process of the run is left: on
-Windows every process of the run sits in one job object (the command starts suspended, joins
-the job, then resumes); elsewhere the command leads its own process group (a process that
-starts its own session escapes it). The bound passes when either the monotonic clock or the
+`run_bounded` starts the command, waits until it exits or its bound passes, and then kills its
+whole process tree either way, so no process of the run is left; how a tree is started and
+killed on each OS lives in `orch_it.proctree`. The bound passes when either the monotonic clock or the
 wall clock says so: a wall clock stepping back never stretches it, and a machine that sleeps
 through it still cuts the run. A jump of the wall clock between two polls longer than
 `SLEEP_GAP_SECONDS` that carries the run past its bound marks it `slept` (a short sleep long
