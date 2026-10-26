@@ -85,8 +85,8 @@ def test_a_rule_line_a_reader_cannot_see_is_not_stated():
 
 def test_the_skill_names_the_park_commands_and_each_label_of_the_set_in_its_section():
     text = SKILL.read_text("utf-8")
-    for command in ("python -m orch_it tickets park", "python -m orch_it tickets unpark", "python -m orch_it tickets parks"):
-        assert command in text
+    for command in ("park", "unpark", "parks"):
+        assert f"python -m orch_it tickets {command}" in text
     assert set(re.findall(r"^- `([a-z-]+)`:", section(text, "Labels"), re.MULTILINE)) == set(label_set())
     for dead in ("flow-fix", "Flow fix", "autopilot", "provisional", "hard-push"):  # not carried (decisions 2, 6)
         assert dead not in text, dead
