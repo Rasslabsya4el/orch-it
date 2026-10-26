@@ -95,6 +95,7 @@ class _Transcript:
     first_at: datetime | None = None
     last_at: datetime | None = None
     title: str | None = None
+    agent_setting: str | None = None  # the `--agent` a main session was started with
     model: str | None = None
     effort: str | None = None
     last_stop: str | None = None
@@ -113,11 +114,14 @@ class _Transcript:
 def import_transcripts(folder: str | Path, store: Store, *, repo: str, role: str = "worker",
                        subagent_role: str | None = None, ticket: int | None = None,
                        session: str | None = None, quiet_minutes: float = 30,
-                       now: datetime | None = None) -> ImportReport:
+                       now: datetime | None = None, brain_title: str | None = None) -> ImportReport:
     """Write the events of the transcripts in `folder` the store does not hold yet.
 
-    `role` is the role of the top-level sessions; a subagent takes `subagent_role`, else its
-    meta's `agentType` when that is a role code, else `worker`. `ticket` goes on every event.
+    `role` is the role of the top-level sessions, except the brain's: a session whose last title is
+    the repo's brain title (`brain_title`, else the repo's `brain_chat_title` setting, default
+    `Brain: <repo name>`; orchestration-layer#403), or that was started with `--agent brain`, is
+    `brain`. A subagent takes `subagent_role`, else its meta's `agentType` when that is a role
+    code, else `worker`. `ticket` goes on every event.
     `session` limits the run to one top-level session and its subagents. Bad options raise
     before any file is read."""
 
@@ -136,6 +140,7 @@ def import_transcripts(folder: str | Path, store: Store, *, repo: str, role: str
             "parent_session": None, "step": "session", "run": None, "note": None,
             "machine": "probe", "os": "probe", "layer_version": "probe"}, {}))
 
+    brain = _name(brain_title if brain_title is not None else _brain_title(repo))
     report = ImportReport()
     events: dict[str, dict] = {}
     for path, parent, meta in _transcript_files(folder, session):
@@ -151,7 +156,7 @@ def import_transcripts(folder: str | Path, store: Store, *, repo: str, role: str
             now - transcript.last_at >= timedelta(minutes=quiet_minutes))
         envelope = {
             "repo": repo, "ticket": ticket,
-            "role": role if parent is None else _subagent_role(subagent_role, meta),
+            "role": _top_role(transcript, role, brain) if parent is None else _subagent_role(subagent_role, meta),
             "session": transcript.session, "parent_session": parent,
             "step": None, "run": None, "note": None,
         }
@@ -170,6 +175,24 @@ def import_transcripts(folder: str | Path, store: Store, *, repo: str, role: str
                 continue
             report.written += 1
     return report
+
+
+def _brain_title(repo: str) -> str:
+    from orch_it import settings
+    from orch_it.brain import BrainSettings, default_title
+
+    try:
+        return BrainSettings.of(settings.load(), repo).chat_title
+    except settings.SettingsError:  # a broken setting never stops an import: the default title stands
+        return default_title(repo)
+
+
+def _top_role(transcript: _Transcript, given: str, brain_title: str) -> str:
+    """The brain by its title first, by its `--agent brain` second; else the role given."""
+
+    if transcript.title == brain_title or transcript.agent_setting == "brain":
+        return "brain"
+    return given
 
 
 def _subagent_role(given: str | None, meta: dict) -> str:
@@ -265,6 +288,8 @@ def _take(transcript: _Transcript, record: dict, order: int) -> None:
     kind = record.get("type")
     if kind == "custom-title" and isinstance(record.get("customTitle"), str):
         transcript.title = _name(record["customTitle"])
+    if isinstance(record.get("agentSetting"), str):
+        transcript.agent_setting = record["agentSetting"]
     at = _moment(record.get("timestamp"))
     if at is None:
         if kind == "assistant":
