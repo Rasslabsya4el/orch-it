@@ -141,6 +141,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
     p.add_argument("--ticket", type=int)
     p.add_argument("--done-file", metavar="PATH", help=argparse.SUPPRESS)  # the MCP front's job answer
+    p.add_argument("--job", help=argparse.SUPPRESS)  # the MCP front's job id, carried by the started event
 
     commands.add_parser("research-mcp", help="the research bridge's MCP server on stdin and stdout")
     return root
@@ -203,7 +204,7 @@ def _research(args) -> tuple[str, int]:
     done = research_run.research(
         brief, settings=ResearchSettings.from_settings(settings.load()), store=_store(args), repo=repo,
         work_tree=Path(args.work_tree), brief_name=Path(args.brief).stem, model=args.model,
-        no_reddit=args.no_reddit, report_to=args.report, ticket=args.ticket)
+        no_reddit=args.no_reddit, report_to=args.report, ticket=args.ticket, job=args.job)
     if args.done_file:
         research_run.write_done(Path(args.done_file), done)
     return done.line(), RESEARCH_EXIT.get(done.outcome, TESTS_EXIT_OTHER)

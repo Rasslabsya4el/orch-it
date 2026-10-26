@@ -144,7 +144,7 @@ def test_a_named_report_path_that_cannot_be_written_keeps_the_report_in_the_run_
     assert done.outcome == "passed"
     assert Path(done.report_path) == tmp_path / "state" / "runs" / done.run / "report.md"
     [ended] = bridge.events("step.ended")
-    assert ended["named_path_error"]
+    assert ended["named_path_unwritable"] is True
 
 
 def test_a_status_call_that_fails_now_and_then_does_not_end_the_run(tmp_path, monkeypatch):
@@ -204,3 +204,11 @@ def test_a_state_folder_inside_a_git_work_tree_is_refused(tmp_path):
     with pytest.raises(ResearchRefused) as refused:
         bridge.run()
     assert refused.value.code == "state_in_git_tree" and bridge.events() == []
+
+
+def test_a_failed_model_call_carries_the_provider_s_error_without_its_headers(tmp_path):
+    bridge = Bridge(tmp_path, messages=report_messages("model-error"))
+    done = bridge.run()
+    assert (done.outcome, done.reason, done.model_error) == ("no_result", "model_error", "APIError: 429 Too Many Requests")
+    [ended] = bridge.events("step.ended")
+    assert ended["model_error"] == "APIError: 429 Too Many Requests"

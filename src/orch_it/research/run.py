@@ -34,7 +34,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from orch_it.events.ids import live_id
-from orch_it.events.store import Store, _git_work_tree_around
+from orch_it.events.store import Store
 from orch_it.research import report, usage
 from orch_it.research.opencode import OpencodeError, Server, find_opencode
 from orch_it.research.settings import AGENT, ResearchRefused, ResearchSettings
@@ -46,6 +46,7 @@ PROGRESS_SECONDS = 15.0
 GRACE_SECONDS = 10.0  # `prompt_async` answers before the work starts: idle means done only after this
 BUSY_FAILURES = 5  # status calls failing in a row before the server counts as gone
 MAX_BRIEF_CHARS = 200_000
+MODEL_ERROR_CHARS = 200
 REPORT_NAME = re.compile(r"`(docs/research/[^`\s]+\.md)`")
 _ORIGIN = re.compile(r"(?:github\.com[:/])([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 
@@ -81,7 +82,8 @@ class ResearchDone:
     compactions: int
     minutes: float
     opencode_session: str | None
-    tokens: dict = field(default_factory=dict)  # the tree's usage, as the ended event carries it
+    tokens: dict = field(default_factory=dict)
+    model_error: str | None = None  # the provider's error of the run's last failed call, short  # the tree's usage, as the ended event carries it
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -132,24 +134,45 @@ def report_path_of(brief: str, work_tree: Path, given: str | Path | None = None)
     return path
 
 
-def research(brief: str, *, settings: ResearchSettings, store: Store, repo: str, work_tree: Path,
-             brief_name: str = "brief", model: str | None = None, no_reddit: bool = False,
-             report_to: str | Path | None = None, ticket: int | None = None, env=None,
-             poll_seconds: float = POLL_SECONDS, progress_seconds: float = PROGRESS_SECONDS,
-             grace_seconds: float = GRACE_SECONDS, wall=time.time) -> ResearchDone:
-    env = dict(os.environ if env is None else env)
+@dataclass(frozen=True)
+class Ready:
+    """What a run the settings can serve starts with."""
+
+    alias: str
+    model_id: str
+    argv: list[str]  # the program that starts opencode
+    target: Path | None  # the report path the brief or the caller names
+
+
+def preflight(brief: str, *, settings: ResearchSettings, env, model: str | None, work_tree: Path,
+              report_to: str | Path | None = None) -> Ready:
+    """Every refusal of a run, before any event or server, in the same order for both fronts: the
+    brief, the alias, the key's variable, opencode, the report path, the state folder."""
+
     if not brief.strip() or len(brief) > MAX_BRIEF_CHARS:
         raise ResearchRefused("brief_unreadable", "empty" if not brief.strip() else f"over {MAX_BRIEF_CHARS} characters")
     alias = model or settings.alias_for(len(brief))
     model_id = settings.model_id(alias)
-    settings.key(env)  # refused here, before any server, when the variable is unset
+    settings.key(env)
     try:
         argv = find_opencode(list(settings.opencode) if isinstance(settings.opencode, tuple) else settings.opencode)
     except OpencodeError as e:
         raise ResearchRefused("opencode_missing", str(e)) from None
     target = report_path_of(brief, work_tree, report_to)
-    if _git_work_tree_around(settings.state) is not None:
+    state = settings.state.expanduser().absolute()
+    if any((folder / ".git").exists() for folder in (state, *state.parents)):
         raise ResearchRefused("state_in_git_tree", str(settings.state))
+    return Ready(alias, model_id, argv, target)
+
+
+def research(brief: str, *, settings: ResearchSettings, store: Store, repo: str, work_tree: Path,
+             brief_name: str = "brief", model: str | None = None, no_reddit: bool = False,
+             report_to: str | Path | None = None, ticket: int | None = None, job: str | None = None, env=None,
+             poll_seconds: float = POLL_SECONDS, progress_seconds: float = PROGRESS_SECONDS,
+             grace_seconds: float = GRACE_SECONDS, wall=time.time) -> ResearchDone:
+    env = dict(os.environ if env is None else env)
+    ready = preflight(brief, settings=settings, env=env, model=model, work_tree=work_tree, report_to=report_to)
+    alias, model_id, argv, target = ready.alias, ready.model_id, ready.argv, ready.target
     config = settings.opencode_config()
     provider_id = next(iter(config["provider"]))
 
@@ -163,7 +186,8 @@ def research(brief: str, *, settings: ResearchSettings, store: Store, repo: str,
     with store.writer() as writer:
         writer.write({"kind": "step.started", **envelope, "detail": {
             "brief": brief_name, "brief_chars": len(brief), "brief_sha": brief_sha(brief),
-            "model_alias": alias, "model": model_id, "no_reddit": no_reddit, "helpers": settings.helpers}})
+            "model_alias": alias, "model": model_id, "no_reddit": no_reddit, "helpers": settings.helpers,
+            "job": job}})
         session = None
         try:
             bounded = abort_failed = None
@@ -200,27 +224,30 @@ def research(brief: str, *, settings: ResearchSettings, store: Store, repo: str,
                 outcome, reason = "failed", chosen.reason
             else:
                 outcome, reason = "no_result", chosen.reason
-            report_path = partial_path = named_path_error = None
+            report_path = partial_path = None
+            named_path_unwritable = False
             if outcome == "passed":
-                report_path, named_path_error = _write_kept(target, folder / "report.md", chosen.text)
+                report_path, named_path_unwritable = _write_kept(target, folder / "report.md", chosen.text)
             else:
                 written = chosen.text or _all_text(messages)
                 if written.strip():
                     stem = target.stem if target else "report"
-                    partial_path, named_path_error = _write_kept(
+                    partial_path, named_path_unwritable = _write_kept(
                         target.with_name(f"{stem}.partial.md") if target else None,
                         folder / f"{stem}.partial.md", written)
             done = ResearchDone(run, outcome, reason, alias, model_id, report_path, partial_path,
                                 chosen.report_from, chosen.chars, chosen.links, chosen.reddit_urls,
                                 chosen.last_chars, chosen.compactions,
-                                _elapsed_minutes(started_mono, started_wall, wall), session, tree.detail())
+                                _elapsed_minutes(started_mono, started_wall, wall), session, tree.detail(),
+                                _model_error(messages))
             writer.write({"kind": "step.ended", **envelope, "detail": {
                 "outcome": outcome, "reason": reason, "report_path": report_path, "partial_path": partial_path,
                 "report_from": chosen.report_from, "report_chars": chosen.chars, "links": chosen.links,
                 "reddit_urls": chosen.reddit_urls, "last_chars": chosen.last_chars,
                 "compactions": chosen.compactions, "minutes": done.minutes, "opencode_session": session,
                 "server_error": server_error.code if server_error else None, "abort_failed": abort_failed,
-                "named_path_error": named_path_error, **tree.detail()}})
+                "named_path_unwritable": named_path_unwritable, "model_error": done.model_error,
+                **tree.detail()}})
         except BaseException as e:  # the pair is always closed: a person's stop, or the bridge's own failure
             stopped = isinstance(e, KeyboardInterrupt)
             writer.write({"kind": "step.ended", **envelope, "detail": {
@@ -318,6 +345,23 @@ def _progress(client, root: str) -> dict | None:
             "helpers": helpers, "newest_ms": newest}
 
 
+def _model_error(messages: list) -> str | None:
+    """The newest error opencode recorded on a message (a failed model call), as
+    `<name> <status>: <message>` cut to `MODEL_ERROR_CHARS`, never its headers."""
+
+    for message in reversed(messages):
+        info = message.get("info") if isinstance(message, dict) else None
+        error = info.get("error") if isinstance(info, dict) else None
+        if not error:
+            continue
+        if not isinstance(error, dict):
+            return str(error)[:MODEL_ERROR_CHARS]
+        data = error.get("data") if isinstance(error.get("data"), dict) else {}
+        status = f" {data['statusCode']}" if data.get("statusCode") is not None else ""
+        return f"{error.get('name', 'error')}{status}: {data.get('message', '')}"[:MODEL_ERROR_CHARS]
+    return None
+
+
 def _all_text(messages: list) -> str:
     """Every text the model wrote in the run, in order (the compaction summaries left out)."""
 
@@ -337,21 +381,20 @@ def write_done(path: Path, done: ResearchDone) -> None:
     _write(Path(path), json.dumps(done.as_dict(), ensure_ascii=False, indent=1) + "\n")
 
 
-def _write_kept(named: Path | None, fallback: Path, text: str) -> tuple[str, str | None]:
+def _write_kept(named: Path | None, fallback: Path, text: str) -> tuple[str, bool]:
     """Write `text` to `named`, else (no path named, or it cannot be written: a folder there, no
     rights) to `fallback` in the run's folder, so a report is never lost. Returns the path written
-    and why the named one was not."""
+    and whether a named path could not be written."""
 
     if named is not None:
         try:
             _write(named, text)
-            return str(named), None
-        except OSError as e:
-            why = f"{type(e).__name__}: {e}"
-    else:
-        why = None
+            return str(named), False
+        except OSError:
+            _write(fallback, text)
+            return str(fallback), True
     _write(fallback, text)
-    return str(fallback), why
+    return str(fallback), False
 
 
 def _write(path: Path, text: str) -> None:
