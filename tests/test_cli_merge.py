@@ -7,7 +7,7 @@ import pytest
 
 from orch_it.cli import main
 from orch_it.events.store import Store
-from orch_it.merge import lock
+from orch_it.merge import commands, lock
 from orch_it.merge.settings import MergeSettings
 
 REPO = "owner-x/repo-y"
@@ -52,3 +52,46 @@ def test_unlock_refuses_a_lock_that_is_not_stale_and_leaves_it(locks, tmp_path, 
 def test_unlock_with_no_lock_says_so(locks, tmp_path, capsys):
     code, _, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "unlock", "--repo", REPO)
     assert code == 2 and err.startswith("error: lock_missing")
+
+
+@pytest.fixture
+def github(tmp_path, monkeypatch):
+    from fake_github import FakeGitHub
+    from follow_world import NO_AFTER_MERGE, NOW, TITLE
+
+    hub = FakeGitHub(NOW)
+    hub.add(10, NO_AFTER_MERGE, ["ready-for-agent"], title=TITLE)
+    hub.branches["ticket-10"] = [*hub.branches["main"], "t1"]
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(commands, "GhPullHub", lambda: hub)
+    calls = []
+
+    def git(args):
+        calls.append(args)
+        if args == ["rev-parse", "--abbrev-ref", "HEAD"]:
+            return "ticket-10\n"
+        return f"{hub.branches[args[-1].removesuffix('^{commit}')][-1]}\n" if args[:1] == ["rev-parse"] else ""
+
+    monkeypatch.setattr(commands.merge_git, "work_tree", lambda work_tree: git)
+    return hub, calls
+
+
+def test_pr_open_prints_the_pull_request_and_the_park(github, tmp_path, capsys):
+    from follow_world import ROWS_NO_AFTER
+
+    hub, calls = github
+    rows = tmp_path / "rows.md"
+    rows.write_text(ROWS_NO_AFTER, "utf-8")
+    code, out, err = run(capsys, "--store", str(tmp_path / "events"), "pr", "open", "10", "--acceptance", str(rows),
+                         "--repo", REPO)
+    assert (code, err) == (0, "")
+    pr = max(hub.pulls)
+    until = (datetime.now(UTC) + timedelta(hours=24)).date() + timedelta(days=1)  # the command reads the clock
+    assert out == f"pr #{pr} opened at t1: Parked: pr_ended #{pr} until {until.isoformat()}\n"
+    assert ["rev-parse", "--abbrev-ref", "HEAD"] in calls
+
+
+def test_pr_open_with_an_acceptance_file_that_is_not_there_is_refused(github, tmp_path, capsys):
+    code, out, err = run(capsys, "--store", str(tmp_path / "events"), "pr", "open", "10", "--acceptance",
+                         str(tmp_path / "none.md"), "--repo", REPO)
+    assert (code, out) == (2, "") and err.startswith("error: acceptance_unreadable")

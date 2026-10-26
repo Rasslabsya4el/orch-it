@@ -45,12 +45,12 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `report_from` | `last`, `earlier`, `joined` |
 | `review_axis` | `standards`, `spec`, `edge` |
 | `unit_reason` | `format`, `result`, `merge` |
-| `pr_reason` | `merged`, `red`, `closed_unmerged`, `timeout`, `withdrawn` |
+| `pr_reason` | `merged`, `red`, `closed_unmerged`, `timeout`, `withdrawn`, `conflict` |
 | `call_target` | `gh`, `git`, `github_api`, `bridge_http`, `claude_cli` |
 | `check` | `pocock_contract`, `leak`, `guard_install`, `branch_protection`, `hooks_path`, `environment` |
 | `claim_reason` | `held_by_other`, `not_ready` |
 | `plan_reason` | `ticket_changed`, `not_doable` |
-| `close_reason` | `acceptance_missing`, `row_failed`, `unanswered`, `already_closed` |
+| `close_reason` | `acceptance_missing`, `row_failed`, `unanswered`, `already_closed`, `ticket_changed` |
 | `repair` | `lease_released`, `closed`, `unparked`, `rerun`, `red_ticket_opened` |
 | `turn_reason` | `price_missing`, `usage_unreadable` |
 | `load_verdict` | `code`, `load` |
@@ -83,6 +83,7 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `drift` | `behind`, `hook_extra`, `hook_missing`, `file_edited_in_target`, `leak` |
 | `setting_source` | `repo`, `machine`, `default` |
 | `resume_cause` | `suspend`, `hibernate` |
+| `attempt_reason` | `red`, `red_on_main`, `no_result`, `conflict` |
 
 ## Step ids
 
@@ -147,7 +148,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `ticket.unparked` | `by` (`unpark_by`), `on_ref`, `late_minutes`, `returned_as` (`park_return`) | how late a return came |
 | `park.unreadable` | `reason` (`park_unreadable`) | a park nobody can return |
 | `comment.written` | `comment_kind` (`comment_kind`) | the state that lives in comment text |
-| `attempt.counted` | `reason`, `counted`, `in_a_row` | failed attempts, and which were not the ticket's fault |
+| `attempt.counted` | `reason` (`attempt_reason`), `counted`, `in_a_row` | failed attempts, and which were not the ticket's fault |
 | `ticket.closed` | `via` (`close_via`), `state_reason` (`state_reason`), `rows_total`, `rows_passed`, `comments_unanswered` | closes past the acceptance check |
 | `ticket.reopened` | `reason` | a closed ticket reopened and why |
 | `acceptance_row.checked` | `row`, `result` (`row_result`), `place`, `evidence` | each acceptance row's verdict |
@@ -255,5 +256,7 @@ the run's latest progress), `ended` (the run's end as the command line's `--done
 and its path) or `gone` (`worker_died`, `worker_lost`: the job's process ended with no answer).
 
 `python -m orch_it tickets check-github --event <file>`: the shape check of the workflow `ticket-shape` on an `issues` event: a ticket that got `ready-for-agent`, or a ready ticket that was edited, is read again and judged by the shape rules; with violations the label comes off, then a comment lists them (the body is never edited); prints `#<n> kept`, `#<n> removed: <codes>` or `skipped`; an event file that is no JSON object is `error: event_unreadable`.
+
+`python -m orch_it [--store PATH] pr open <ticket> --acceptance <file> [--notes <file>] [--branch B] [--base main] [--work-tree PATH] [--repo R] [--role orch]`: ORCH's acceptance step (#400 decision 1). The file holds the measured rows, a table `row`, `result`, `evidence`: each row of the ticket once, `after merge` for a row marked so, `pass` or `na` with its evidence for every other (a row marked `after merge` may be left out); a `fail`, a missing, unknown or repeated row refuses (`row_failed`, `row_missing`, `row_unknown`, `row_twice`, `row_bad`, `acceptance_unreadable`, `acceptance_missing`); a ticket that is not there or not open refuses (`ticket_missing`, `ticket_not_open`), so does a branch name git could read as an option or another thing, or `HEAD` (`branch_bad`), or the base itself (`branch_is_base`). One pull request per ticket: another branch's open pull request of the ticket refuses (`ticket_has_pr`; a second `pr open` that loses the race to park the ticket closes its own new pull request), the branch's own is reused when it says `Refs #<ticket>` (else `pr_other_ticket`), a fork's branch of the same name is never the ticket's, a ticket parked on anything else refuses (`parked_elsewhere`), a closing keyword (`Closes #N`, `fixes owner/repo#N`, `GH-N`, an issue link) in a commit past the base, the ticket's title or a reused pull request's title or body refuses (`closing_keyword`). Then the branch is pushed (never forced; `push_failed`, `git_failed`), the pull request opened with `Refs #<ticket>` or reused, its head checked to be the commit the rows were measured on (`head_moved`), the acceptance comment written on the ticket (the rows, that head, the hash of the body), the ready mark on the pull request, auto-merge turned on with `merge.merge_method`, and the ticket parked `pr_ended` on it until the day after `merge.pr_max_hours`; prints `pr #<n> opened|reused at <head>: <park line>`. Events: the `pr` step started (run `pr:<repo>#<n>@<ready mark time>`), `acceptance_row.checked` per row run, `comment.written` (`accepted`), and the park's own.
 
 `python -m orch_it [--store PATH] merge unlock [--repo R]`: remove the repo lock of the merge line (the folder `merge-lock/<owner>__<name>` in the per-user data folder) only when it is stale, older than the setting `merge.lock_stale_minutes`; prints `removed the stale lock of <repo>: <holder> since <time>` and writes `lock.removed`. A lock that is not stale is never removed: `error: lock_not_stale` names its holder; no lock is `error: lock_missing`; a lock it cannot remove whole is `error: lock_unwritable` and still names its holder; a repo that is no `owner/name` (or ends in a dot) is `error: bad_repo`.

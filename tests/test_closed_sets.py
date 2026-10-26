@@ -61,8 +61,9 @@ CODE_FIELDS = {
     ("test_run.started", "place"): {"own", "machine:<id>", "github"},
     ("review.started", "axis"): {"standards", "spec", "edge"},
     ("unit.ended", "reason"): {"format", "result", "merge", "suspended", "lease_lost"},
+    ("attempt.counted", "reason"): {"red", "red_on_main", "no_result", "conflict"},  # #400 decision 3
     ("pr.ended", "reason"): {
-        "merged", "red", "closed_unmerged", "timeout", "withdrawn", "suspended", "lease_lost",
+        "merged", "red", "closed_unmerged", "timeout", "withdrawn", "conflict", "suspended", "lease_lost",
     },
     ("external_call.started", "target"): {"gh", "git", "github_api", "bridge_http", "claude_cli"},
     ("check.started", "check"): {
@@ -72,7 +73,7 @@ CODE_FIELDS = {
     ("claim.ended", "reason"): {"held_by_other", "not_ready", "suspended", "lease_lost"},
     ("plan.ended", "reason"): {"ticket_changed", "not_doable", "suspended", "lease_lost"},
     ("close.ended", "reason"): {
-        "acceptance_missing", "row_failed", "unanswered", "already_closed", "suspended",
+        "acceptance_missing", "row_failed", "unanswered", "already_closed", "ticket_changed", "suspended",
         "lease_lost",
     },
     ("reconcile.ended", "repairs"): {

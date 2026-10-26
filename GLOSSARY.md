@@ -313,3 +313,21 @@ _Avoid_: merge turn, mutex, merge lock
 **Stale lock**:
 A line lock held longer than any line runs; it is reported and never taken, and only a person removes it.
 _Avoid_: dead lock, expired lock
+
+**Measured rows**:
+What ORCH found for each acceptance row on its branch before the pull request: pass, fail, not applicable with its
+reason, or after merge.
+_Avoid_: test results, acceptance results
+
+**Acceptance comment**:
+The layer's comment on a ticket holding its measured rows, the commit they were measured on and the ticket text they
+were measured against; the ticket is closed from it.
+_Avoid_: closing comment, summary comment
+
+**Ready mark**:
+The layer's mark on a pull request that it entered the merge line, and when; not the ready of a ticket.
+_Avoid_: queued label, ready label
+
+**Left mark**:
+The layer's mark on a pull request that it left the merge line, and why; the next ready mark puts it back.
+_Avoid_: dequeued, removed from queue

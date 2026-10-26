@@ -18,6 +18,8 @@ Keys, each optional:
   ends with no result and is run once more;
 - `red_in_a_row` (3): the red returns of one ticket in a row that send it to the brain instead of
   back to ready;
+- `red_main_park_days` (7): how long a ticket red only on tests red on main waits parked on the
+  red-on-main ticket before it goes back to its queue late;
 - `merge_method` (`merge`): how the line merges and how `pr open` turns auto-merge on: `merge`,
   `squash` or `rebase`.
 
@@ -36,7 +38,7 @@ METHODS = ("merge", "squash", "rebase")
 WEEK_MINUTES = 7 * 24 * 60  # a longer bound is no bound
 # key -> (least, most) in the key's own unit; a poll under a second would hammer GitHub
 _RANGES = {"pr_max_hours": (0, WEEK_MINUTES / 60), "poll_seconds": (1, 3600)}
-COUNT_MOST = 1000  # `max_updates`, `red_in_a_row`: a count past this is no bound
+COUNT_MOST = 1000  # `max_updates`, `red_in_a_row`, `red_main_park_days`: a count past this is no bound
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class MergeSettings:
     lock_stale_minutes: float = 120
     check_stuck_minutes: float = 60
     red_in_a_row: int = 3
+    red_main_park_days: int = 7
     merge_method: str = "merge"
 
     @classmethod
@@ -74,7 +77,7 @@ class MergeSettings:
             if key == "merge_method":
                 if value not in METHODS:
                     raise SettingsError("bad_setting", f"{SECTION}.{key}: one of {', '.join(METHODS)}")
-            elif key in ("max_updates", "red_in_a_row"):
+            elif key in ("max_updates", "red_in_a_row", "red_main_park_days"):
                 if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= COUNT_MOST:
                     raise SettingsError("bad_setting", f"{SECTION}.{key}: a whole number from 1 to {COUNT_MOST}")
             else:

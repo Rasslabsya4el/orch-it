@@ -28,7 +28,6 @@ from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.guards import hook, install, prepush, scanner
 from orch_it.guards import status as guards_status
 from orch_it.merge import commands as merge_commands
-from orch_it.merge.lock import LockError
 from orch_it.research import mcp as research_mcp
 from orch_it.research import run as research_run
 from orch_it.research.settings import ResearchRefused, ResearchSettings
@@ -591,14 +590,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.group == "tickets":
             text, code = ticket_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of("."),
                                              render), 0
-        elif args.group == merge_commands.GROUP:
-            text, code = merge_commands.run(args, lambda: _store(args), lambda: _repo_of("."))
+        elif args.group in merge_commands.GROUPS:
+            text, code = merge_commands.run(args, lambda: _store(args), _repo_of)
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError,
             SkillsError, SpawnRefused, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
-            ResearchRefused, LockError) as e:
+            ResearchRefused, *merge_commands.ERRORS) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
