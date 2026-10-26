@@ -187,6 +187,8 @@ def _parser() -> argparse.ArgumentParser:
         dest="command", required=True)
     hook_commands.add_parser("pre-tool-use", parents=[common],
                              help="the PreToolUse guard; reads the hook's JSON on stdin")
+    hook_commands.add_parser("subagent-stop", parents=[common],
+                             help="the SubagentStop hold of report lines; reads the hook's JSON on stdin")
     p = hook_commands.add_parser("pre-push", parents=[common],
                                  help="the git pre-push guard; git passes the remote's name and url "
                                       "and writes the refs on stdin")
@@ -358,6 +360,15 @@ def _guards_install(args) -> tuple[str, int]:
 
 
 def _hook(args) -> tuple[str, int]:
+    if args.command == "subagent-stop":
+        # the hold never blocks a stop by an error: whatever goes wrong lets the stop through
+        try:
+            from orch_it.roles.hold import run_subagent_stop
+
+            raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+            return run_subagent_stop(raw, store=_store(args) if args.store else None)
+        except Exception:
+            return "", 0
     if args.command == "pre-tool-use":
         # the hook must never block a tool call: a store or settings error (which the CLI would
         # otherwise print and exit 2 on, Claude Code's blocking code) lets the call through

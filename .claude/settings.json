@@ -25,6 +25,13 @@
         ]
       }
     ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "python -m orch_it hook subagent-stop", "timeout": 60}
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
