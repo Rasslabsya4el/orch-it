@@ -42,6 +42,10 @@ class Simple:
 # no further: the inner content is treated as unreadable, never followed into a stack overflow
 MAX_DEPTH = 40
 
+# a Windows-absolute path a `cd` target may take in Git Bash: a drive (`C:/x`, `C:\x`) or a UNC
+# share (`\\srv\share`); such a target replaces the cwd rather than joining onto it
+_WIN_ABSOLUTE = re.compile(r"[A-Za-z]:[\\/]|\\\\")
+
 
 def _too_deep(cwd: str | None, dialect: str) -> Simple:
     """What stands for a command nested past `MAX_DEPTH`: an unreadable head with an unreadable
@@ -179,6 +183,11 @@ class _PosixSplit:
         elif target is None or target in ("", "-") or self.cwd is None:
             # an unreadable target, or `cd -` (the previous dir, unknown): the cwd is now unknown
             self.cwd = None
+        elif self.walker.windows and _WIN_ABSOLUTE.match(target):
+            # Git Bash on Windows: a drive-letter (`C:/x`, `C:\x`) or UNC target is absolute and
+            # replaces the cwd — joining it onto the old one (posixpath glues it, since it is not
+            # POSIX-absolute) would lose the real directory and refuse a later relative delete
+            self.cwd = ntpath.normpath(target)
         else:
             self.cwd = posixpath.normpath(posixpath.join(self.cwd, target))
 
