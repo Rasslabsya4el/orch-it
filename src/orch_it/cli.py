@@ -4,7 +4,8 @@
 it prints one line per private value found and exits 1 when there is any); `python -m orch_it skills
 shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m orch_it
 research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m orch_it
-tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`).
+tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`); `python -m orch_it skills check` and
+`skills update` (#397 decision 4).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -25,7 +26,9 @@ from orch_it.guards import hook, scanner
 from orch_it.research import mcp as research_mcp
 from orch_it.research import run as research_run
 from orch_it.research.settings import ResearchRefused, ResearchSettings
-from orch_it.skills import shadow
+from orch_it.skills import shadow, update
+from orch_it.skills.copies import SkillsError
+from orch_it.skills.forge import GithubForge
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, run_tests
@@ -181,6 +184,17 @@ def _parser() -> argparse.ArgumentParser:
         dest="command", required=True)
     skills.add_parser("shadowed", parents=[common],
                       help="the session-start hook: a skill.shadowed event per personal skill of a repo skill's name")
+    p = skills.add_parser("check", parents=[common],
+                          help="fetch his upstream and give each skill its class against the manifest")
+    p.add_argument("--ref", default="main", help="his branch (default: main)")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p = skills.add_parser("update", parents=[common],
+                          help="on a change, one pull request with the new copies and every skill's class")
+    p.add_argument("--ref", default="main", help="his branch (default: main)")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
+    p.add_argument("--dispatch-tests", action="store_true",
+                   help="start the tests workflow on the branch (a workflow token's pull request starts none)")
 
     p = commands.add_parser("research", parents=[common], help="run a brief through the research bridge")
     p.add_argument("brief", help="the brief file (Markdown); the report goes to the path it names")
@@ -399,6 +413,22 @@ def _skills_shadowed(args) -> int:
     return 0
 
 
+def _skills(args) -> str:
+    if args.command == "check":
+        return update.render(update.check(Path(args.work_tree), ref=args.ref))
+    repo = args.repo or _repo_of(args.work_tree)
+    done = update.update(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref,
+                         dispatch_tests=args.dispatch_tests)
+    if done.status == "no_change":
+        return "no change\n"
+    rule = f"labels={','.join(done.labels)}" if done.labels else "merges when green"
+    if done.status == "already_open":
+        return f"pull request already open: {done.pr} {rule}\n"
+    if done.status == "declined":
+        return f"pull request closed unmerged for this commit, not opened again: {done.pr}\n"
+    return f"pull request: {done.pr} {rule}\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
@@ -415,6 +445,8 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _hook(args)
         elif args.group == "labels":
             text, code = _labels_sync(args), 0
+        elif args.group == "skills":
+            text, code = _skills(args), 0
         elif args.group == "research":
             text, code = _research(args)
         elif args.group == "research-mcp":
@@ -425,7 +457,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, labels.LabelError, ParkError, CheckError, CommandError,
+            queries.QueryError, github.GithubError, labels.LabelError, ParkError, CheckError, SkillsError,
+            CommandError,
             RunError, scanner.ScanError, hook.ReverseError, ResearchRefused) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
