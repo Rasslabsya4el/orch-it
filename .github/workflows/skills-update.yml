@@ -1,0 +1,40 @@
+name: skills-update
+
+# Daily and on demand (#397 decision 4): compare his upstream with the repo's skill copies and, on a
+# change, open one pull request with the new copies and every skill's class. The log's last line is
+# `no change`, `pull request already open: <url>` or `pull request: <url> <labels or merge rule>`.
+# A pull request opened with this workflow's token starts no workflow, so the update asks for the
+# `tests` workflow on its branch by name (`--dispatch-tests`).
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: skills-update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: skills update
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOT_NAME: github-actions[bot]
+          BOT_ADDRESS: ${{ format('{0}+{1}@users.noreply.github.com', '41898282', 'github-actions[bot]') }}
+        run: |
+          git config user.name "$BOT_NAME"
+          git config user.email "$BOT_ADDRESS"
+          python -m orch_it skills update --repo "${{ github.repository }}" --dispatch-tests

@@ -45,6 +45,11 @@ SKILLS_ERROR_CODES = (
     "manifest_unreadable", # the manifest is no JSON
     "bad_manifest",        # the manifest is JSON of the wrong shape
     "copy_over_ours",      # a copy would overwrite a skill folder of ours
+    "fetch_failed",        # his upstream could not be fetched
+    "manifest_mismatch",   # the manifest is not his tree at its own commit
+    "copies_edited",       # a copy differs from the manifest: an update would overwrite it
+    "work_tree_dirty",     # the work tree an update branches from has changes
+    "forge_failed",        # gh refused or timed out
 )
 
 _NAME = re.compile(r"[a-z0-9][a-z0-9._-]*")
