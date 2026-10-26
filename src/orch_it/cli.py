@@ -9,12 +9,14 @@ field or detail) to stderr and the exit code is 2.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
 
 from orch_it import labels, settings
 from orch_it.events import queries, schema, transcripts
+from orch_it.skills import shadow
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
@@ -130,6 +132,11 @@ def _parser() -> argparse.ArgumentParser:
     p = label_commands.add_parser("sync", parents=[common],
                                   help="make a repo's labels match the layer's set")
     p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
+
+    skills = commands.add_parser("skills", help="the repo's skill copies").add_subparsers(
+        dest="command", required=True)
+    skills.add_parser("shadowed", parents=[common],
+                      help="the session-start hook: a skill.shadowed event per personal skill of a repo skill's name")
     return root
 
 
@@ -222,11 +229,36 @@ def _run(args) -> str:
     raise AssertionError(command)
 
 
+def _skills_shadowed(args) -> int:
+    """The SessionStart hook (#397 decision 3): reads the hook's JSON from stdin, writes the
+    events, prints nothing, and exits 0 whatever happens, so it never blocks a session."""
+
+    try:
+        hook = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+        if not isinstance(hook, dict):
+            return 0
+        cwd = hook.get("cwd") if isinstance(hook.get("cwd"), str) else "."
+        session = hook.get("session_id") if isinstance(hook.get("session_id"), str) else None
+        try:
+            repo_name = _repo_of(cwd)
+        except CommandError:
+            return 0
+        shadow.write_shadowed(_store(args), repo=Path(cwd), personal=shadow.personal_folder(),
+                              repo_name=repo_name, session=session)
+    except (ValueError, UnicodeDecodeError):
+        return 0
+    except Exception as e:  # fail open: a broken hook must never stop a session
+        print(f"error: {getattr(e, 'code', type(e).__name__)}: {e}", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else EXIT_ERROR
+    if args.group == "skills" and args.command == "shadowed":
+        return _skills_shadowed(args)
     try:
         if args.group == "tests":
             text, code = _tests_run(args)

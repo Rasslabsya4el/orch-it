@@ -124,6 +124,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `machine.booted` | none | the gap a boot leaves in every running step |
 | `tool.called` | `tool`, `args_head` (≤120), `outcome` (`tool_outcome`), `refused_by` (`refused_by`), `ms` | what agents actually do; refused calls and retries |
 | `skill.called` | `skill`, `called_at_step`, `before_first_edit` | is each skill called at its step |
+| `skill.shadowed` | `skill`, `copy`, `same_text` | a personal skill of a repo skill's name that replaces it in every session |
 | `report_line.checked` | `label` (`report_label`), `claimed`, `verified`, `accepted`, `first_edit_path` | false report lines; a stop held for a missing call |
 | `rule_file.read` | `path`, `sha`, `lines_read`, `lines_total` | does a role read its rules and the glossary in full |
 | `context.crossed` | `threshold` (`context_threshold`), `tokens`, `action_after` (`context_action`) | sessions running past their context line |
