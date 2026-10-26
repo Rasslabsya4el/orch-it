@@ -1,6 +1,7 @@
 """The daily update workflow (#397 decision 4, row 8): it runs on a schedule and on demand, one run at
-a time, with the token rights an update pull request needs, and calls `skills update` with the tests
-dispatched on its branch."""
+a time, and calls `skills report`, which keeps one issue per upstream commit; it opens no pull request,
+so its token may read the code and write issues, nothing more (the brain's decision on #397 after the
+probe orch-it #44)."""
 
 import re
 from pathlib import Path
@@ -35,17 +36,13 @@ def test_one_run_at_a_time_never_cut():
     assert section("concurrency") == ["group: skills-update", "cancel-in-progress: false"]
 
 
-def test_the_token_may_push_a_branch_open_a_pull_request_and_start_the_tests():
-    assert set(section("permissions")) == {"contents: write", "pull-requests: write", "actions: write"}
+def test_the_token_may_read_the_code_and_write_issues_only():
+    assert set(section("permissions")) == {"contents: read", "issues: write"}
 
 
-def test_it_calls_the_update_with_the_tests_dispatched():
+def test_it_calls_the_report_and_never_the_update():
     text = "\n".join(lines())
-    assert 'python -m orch_it skills update --repo "$REPO" --dispatch-tests' in text
+    assert 'python -m orch_it skills report --repo "$REPO"' in text
     assert "GH_TOKEN: ${{ github.token }}" in text and "REPO: ${{ github.repository }}" in text
     assert "timeout-minutes: 15" in text
-
-
-def test_the_dispatched_tests_are_the_workflow_that_exists():
-    tests = WORKFLOW.with_name("tests.yml").read_text("utf-8")
-    assert "workflow_dispatch:" in tests and "slow_and_live:" in tests
+    assert "skills update" not in text and "--dispatch-tests" not in text

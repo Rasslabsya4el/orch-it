@@ -6,8 +6,8 @@
 (the git hook that scans a push to a public repo); `python -m orch_it skills
 shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m orch_it
 research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m orch_it
-tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`); `python -m orch_it skills check` and
-`skills update` (#397 decision 4).
+tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`); `python -m orch_it skills check`,
+`skills report` and `skills update` (#397 decision 4).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -213,13 +213,16 @@ def _parser() -> argparse.ArgumentParser:
                           help="fetch his upstream and give each skill its class against the manifest")
     p.add_argument("--ref", default="main", help="his branch (default: main)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
-    p = skills.add_parser("update", parents=[common],
-                          help="on a change, one pull request with the new copies and every skill's class")
+    p = skills.add_parser("report", parents=[common],
+                          help="the daily run: on a change, one issue per upstream commit with every skill's class")
     p.add_argument("--ref", default="main", help="his branch (default: main)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
-    p.add_argument("--dispatch-tests", action="store_true",
-                   help="start the tests workflow on the branch (a workflow token's pull request starts none)")
+    p = skills.add_parser("update", parents=[common],
+                          help="run by ORCH on the report's issue: one pull request with the new copies")
+    p.add_argument("--ref", default="main", help="his branch (default: main)")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
 
     p = commands.add_parser("research", parents=[common], help="run a brief through the research bridge")
     p.add_argument("brief", help="the brief file (Markdown); the report goes to the path it names")
@@ -492,16 +495,22 @@ def _skills(args) -> str:
     if args.command == "check":
         return update.render(update.check(Path(args.work_tree), ref=args.ref))
     repo = args.repo or _repo_of(args.work_tree)
-    done = update.update(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref,
-                         dispatch_tests=args.dispatch_tests)
+    if args.command == "report":
+        done = update.report(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref)
+        if done.status == "no_change":
+            return "no change\n"
+        said = {"opened": "issue", "already_open": "issue already open, body updated",
+                "declined": "issue closed by the brain for this commit, not opened again"}[done.status]
+        return f"{said}: {done.url} {','.join(done.labels)}".rstrip() + "\n"
+    done = update.update(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref)
     if done.status == "no_change":
         return "no change\n"
-    rule = f"labels={','.join(done.labels)}" if done.labels else "merges when green"
+    rule = f"labels={','.join(done.labels)}" if done.labels else "no label"
     if done.status == "already_open":
-        return f"pull request already open: {done.pr} {rule}\n"
+        return f"pull request already open: {done.url} {rule}\n"
     if done.status == "declined":
-        return f"pull request closed unmerged for this commit, not opened again: {done.pr}\n"
-    return f"pull request: {done.pr} {rule}\n"
+        return f"pull request closed unmerged for this commit, not opened again: {done.url}\n"
+    return f"pull request: {done.url} {rule}\n"
 
 
 def main(argv: list[str] | None = None) -> int:
