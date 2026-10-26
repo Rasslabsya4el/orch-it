@@ -445,3 +445,64 @@ def test_a_manifest_value_that_reads_as_an_option_is_refused(world, field, value
         update.check(world["repo"], cache=world["cache"])
     assert e.value.code == "bad_manifest"
     assert not (world["repo"] / "marker").exists()
+
+
+# the issue is a ticket (the brain's word on #397): its body passes #398's shape rules, checked at write
+
+def shape_of(title, body):
+    from orch_it.tickets import model, shape
+    return [v.message for v in shape.violations(model.parse(body, title=title))]
+
+
+def test_the_issue_of_his_real_move_to_5beb35b_is_a_ticket_with_no_shape_violation():
+    from pathlib import Path
+    from orch_it.skills.classify import Change
+    root = Path(__file__).resolve().parents[1]
+    manifest = Manifest.load(root)
+    manifest.commit = "49dd158d1076134a641b33efb035946536778336"
+    paths = {**{n: e["path"] for n, e in manifest.skills.items()}, **{n: e["path"] for n, e in manifest.not_copied.items()}}
+    changes = [Change(name, "text_changed" if name == "chief-of-staff" else "same", path, path,
+                      ["SKILL.md"] if name == "chief-of-staff" else []) for name, path in sorted(paths.items())]
+    found = update.Check(manifest, "5beb35b040e3de97e54fa9e386d7e42d15c295c2", {}, changes)
+    title, body = update.issue(found)
+    assert title == "His skills moved to 5beb35b040e3"
+    assert shape_of(title, body) == []
+    assert "| `chief-of-staff` | text_changed |" in body
+
+
+def test_the_issue_of_a_renamed_copy_is_a_ticket_with_no_shape_violation(world):
+    newer(world, {"skills/engineering/review/SKILL.md": None,
+                  "skills/engineering/code-review/SKILL.md": skill("code-review", "Two axes.\n" * 20)})
+    forge = FakeForge()
+    report(world, forge)
+    [(title, body, label)] = forge.opened
+    assert shape_of(title, body) == [] and label == "needs-triage"
+
+
+def test_a_bad_template_gives_an_issue_without_ready_for_agent_that_lists_its_violations(world, monkeypatch):
+    monkeypatch.setitem(update.HUMAN_LINES, "Goal", "the copies match his upstream")  # English: the shape refuses it
+    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge()
+    done = report(world, forge)
+    [(_, body, label)] = forge.opened
+    assert label != "ready-for-agent" and done.labels == [label]
+    assert "human_field_not_russian" in body
+
+
+def test_a_body_with_violations_on_a_later_run_leaves_the_brains_labels(world, monkeypatch):
+    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge()
+    report(world, forge)
+    forge.issues[0]["labels"] = ["ready-for-agent"]
+    monkeypatch.setitem(update.HUMAN_LINES, "Goal", "the copies match his upstream")
+    assert report(world, forge).status == "already_open"
+    assert forge.issues[0]["labels"] == ["ready-for-agent"] and "human_field_not_russian" in forge.edited[-1][1]
+
+
+def test_a_huge_change_stays_inside_a_github_body_and_its_shape():
+    from orch_it.skills.classify import Change
+    manifest = Manifest("u", "1" * 40, {}, {})
+    changes = [Change(f"skill-{n}", "contract_changed", f"skills/x/skill-{n}", f"skills/x/skill-{n}",
+                      ["a reason\nWeight: 99 | with `marks`"] * 3) for n in range(2000)]
+    title, body, broken = update.checked_issue(update.Check(manifest, "2" * 40, {}, changes))
+    assert len(body) < 65_536 and broken == [] and "1800 more changed skills" in body
