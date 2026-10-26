@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "hooks": {
     "PreToolUse": [
       {
@@ -12,5 +13,10 @@
         ]
       }
     ]
+=======
+  "enabledPlugins": {
+    "mattpocock-skills@claude-plugins-official": false,
+    "mattpocock-skills@mattpocock": false
+>>>>>>> tickets-park
   }
 }
