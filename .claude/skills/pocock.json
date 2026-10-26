@@ -1,7 +1,7 @@
 {
-  "_about": "His skills copied byte for byte from `upstream` at `commit` (#397 decision 1): per copy its upstream path and the git blob hash of every file; `not_copied` his skills left out and why. Written with the copies by `orch_it.skills.copies.write`; a skill folder this file does not name is ours.",
+  "_about": "His skills copied byte for byte from `upstream` at `commit` (#397 decision 1): per copy its upstream path and the git blob hash of every file; `not_copied` his skills left out and why; `gone` the names his upstream dropped and what became of them. Written with the copies by `orch_it.skills.copies.write`; a skill folder this file does not name is ours.",
   "upstream": "https://github.com/mattpocock/skills",
-  "commit": "49dd158d1076134a641b33efb035946536778336",
+  "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
   "skills": {
     "code-review": {
       "path": "skills/engineering/code-review",
@@ -192,7 +192,7 @@
       "path": "skills/in-progress/chief-of-staff",
       "why": "hidden (#390 6.1, 6.2, 6.4, 6.5: a second coordinator with its own decision wiki beside the brain and ORCH)",
       "files": {
-        "SKILL.md": "97da622d09acaaacebbb4482663c907e241f4594",
+        "SKILL.md": "6dbdd4da9296e7dd3ef7cd8c7fd498be6e834620",
         "agents/openai.yaml": "080598b44ad9c843dc3457b6e0e32368aaeec84d"
       }
     },
