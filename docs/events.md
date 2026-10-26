@@ -28,7 +28,7 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 
 | list | codes |
 |---|---|
-| `role` | `owner`, `brain`, `orch`, `worker`, `worker-strong`, `reviewer-standards`, `reviewer-spec`, `researcher-find`, `researcher-how`, `researcher-survey`, `external-researcher`, `launcher`, `github`, `hook`, `script` |
+| `role` | `owner`, `brain`, `orch`, `worker`, `worker-strong`, `reviewer-standards`, `reviewer-spec`, `reviewer-edge`, `researcher-find`, `researcher-how`, `researcher-survey`, `external-researcher`, `launcher`, `github`, `hook`, `script` |
 | `outcome` | `passed`, `failed`, `no_result`, `refused`, `lost`, `stopped` |
 | `step_ended_any` | `suspended`, `lease_lost` |
 | `launched_by` | `launcher`, `owner`, `session`, `boot` |
@@ -217,6 +217,8 @@ It prints one line per hit, `<sha12> <where> <file or ->:<line or -> <kind>` (th
 `python -m orch_it hook pre-tool-use`: the Claude Code PreToolUse guard. It reads the hook's JSON on stdin (the tool, its command, the session id and the cwd), reads the command into its delete, move and stop actions, judges each against the object (the real path against the repo's worktrees, the real process tree), writes a `guard.fired` per triggered action, and prints the deny decision that refuses the tool call when one is refused; a guard that crashes lets the call through and writes `error.raised` with `failed_open`. It is wired in orch-it's `.claude/settings.json` for the Bash and PowerShell tools.
 
 `python -m orch_it labels sync [--repo R]`: make the repo's labels match the layer's set (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `parked`, `priority`, each with a colour and description from `labels/labels.json`; default repo the work tree's GitHub origin): a missing label is created, one with another colour, description or letter case is updated, an equal one is kept, every other label is listed `foreign` and never changed or deleted; prints `label`, `action` rows.
+
+`python -m orch_it roles render [--settings PATH] [--work-tree PATH]`: write the `model:` and `effort:` frontmatter lines of each agent file of `.claude/agents/` from the roles settings (`src/orch_it/roles/roles.json`, or `--settings`: per role its `model`, optional `effort` and `fallback` model, each a full model id with a full row in the price file), every other byte of the file kept; prints `file`, `action` (`changed`, `same`) rows. A file of no role is left alone; one with no frontmatter (`error: frontmatter_missing`) or not UTF-8 (`agent_unreadable`) stops it before anything is written; a settings file that cannot be read is `settings_unreadable`, a bad value `bad_setting` naming it. `tests/test_roles_settings.py` fails when an agent file's frontmatter differs from the settings, a file names no role, or a model of the settings, primary or fallback, has no full row in the price file.
 
 `python -m orch_it [--store PATH] tickets park <n> <kind> <ref> --until <YYYY-MM-DD> [--repo R] [--role script]`: the one way a ticket is parked: the line `Parked: <kind> <ref> until <date>` (kind one of `park_on`) and the `parked` label in one write, every other label kept; a park that could never return is refused with a `wait_end_reason` code and writes a `wait` pair ended `refused`; a park writes `ticket.parked` and starts its `wait` (run `park:<repo>#<n>@<label time>`). `tickets unpark <n> [--repo R] [--role script]` takes line and label off together (`ticket.unparked` by `hand`).
 
