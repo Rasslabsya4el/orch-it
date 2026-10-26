@@ -304,7 +304,7 @@ _Avoid_: stop hook, gate, validator
 
 **Merge line**:
 The order in which a repo's green pull requests land on its main line, one at a time, the oldest ready first.
-_Avoid_: merge queue (GitHub's own feature), merge train, merge window
+_Avoid_: merge queue, merge train, merge window
 
 **Line lock**:
 The one hold on a repo's merge line: while one line runs, a second waits for it and names who holds it.
@@ -320,8 +320,7 @@ reason, or after merge.
 _Avoid_: test results, acceptance results
 
 **Acceptance comment**:
-The layer's comment on a ticket holding its measured rows, the commit they were measured on and the ticket text they
-were measured against; the ticket is closed from it.
+The layer's comment on a ticket holding its measured rows and what they were measured on; the ticket is closed from it.
 _Avoid_: closing comment, summary comment
 
 **Ready mark**:
@@ -331,6 +330,10 @@ _Avoid_: queued label, ready label
 **Left mark**:
 The layer's mark on a pull request that it left the merge line, and why; the next ready mark puts it back.
 _Avoid_: dequeued, removed from queue
+
+**Follow mark**:
+The layer's mark on a ticket saying what its follow did with it; red returns in a row are counted from them.
+_Avoid_: status comment, bot note
 
 **Held member**:
 A pull request of the merge line kept from merging on its own while another one is served, until its turn comes.

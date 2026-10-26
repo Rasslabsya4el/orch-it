@@ -1,15 +1,15 @@
-# The merge line holds GitHub's auto-merge off on its waiting members, and a ticket follows its pull request from GitHub alone
+# The merge line holds auto-merge off on its waiting members; tickets follow from GitHub alone
 
 Green pull requests land on a repo's main line through the merge line, one run of `python -m orch_it merge line` at a
 time per repo under a line lock, on the machine and under the owner's `gh`, so its updates and merges start the
 required checks (Rasslabsya4el/orchestration-layer#400, decisions 2 and 3). The line serves its oldest ready member:
 brings it up to date, waits for its checks of its head sha, merges it at that sha. Every other member that is up to
 date with the base has its auto-merge turned off while it waits and gets it back once it is behind, is the head, or
-the run ends, after a follow of it. Because branch protection with strict checks lets GitHub's auto-merge merge any
-green up-to-date pull request at once: with four sessions writing one repo, whichever finished first merged, every
-other one fell behind before its checks ended, and a green pull request waited for hours (#355, 2026-10-26).
-GitHub's merge queue would order them, but it is offered to repos owned by organizations only (orch-it's
-`mergeQueue(branch: "main")` is null, and a personal private repo gets no protection at all on the owner's plan).
+the run ends, after a follow of it. Branch protection with strict checks lets GitHub's auto-merge merge any green
+up-to-date pull request at once, so with four sessions writing one repo whichever finished first merged, every other
+one fell behind before its checks ended, and a green pull request waited for hours (#355, 2026-10-26).
+GitHub's merge queue would order them, but GitHub offers it to repos owned by organizations only: orch-it, a
+personal repo, has none, and a personal private repo gets no branch protection at all on the owner's plan.
 
 What a pull request's ticket does next is read from GitHub alone: `Refs #N`, the ticket's park, and the layer's marks
 in its comments (the acceptance comment, the ready mark, the left mark, the follow mark), written by the owner's login

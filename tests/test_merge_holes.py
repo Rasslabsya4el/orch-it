@@ -20,6 +20,8 @@ the pipeline model gives it (`model.js` HOLES):
 | MERGE-14 | a park on a PR closed unmerged | park.failed: the event came the other way, to the brain | test_merge_14 |
 """
 
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,11 @@ def follow_it(hub, store, pr, **settings):
 def line(hub, store, ci, tmp_path, **settings):
     return run_line(hub, store, REPO, "main", settings=MergeSettings(**settings), clock=lambda: hub.now,
                     sleep=ci.sleep, root=tmp_path / "locks")
+
+
+def counted(store, ticket=10):
+    return [json.loads(row[0])["counted"] for row in store.query(
+        "SELECT detail FROM events WHERE kind = 'attempt.counted' AND ticket = :t", {"t": ticket}).rows]
 
 
 def labels(hub, number=10):
@@ -80,6 +87,7 @@ def test_merge_3(tmp_path):  # conflict after another lands: the ticket back to 
     line(hub, store, ci, tmp_path)
     assert labels(hub, 11).ready and not labels(hub, 11).parked
     assert "checkout/cart.py" in hub.comments(REPO, 11)[-1].body
+    assert counted(store, 11) == [False]  # a conflict is never an attempt
 
 
 @pytest.mark.parametrize("end, outcome, back", [("red", "red", "ready"), ("closed", "closed_unmerged", "brain"),
@@ -115,19 +123,26 @@ def test_merge_6(tmp_path):  # red only on tests red on main: parked on that tic
     hub.checks_on(hub.head(prs[10]), FAILED, failing=["t::main"])
     assert follow_it(hub, store, prs[10]).outcome == "red_on_main"
     assert labels(hub).park_lines[0].startswith(f"Parked: ticket_closed #{red} ")
+    assert counted(store) == [False]
 
 
-def test_merge_7(tmp_path):  # no skip list: a red main is its own ticket, whatever a tree holds
-    hub, store, _ = world(tmp_path)
+def test_merge_7(tmp_path):  # no skip list: what is red on main is read from main's run and its ticket alone
+    hub, store, prs = world(tmp_path)
     hub.main_run(hub.land(), {"linux": FAILED, "windows": PASSED}, failing=["t::flaky"])
     done = check_main(hub, store, REPO, "main")
     assert done.outcome == "red" and len(done.opened) == 1
-    assert not list(Path(__file__).parents[1].rglob("red_on_main*.txt"))  # no list for a pull request to edit
+    # a pull request red on a test no red-on-main ticket lists is red on its own, whatever its tree says
+    hub.checks_on(hub.head(prs[10]), FAILED, failing=["t::listed_in_the_branch_only"])
+    assert follow_it(hub, store, prs[10]).outcome == "red" and counted(store) == [True]
 
 
 def test_merge_8(tmp_path):  # main's run is read after every merge
     text = (WORKFLOWS / "main-check.yml").read_text("utf-8")
-    assert "workflow_run:\n    workflows: [tests]\n    types: [completed]" in text
+    trigger = text.split("\non:\n", 1)[1].split("\n\n", 1)[0]
+    assert trigger == "  workflow_run:\n    workflows: [tests]\n    types: [completed]"  # every ended run, no filter
+    condition = re.search(r"    if: >-\n((?:      .*\n)+)", text).group(1).split()
+    assert condition == ["github.event.workflow_run.head_branch", "==", "github.event.repository.default_branch", "&&",
+                         "github.event.workflow_run.event", "!=", "'pull_request'"]
     tests = (WORKFLOWS / "tests.yml").read_text("utf-8")
     assert "push:\n    branches: [main]" in tests  # part 0's run on every push to main, read, not changed
     hub, store, _ = world(tmp_path)
@@ -158,6 +173,12 @@ def test_merge_10(tmp_path):  # Refs never Closes; the close reads the acceptanc
         open_pr(hub, store, REPO, 11, acceptance=ROWS_NO_AFTER, branch="ticket-11", base="main", git=Closing(hub),
                 settings=MergeSettings(), now=hub.now)
     assert caught.value.code == "closing_keyword"
+    with pytest.raises(PrError) as caught:  # nor in the text pr open puts in the pull request's body
+        open_pr(hub, store, REPO, 11, acceptance=ROWS_NO_AFTER, branch="ticket-11", base="main", git=Git(hub),
+                settings=MergeSettings(), now=hub.now, notes="this closes #11")
+    assert caught.value.code == "closing_keyword"
+    body = hub.pull(REPO, prs[10]).body
+    assert body.startswith("Refs #10\n") and marks.closing_keywords(body) == []
     hub.notes[(REPO, 10)].clear()  # no acceptance comment left on the ticket
     hub.checks_on(hub.head(prs[10]), PASSED)
     hub.merge(REPO, prs[10], hub.head(prs[10]), "merge")
@@ -176,11 +197,15 @@ def test_merge_11(tmp_path, change, outcome):  # the ticket closed or edited whi
     assert hub.pull(REPO, prs[10]).auto_merge is None
 
 
-def test_merge_12(tmp_path):  # a green of an older head is not the new head's
-    hub, store, prs = world(tmp_path)
-    hub.checks_on(hub.head(prs[10]), PASSED)
+def test_merge_12(tmp_path):  # a green of an older head is not the new head's, and nothing merges on it
+    hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
+    ci.tick = lambda: None  # GitHub runs nothing more
+    old = hub.head(prs[10])
+    hub.checks_on(old, PASSED)
     hub.push(prs[10])
     assert follow_it(hub, store, prs[10]).outcome == "waiting"
+    line(hub, store, ci, tmp_path, check_minutes=5)
+    assert [c for c in hub.calls if c[0] == "merge"] == [] and hub.pull(REPO, prs[10]).state == "open"
 
 
 def test_merge_13(tmp_path):  # a person's PR comment: auto-merge off, the ticket to the brain
