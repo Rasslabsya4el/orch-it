@@ -21,14 +21,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from orch_it.events import pricing
 
 ROLES_FILE = Path(__file__).with_name("roles.json")
 AGENTS_FOLDER = Path(".claude") / "agents"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ROLE_KEYS = ("model", "effort", "fallback")
-ERROR_CODES = ("settings_unreadable", "bad_setting", "frontmatter_missing")
+ERROR_CODES = ("settings_unreadable", "bad_setting", "frontmatter_missing", "agent_unreadable", "agent_unwritable",
+               "work_tree_missing")
 _ROLE = re.compile(r"[a-z][a-z0-9-]{0,63}")
 _MODEL = re.compile(r"claude-[a-z0-9][a-z0-9.-]{0,63}")
 _FRONT_LINE = {"model": re.compile(r"model[ \t]*:"), "effort": re.compile(r"effort[ \t]*:")}
@@ -36,8 +41,8 @@ _FRONT_LINE = {"model": re.compile(r"model[ \t]*:"), "effort": re.compile(r"effo
 
 class RolesError(ValueError):
     """`code`: `settings_unreadable` (no JSON object), `bad_setting` (`field` names the part, such
-    as `roles.worker.model`), `frontmatter_missing` (an agent file `render` cannot write: `field`
-    is its path)."""
+    as `roles.worker.model`), `frontmatter_missing` and `agent_unreadable` (an agent file of a role
+    that `render` cannot write: no frontmatter, or not UTF-8 text; `field` is its path)."""
 
     def __init__(self, code: str, field: str = ""):
         if code not in ERROR_CODES:
@@ -63,21 +68,49 @@ class RoleSet:
     def load(cls, path: str | Path | None = None) -> RoleSet:
         path = Path(path) if path is not None else ROLES_FILE
         try:
-            raw = json.loads(path.read_bytes().decode("utf-8-sig"))
-        except (OSError, UnicodeDecodeError, ValueError) as e:
-            raise RolesError("settings_unreadable", f"{path}: {e}") from None
+            raw = json.loads(path.read_bytes().decode("utf-8-sig"), object_pairs_hook=_Object)
+        except (OSError, UnicodeDecodeError, ValueError, RecursionError) as e:
+            raise RolesError("settings_unreadable", f"{path}: {type(e).__name__}: {e}"[:300]) from None
         if not isinstance(raw, dict):
             raise RolesError("settings_unreadable", f"{path}: not an object")
         roles = raw.get("roles")
-        if not isinstance(roles, dict) or not roles:
+        if not isinstance(roles, dict) or not roles or "roles" in raw.repeated:
             raise RolesError("bad_setting", "roles")
+        if roles.repeated:
+            raise RolesError("bad_setting", f"roles.{sorted(roles.repeated)[0]}")
         return cls({name: _role(name, value) for name, value in roles.items()})
+
+    def unpriced(self) -> list[str]:
+        """One line per model the settings name, primary or fallback, that the price table
+        cannot price every turn of (the brain's answer on #399), sorted."""
+
+        found = []
+        for role in self.roles.values():
+            for key, model in (("model", role.model), ("fallback", role.fallback)):
+                missing = pricing.missing_rates(model)
+                if missing == ["model"]:
+                    found.append(f"roles.{role.name}.{key}: {model} has no row in the price table")
+                elif missing:
+                    found.append(f"roles.{role.name}.{key}: {model} has no rate for {', '.join(missing)}")
+        return sorted(found)
+
+
+class _Object(dict):
+    """A JSON object that remembers the keys it was given more than once (the last one wins in
+    plain JSON, so a repeated role would silently drop the first)."""
+
+    def __init__(self, pairs: list[tuple[str, object]]):
+        super().__init__(pairs)
+        keys = [key for key, _ in pairs]
+        self.repeated = {key for key in keys if keys.count(key) > 1}
 
 
 def _role(name: object, value: object) -> Role:
     where = f"roles.{name}"
     if not isinstance(name, str) or not _ROLE.fullmatch(name) or not isinstance(value, dict):
         raise RolesError("bad_setting", where)
+    if value.repeated:
+        raise RolesError("bad_setting", f"{where}.{sorted(value.repeated)[0]}")
     for key in value:
         if key not in ROLE_KEYS:
             raise RolesError("bad_setting", f"{where}.{key}")
@@ -104,17 +137,20 @@ def _split(text: str) -> tuple[list[str], list[str]] | None:
     return None
 
 
-def _value(front: list[str], key: str) -> str | None:
-    for line in front:
-        if _FRONT_LINE[key].match(line):
-            return line.split(":", 1)[1].split("#", 1)[0].strip().strip("\"'") or None
-    return None
+def _line_value(line: str) -> str | None:
+    """The value of a `key: value` line, its quotes and a trailing comment aside."""
+
+    return line.split(":", 1)[1].split("#", 1)[0].strip().strip("\"'") or None
 
 
-def _rendered(front: list[str], role: Role, end: str) -> list[str]:
+def _values(front: list[str], key: str) -> list[str | None]:
+    return [_line_value(line) for line in front if _FRONT_LINE[key].match(line)]
+
+
+def _rendered(front: list[str], role: Role, eol: str) -> list[str]:
     """The frontmatter with its `model:` and `effort:` lines as the settings say, each in the
-    place it had (a new one after `model:`, else after `name:`, else at the end); `end` is the file's `\\r` or
-    nothing, so a CRLF file stays CRLF."""
+    place it had (a new one after `model:`, else after `name:`, else at the end); `eol` is the
+    file's `\\r` or nothing, so a CRLF file stays CRLF."""
 
     wanted = {"model": role.model, "effort": role.effort}
     out: list[str] = []
@@ -123,10 +159,11 @@ def _rendered(front: list[str], role: Role, end: str) -> list[str]:
         if key is None:
             out.append(line)
         elif wanted.get(key) is not None:
-            out.append(f"{key}: {wanted.pop(key)}{end}")
+            value = wanted.pop(key)
+            out.append(line if _line_value(line) == value else f"{key}: {value}{eol}")
         else:
             wanted.pop(key, None)  # a second line of the key, or an effort the settings leave out
-    missing = [f"{key}: {value}{end}" for key, value in wanted.items() if value is not None]
+    missing = [f"{key}: {value}{eol}" for key, value in wanted.items() if value is not None]
     after = next((i + 1 for i, line in enumerate(out) if _FRONT_LINE["model"].match(line)), None)
     if after is None:
         after = next((i + 1 for i, line in enumerate(out) if line.startswith("name:")), len(out))
@@ -135,11 +172,43 @@ def _rendered(front: list[str], role: Role, end: str) -> list[str]:
 
 def _agent_files(work_tree: Path) -> list[Path]:
     folder = work_tree / AGENTS_FOLDER
-    return sorted(folder.glob("*.md")) if folder.is_dir() else []
+    return sorted(p for p in folder.glob("*.md") if p.is_file()) if folder.is_dir() else []
+
+
+PATIENT_TRIES = 20  # Windows refuses a read or a replace of a file another writer is replacing
+
+
+def _patient(call):
+    """`call()`, tried again a few times (about 2 s in all) while Windows refuses it with a
+    `PermissionError` because another writer replaces the same file at that moment."""
+
+    for attempt in range(PATIENT_TRIES):
+        try:
+            return call()
+        except PermissionError:
+            if attempt == PATIENT_TRIES - 1:
+                raise
+            time.sleep(0.01 * (attempt + 1))
+
+
+def _read(path: Path, rel: str) -> tuple[str, list[str], list[str]]:
+    """(text, frontmatter lines, the rest) of an agent file, or `agent_unreadable` /
+    `frontmatter_missing` naming it."""
+
+    try:
+        text = _patient(path.read_bytes).decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise RolesError("agent_unreadable", rel) from None
+    parts = _split(text)
+    if parts is None:
+        raise RolesError("frontmatter_missing", rel)
+    return text, *parts
 
 
 def drift(work_tree: str | Path, roles: RoleSet) -> list[str]:
-    """One line per agent file of `work_tree` out of step with `roles`."""
+    """One line per agent file of `work_tree` out of step with `roles`: a model or effort the
+    settings do not say, no role of the file's name, no frontmatter, not UTF-8 text. The test
+    `tests/test_roles_settings.py` fails on any line for the repo's own agent files."""
 
     work_tree = Path(work_tree)
     found = []
@@ -149,44 +218,57 @@ def drift(work_tree: str | Path, roles: RoleSet) -> list[str]:
         if role is None:
             found.append(f"{rel}: no role `{path.stem}` in the roles settings")
             continue
-        parts = _split(path.read_bytes().decode("utf-8", "replace"))
-        if parts is None:
-            found.append(f"{rel}: no frontmatter")
+        try:
+            _, front, _ = _read(path, rel)
+        except RolesError as e:
+            found.append(f"{rel}: {'no frontmatter' if e.code == 'frontmatter_missing' else 'not UTF-8 text'}")
             continue
         for key, wanted in (("model", role.model), ("effort", role.effort)):
-            have = _value(parts[0], key)
-            if have != wanted:
-                found.append(f"{rel}: {key} is {have or 'not set'}, the roles settings say {wanted or 'not set'}")
+            have = _values(front, key)
+            if len(have) > 1:
+                found.append(f"{rel}: {key} is given {len(have)} times")
+            elif (have[0] if have else None) != wanted:
+                found.append(f"{rel}: {key} is {have[0] if have else 'not set'},"
+                             f" the roles settings say {wanted or 'not set'}")
     return found
+
+
+def _replace(source: str, target: Path) -> None:
+    _patient(lambda: os.replace(source, target))
 
 
 def render(work_tree: str | Path, roles: RoleSet) -> list[tuple[str, str]]:
     """Write the `model:` and `effort:` lines of every agent file of a role from `roles`;
-    (path, `changed` or `same`) per file. Nothing is written when any file of a role has no
-    frontmatter; a file of no role is left alone."""
+    (path, `changed` or `same`) per file. Nothing is written when any file of a role cannot be
+    read (`agent_unreadable`, `frontmatter_missing`); a file of no role is left alone. Each file is
+    replaced whole through a temporary file of its own; one that cannot be written is
+    `agent_unwritable` with its temporary file removed (the files before it are already written)."""
 
     work_tree = Path(work_tree)
+    if not work_tree.is_dir():
+        raise RolesError("work_tree_missing", str(work_tree))
     planned = []
     for path in _agent_files(work_tree):
         role = roles.roles.get(path.stem)
         if role is None:
             continue
-        text = path.read_bytes().decode("utf-8")
-        parts = _split(text)
-        if parts is None:
-            raise RolesError("frontmatter_missing", path.relative_to(work_tree).as_posix())
-        front, rest = parts
+        text, front, rest = _read(path, path.relative_to(work_tree).as_posix())
         first = text.split("\n", 1)[0]
-        end = "\r" if first.endswith("\r") else ""
-        planned.append((path, text, "\n".join([first, *_rendered(front, role, end), *rest])))
+        eol = "\r" if first.endswith("\r") else ""
+        planned.append((path, text, "\n".join([first, *_rendered(front, role, eol), *rest])))
     done = []
     for path, before, after in planned:
         rel = path.relative_to(work_tree).as_posix()
         if after == before:
             done.append((rel, "same"))
             continue
-        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        temporary.write_bytes(after.encode("utf-8"))
-        os.replace(temporary, path)
+        handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(handle, "wb") as out:
+                out.write(after.encode("utf-8"))
+            _replace(temporary, path)
+        except OSError:
+            Path(temporary).unlink(missing_ok=True)
+            raise RolesError("agent_unwritable", rel) from None
         done.append((rel, "changed"))
     return done

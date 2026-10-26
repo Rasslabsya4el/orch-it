@@ -1,7 +1,7 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
 7 and 9 for `import-github` and `test-places`), `python -m orch_it tests run` (#394 decision 9);
-`python -m orch_it labels sync` (#398 decision 6); `python -m orch_it roles render` (#399 decision 5); `python -m orch_it guards scan` (#395 decision 4:
-it prints one line per private value found and exits 1 when there is any), `guards install` and
+`python -m orch_it labels sync` (#398 decision 6); `python -m orch_it roles render` (#399 decision
+5); `python -m orch_it guards scan` (#395 decision 4: it prints one line per private value found and exits 1 when there is any), `guards install` and
 `guards status` (decisions 5 and 6: the hooks path, and the six facts of the guards), `hook pre-push`
 (the git hook that scans a push to a public repo); `python -m orch_it skills
 shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m orch_it
@@ -200,8 +200,9 @@ def _parser() -> argparse.ArgumentParser:
 
     role_commands = commands.add_parser("roles", help="the layer's roles").add_subparsers(
         dest="command", required=True)
-    p = role_commands.add_parser("render", help="write each agent file's model and effort from the roles settings")
-    p.add_argument("--settings", metavar="PATH", help="a roles settings file (default: the packaged roles.json)")
+    p = role_commands.add_parser("render", help="write each agent file's model and effort from the "
+                                                "roles settings")
+    p.add_argument("--settings", metavar="PATH", help="a roles settings file (default: roles.json)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
 
     skills = commands.add_parser("skills", help="the repo's skill copies").add_subparsers(
@@ -394,6 +395,11 @@ def _labels_sync(args) -> str:
     return render(QueryResult(["label", "action"], done))
 
 
+def _roles_render(args) -> str:
+    done = roles.render(Path(args.work_tree), roles.RoleSet.load(args.settings))
+    return render(QueryResult(["file", "action"], done))
+
+
 def _research(args) -> tuple[str, int]:
     try:
         brief = Path(args.brief).read_text("utf-8-sig")
@@ -508,8 +514,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.group == "labels":
             text, code = _labels_sync(args), 0
         elif args.group == "roles":
-            done = roles.render(Path(args.work_tree), roles.RoleSet.load(args.settings))
-            text, code = render(QueryResult(["file", "action"], done)), 0
+            text, code = _roles_render(args), 0
         elif args.group == "skills":
             text, code = _skills(args), 0
         elif args.group == "research":
@@ -522,8 +527,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError, SkillsError,
-            CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
+            queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError,
+            SkillsError, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
             ResearchRefused) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
