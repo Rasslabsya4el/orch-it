@@ -148,6 +148,92 @@ def test_a_second_line_on_the_same_repo_waits_says_who_holds_it_and_gives_up(tmp
     assert rows == [("refused", "lock_busy")]
 
 
+def test_a_held_member_a_person_commented_on_never_gets_its_auto_merge_back(tmp_path):
+    hub, store, prs, ci = line_world(tmp_path, tickets=(10, 11))
+    ci.slow[prs[10]] = 30
+
+    said = []
+
+    def a_person_says_wait():  # once the line holds #11, a person asks to wait on it
+        if not said and hub.pulls[prs[11]].auto_merge is None:
+            said.append(1)
+            hub.note(prs[11], "wait, the zones change", author="owner-x")
+
+    ci.on_tick.append(a_person_says_wait)
+    done = line(hub, store, ci, tmp_path, line_minutes=8, lock_stale_minutes=60)
+    assert done.reason == "bound"
+    assert hub.pull(REPO, prs[11]).auto_merge is None  # out of the line: the person's comment is read first
+    assert "needs-triage" in hub.issues[(REPO, 11)].labels
+
+
+def test_the_line_closes_the_ticket_of_the_head_it_merged(tmp_path):
+    hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
+    line(hub, store, ci, tmp_path)
+    assert not hub.issues[(REPO, 10)].open
+
+
+def test_a_run_that_breaks_ends_its_step_and_gives_every_held_member_its_auto_merge_back(tmp_path):
+    hub, store, prs, ci = line_world(tmp_path, tickets=(10, 11, 12))
+    real = hub.update_branch
+
+    def broken(repo, number, head_sha):
+        raise RuntimeError("the network went away")
+
+    hub.land()  # every member behind: the head's update is the first write after the holds
+    hub.update_branch = broken
+    with pytest.raises(RuntimeError):
+        line(hub, store, ci, tmp_path)
+    hub.update_branch = real
+    assert all(hub.pull(REPO, prs[n]).auto_merge == "merge" for n in (10, 11, 12))
+    assert store.query("SELECT outcome, json_extract(detail, '$.reason') FROM events "
+                       "WHERE kind = 'step.ended' AND step = 'line'").rows == [("failed", "error")]
+    assert lock.holder_of(REPO, root=tmp_path / "locks") is None
+
+
+def test_a_run_that_leaves_members_for_the_next_one_says_so(tmp_path):
+    hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
+    ci.never.add(prs[10])
+    done = line(hub, store, ci, tmp_path, check_minutes=10, check_stuck_minutes=120)
+    assert done.reason == "next_run" and [s.result for s in done.served] == ["bound"]
+
+
+def test_a_member_that_left_on_a_conflict_is_served_in_the_store_too(tmp_path):
+    hub, store, prs, ci = line_world(tmp_path, tickets=(10, 11))
+    hub.pulls[prs[11]].conflict = ("checkout/cart.py",)
+    line(hub, store, ci, tmp_path)
+    served = store.query("SELECT json_extract(detail, '$.pr'), json_extract(detail, '$.result'), run FROM events "
+                         "WHERE kind = 'line.served' ORDER BY at").rows
+    assert [(pr, result) for pr, result, _ in served] == [(prs[11], "left"), (prs[10], "merged")]
+    assert all(run.startswith(f"line:{REPO}@") for _, _, run in served)
+
+
+def test_a_stale_line_lock_is_reported_and_the_line_does_not_run(tmp_path):
+    hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
+    dead = lock.hold(REPO, "a line that died", settings=MergeSettings(), root=tmp_path / "locks",
+                     clock=lambda: hub.now - timedelta(hours=3))
+    dead.__enter__()
+    with pytest.raises(lock.LockError) as caught:
+        line(hub, store, ci, tmp_path)
+    assert caught.value.code == "lock_stale" and ci.merged == []
+    rows = store.query("SELECT outcome, json_extract(detail, '$.reason') FROM events "
+                       "WHERE kind = 'step.ended' AND step = 'line'").rows
+    assert rows == [("refused", "lock_stale")]
+
+
+def test_a_follow_that_raced_waits_a_poll_instead_of_spinning(tmp_path, monkeypatch):
+    from orch_it.merge import line as line_module
+    from orch_it.merge.follow import FollowReport
+
+    hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
+    ci.never.add(prs[10])
+    monkeypatch.setattr(line_module, "follow", lambda *a, **k: FollowReport(prs[10], 10, "raced"))
+    slept = []
+    real = ci.sleep
+    ci.sleep = lambda s: (slept.append(s), real(s))
+    done = line(hub, store, ci, tmp_path, check_minutes=5)
+    assert done.served[0].result == "bound" and 5 <= len(slept) <= 12
+
+
 def test_the_line_writes_one_line_step_and_one_served_event_per_pull_request(tmp_path):
     hub, store, prs, ci = line_world(tmp_path, tickets=(10, 11))
     line(hub, store, ci, tmp_path)

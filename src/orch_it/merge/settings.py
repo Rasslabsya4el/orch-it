@@ -10,7 +10,7 @@ Keys, each optional:
 - `check_minutes` (30): the longest the line waits for the required checks of its head's sha;
 - `poll_seconds` (30): how often the line reads its head's state while it waits;
 - `max_updates` (3): how many times one run brings its head up to date before it leaves it for the
-  next run (main moved under it each time);
+  next run (main moved under it each time), and how many merges of it GitHub may refuse in a run;
 - `lock_wait_minutes` (20): how long a second line waits for the repo lock before it gives up;
 - `lock_stale_minutes` (120): a lock older than this is reported stale and never taken; it must be
   longer than `line_minutes`, or a running line's lock would read stale;
