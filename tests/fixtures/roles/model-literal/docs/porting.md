@@ -1,3 +1,3 @@
 # Porting
 
-The brain runs on Opus 4.8, so a new repo's brain chat is started with that model.
+Start the brain with `claude --agent brain --model fable --name "brain"`; the agent file's frontmatter already says `model: fable`.

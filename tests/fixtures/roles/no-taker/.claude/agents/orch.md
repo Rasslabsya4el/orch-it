@@ -7,4 +7,4 @@ description: Takes a ready ticket to a merged pull request.
 
 ## Failed attempts
 
-After a ticket's third failed attempt, give it to the `unblocker` role and take the next ticket.
+Count each send-back and each merge that did not land. A ticket with three failed attempts in a row is the unblocker's: ORCH builds nothing on it.

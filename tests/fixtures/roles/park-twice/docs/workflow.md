@@ -1,13 +1,14 @@
 # Workflow
 
-## Parking
+## States
 
-A parked ticket must have its `ready-for-agent` label removed, and it carries no state label until its event comes.
+- **A parent** (a ticket with open sub-tickets) carries a category and no state; its sub-tickets carry the states.
+- **A parked ticket** (ORCH waits on a run it started instead of sitting on it) has its `ready-for-agent` removed and no state until the run's result puts `ready-for-agent` back.
 
 ## Labels
 
 Each ticket carries one label of the set.
 
-## The parked label
+### The parked label
 
-A parked ticket must keep its state label, such as `ready-for-agent`, until its event comes.
+`parked` means: waiting on a named event; not worked until it comes. A parked ticket keeps its state label.

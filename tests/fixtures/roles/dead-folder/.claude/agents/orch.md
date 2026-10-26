@@ -7,4 +7,4 @@ description: Takes a ready ticket to a merged pull request.
 
 ## Tests
 
-Run a unit's tests with the package on the path: `PYTHONPATH=src/orch_it/tools python -m pytest`.
+A short check runs in the session with the package on the path: `PYTHONPATH=<path>/src python -m pytest -x`.

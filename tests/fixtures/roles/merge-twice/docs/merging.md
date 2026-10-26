@@ -1,3 +1,5 @@
 # Merging
 
-A pull request is merged only when its `linux` check is green; the Windows run may still be going.
+ORCH is the only session that merges into `main`; it merges a pull request only when its required checks are green, and it never waits for a merge to land.
+
+A ticket closes when its pull request merges.

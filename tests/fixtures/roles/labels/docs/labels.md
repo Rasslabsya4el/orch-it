@@ -7,3 +7,5 @@ Mark a stuck ticket with `gh issue edit 12 --add-label stuck,ready-for-agent --r
 Open a ticket with `gh issue create --title T --body-file b.md -l needs-triage --label "hard push"`.
 
 The label `autopilot` and the `wontfix` label; a `reviewer-spec` role and the role `brain`.
+
+The `dispatcher` role starts sessions.

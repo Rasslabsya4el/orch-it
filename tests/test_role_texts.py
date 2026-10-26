@@ -49,9 +49,9 @@ def test_a_pointer_to_a_stub_file_or_an_empty_section_is_red(tmp_path):
                                                 (".claude/agents/worker.md", 8, "stub")]
 
 
-def test_a_command_with_no_source_is_red(tmp_path):
-    # #382: a merge-budget check with no source (worker.md:52)
-    assert codes(tree_of(tmp_path, "no-source")) == [(".claude/agents/worker.md", 8, "command_unknown")]
+def test_a_check_with_no_source_is_red(tmp_path):
+    # #382: a merge-budget check with no source (worker.md:52): the check is left to "the lead's own part of CLAUDE.md"
+    assert codes(tree_of(tmp_path, "no-source")) == [(".claude/agents/worker.md", 8, "rule_deferred")]
 
 
 def test_commands_and_flags_are_read_against_the_command_line(tmp_path):
@@ -64,9 +64,9 @@ def test_commands_and_flags_are_read_against_the_command_line(tmp_path):
     ]
 
 
-def test_a_rule_that_hands_work_to_a_removed_role_is_red(tmp_path):
+def test_a_rule_that_hands_work_to_a_removed_part_is_red(tmp_path):
     # #382: nobody takes a ticket with three failed attempts once the unblocker is gone (GLOSSARY.md:164)
-    assert codes(tree_of(tmp_path, "no-taker")) == [(".claude/agents/orch.md", 10, "role_unknown")]
+    assert codes(tree_of(tmp_path, "no-taker")) == [(".claude/agents/orch.md", 10, "part_removed")]
 
 
 def test_labels_are_read_against_the_label_set(tmp_path):
@@ -75,12 +75,14 @@ def test_labels_are_read_against_the_label_set(tmp_path):
         (5, "label_unknown", "`stuck` is no label of the label set"),
         (7, "label_unknown", "`hard push` is no label of the label set"),
         (9, "label_unknown", "`autopilot` is no label of the label set"),
+        (9, "part_removed", "`autopilot`: removed from the layer (#378); name what does its job now"),
+        (11, "role_unknown", "`dispatcher` is no role of the roles settings"),
     ]
 
 
 def test_a_model_written_into_a_text_is_red(tmp_path):
     # #382: a wrong brain model (PORTING.md:139-141); a model is a setting (decision 5)
-    assert codes(tree_of(tmp_path, "model-literal")) == [("docs/porting.md", 3, "model_literal")]
+    assert codes(tree_of(tmp_path, "model-literal")) == [("docs/porting.md", 3, "model_literal")] * 2  # flag and line
 
 
 def test_a_merge_rule_said_in_two_files_is_red(tmp_path):
@@ -90,7 +92,7 @@ def test_a_merge_rule_said_in_two_files_is_red(tmp_path):
 
 def test_two_park_rules_in_one_file_are_red(tmp_path):
     # #382: two park-label rules (workflow.md:80-81 vs :141-143)
-    assert codes(tree_of(tmp_path, "park-twice")) == [("docs/workflow.md", 13, "rule_twice")]
+    assert codes(tree_of(tmp_path, "park-twice")) == [("docs/workflow.md", 14, "rule_twice")]
 
 
 def test_a_rule_deferred_to_a_local_or_optional_file_is_red(tmp_path):
