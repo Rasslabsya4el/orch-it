@@ -25,6 +25,13 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "command": "python -m orch_it hook prompt-submit", "timeout": 30}
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [
