@@ -21,7 +21,7 @@ import re
 import shutil
 import subprocess
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 GIT_TIMEOUT_SECONDS = 120
@@ -196,6 +196,7 @@ class Manifest:
     commit: str
     skills: dict[str, dict]       # name -> {"path": upstream path, "files": {file: blob hash}}
     not_copied: dict[str, dict]   # name -> {"path", "why", "files"}
+    gone: dict[str, str] = field(default_factory=dict)  # a name his upstream no longer has -> what became of it
 
     @classmethod
     def build(cls, tree: Tree, *, upstream: str, commit: str, not_copied: dict[str, str]) -> Manifest:
@@ -230,11 +231,13 @@ class Manifest:
         problem = _shape_problem(data)
         if problem:
             raise SkillsError("bad_manifest", problem)
-        return cls(data["upstream"], data["commit"], data["skills"], data["not_copied"])
+        return cls(data["upstream"], data["commit"], data["skills"], data["not_copied"], data.get("gone", {}))
 
     def text(self) -> str:
         data = {"_about": ABOUT, "upstream": self.upstream, "commit": self.commit,
                 "skills": self.skills, "not_copied": self.not_copied}
+        if self.gone:
+            data["gone"] = self.gone
         return json.dumps(data, indent=2, ensure_ascii=False, sort_keys=False) + "\n"
 
 
@@ -261,6 +264,9 @@ def _shape_problem(data) -> str | None:
             for rel, sha in files.items():
                 if not _safe_rel(rel) or not isinstance(sha, str) or not _BLOB.fullmatch(sha):
                     return f"{group}.{name}.files.{rel}: bad file"
+    gone = data.get("gone", {})
+    if not isinstance(gone, dict) or any(not _NAME.fullmatch(n) or not isinstance(w, str) for n, w in gone.items()):
+        return "gone: not an object of skill names"
     if set(data["skills"]) & set(data["not_copied"]):
         return "a skill both copied and not copied"
     return None
