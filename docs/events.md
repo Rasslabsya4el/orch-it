@@ -130,6 +130,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `tool.called` | `tool`, `args_head` (≤120), `outcome` (`tool_outcome`), `refused_by` (`refused_by`), `ms` | what agents actually do; refused calls and retries |
 | `skill.called` | `skill`, `called_at_step`, `before_first_edit` | is each skill called at its step |
 | `skill.shadowed` | `skill`, `copy`, `same_text` | a personal skill of a repo skill's name that replaces it in every session |
+| `lock.removed` | `holder`, `since`, `held_minutes` | a stale merge-line lock removed by hand, and whose it was |
 | `report_line.checked` | `label` (`report_label`), `claimed`, `verified`, `accepted`, `first_edit_path` | false report lines; a stop held for a missing call |
 | `rule_file.read` | `path`, `sha`, `lines_read`, `lines_total` | does a role read its rules and the glossary in full |
 | `context.crossed` | `threshold` (`context_threshold`), `tokens`, `action_after` (`context_action`) | sessions running past their context line |
@@ -160,7 +161,6 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `pr.conflict_resolved` | `pr`, `files` | a PR conflict resolved |
 | `pr.commented` | `pr`, `author_role` (`role`), `answered` | review comments with no reader |
 | `main.red` | `sha`, `test_ids`, `introduced_by_pr` | red on main, its own ticket |
-| `lock.removed` | `lock`, `holder`, `since`, `held_minutes`, `by` | a stale lock removed by hand, and whose it was |
 | `main.reverted` | `sha`, `reverted_sha`, `reason` | main reverted to a sha and why |
 | `doc.edited` | `path`, `doc_kind` (`doc_kind`), `commit`, `required_skill_called`, `term_or_number` | record edits and the skill each needs |
 | `term.missing` | `term`, `where` | a report word not in the glossary |
@@ -250,4 +250,4 @@ and its path) or `gone` (`worker_died`, `worker_lost`: the job's process ended w
 
 `python -m orch_it tickets check-github --event <file>`: the shape check of the workflow `ticket-shape` on an `issues` event: a ticket that got `ready-for-agent`, or a ready ticket that was edited, is read again and judged by the shape rules; with violations the label comes off, then a comment lists them (the body is never edited); prints `#<n> kept`, `#<n> removed: <codes>` or `skipped`; an event file that is no JSON object is `error: event_unreadable`.
 
-`python -m orch_it [--store PATH] merge unlock [--repo R]`: remove the repo lock of the merge line (the folder `merge-lock/<owner>__<name>` in the per-user data folder) only when it is stale, older than the setting `merge.lock_stale_minutes`; prints `removed the stale lock of <repo>: <holder> since <time>` and writes `lock.removed`. A lock that is not stale is never removed: `error: lock_not_stale` names its holder; no lock is `error: lock_missing`.
+`python -m orch_it [--store PATH] merge unlock [--repo R]`: remove the repo lock of the merge line (the folder `merge-lock/<owner>__<name>` in the per-user data folder) only when it is stale, older than the setting `merge.lock_stale_minutes`; prints `removed the stale lock of <repo>: <holder> since <time>` and writes `lock.removed`. A lock that is not stale is never removed: `error: lock_not_stale` names its holder; no lock is `error: lock_missing`; a lock it cannot remove whole is `error: lock_unwritable` and still names its holder; a repo that is no `owner/name` (or ends in a dot) is `error: bad_repo`.

@@ -204,3 +204,70 @@ def test_two_processes_started_at_once_one_holds_the_other_waits_and_names_it(tm
     holder = "line A" if said[1].startswith("waits for line A") else "line B"
     assert said[1].splitlines() == [f"waits for {holder}", "lock_busy"]
     assert not any((tmp_path / "locks").iterdir())
+
+
+def test_a_since_in_the_future_reads_stale_and_can_be_unlocked(tmp_path):
+    clock = Clock()
+    folder = lock.lock_folder(REPO, root=tmp_path)
+    folder.mkdir(parents=True)
+    (folder / "owner").write_text(json.dumps({"holder": "line A\nfrom a skewed clock", "since": "2999-01-01T00:00:00+00:00",
+                                              "pid": True, "token": "t"}), "utf-8")
+    with pytest.raises(LockError) as caught:
+        with hold(tmp_path, clock):
+            pass
+    assert caught.value.code == "lock_stale"
+    assert caught.value.holder.pid is None and "\n" not in caught.value.holder.said()
+    assert lock.unlock_stale(REPO, settings=settings(), root=tmp_path, clock=clock).token == "t"
+    assert lock.holder_of(REPO, root=tmp_path) is None
+
+
+def test_a_lock_folder_that_cannot_be_made_is_refused_within_the_wait_bound(tmp_path, monkeypatch):
+    clock = Clock()
+    real = Path.mkdir
+
+    def denied(self, *args, **kwargs):
+        if self.name == "owner-x__repo-y":
+            raise PermissionError(13, "Access is denied")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", denied)
+    with pytest.raises(LockError) as caught:
+        with hold(tmp_path, clock, lock_wait_minutes=1):
+            pass
+    assert caught.value.code == "lock_unwritable"
+    assert 60 <= sum(clock.slept) <= 61  # no spin: it slept its bound away in short steps
+
+
+def test_a_lock_root_that_is_a_file_is_refused_at_once(tmp_path):
+    (tmp_path / "locks").write_text("", "utf-8")
+    with pytest.raises(LockError) as caught:
+        with hold(tmp_path / "locks", Clock()):
+            pass
+    assert caught.value.code == "lock_unwritable"
+
+
+def test_an_unlock_that_cannot_remove_the_lock_says_so_and_the_lock_still_names_its_holder(tmp_path, monkeypatch):
+    clock = Clock()
+    dead = hold(tmp_path, clock, holder="line A")
+    dead.__enter__()
+    (lock.lock_folder(REPO, root=tmp_path) / "held-open").write_text("", "utf-8")
+    real = Path.unlink
+
+    def held_open(self, *args, **kwargs):
+        if self.name == "held-open":
+            raise PermissionError(13, "The process cannot access the file")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", held_open)
+    clock.now += timedelta(minutes=121)
+    with pytest.raises(LockError) as caught:
+        lock.unlock_stale(REPO, settings=settings(), root=tmp_path, clock=clock, sleep=clock.sleep)
+    assert caught.value.code == "lock_unwritable"
+    assert lock.holder_of(REPO, root=tmp_path).holder == "line A"
+
+
+@pytest.mark.parametrize("repo", ["owner/name.", "owner/.", "-owner/name"])
+def test_a_repo_name_windows_would_read_as_another_is_refused(tmp_path, repo):
+    with pytest.raises(LockError) as caught:
+        lock.lock_folder(repo, root=tmp_path)
+    assert caught.value.code == "bad_repo"

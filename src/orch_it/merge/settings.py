@@ -33,7 +33,10 @@ from orch_it.settings import SettingsError
 
 SECTION = "merge"
 METHODS = ("merge", "squash", "rebase")
-MAX_MINUTES = 7 * 24 * 60  # a week: a longer bound is no bound
+WEEK_MINUTES = 7 * 24 * 60  # a longer bound is no bound
+# key -> (least, most) in the key's own unit; a poll under a second would hammer GitHub
+_RANGES = {"pr_max_hours": (0, WEEK_MINUTES / 60), "poll_seconds": (1, 3600)}
+COUNT_MOST = 1000  # `max_updates`, `red_in_a_row`: a count past this is no bound
 
 
 @dataclass(frozen=True)
@@ -55,8 +58,11 @@ class MergeSettings:
         repos = raw.get("repos", {})
         if not isinstance(repos, dict):
             raise SettingsError("bad_setting", "repos")
-        # GitHub's owner/name is the same repo whatever its case
-        own = next((value for key, value in repos.items() if str(key).lower() == repo.lower()), {})
+        # GitHub's owner/name is the same repo whatever its case: two spellings of it are no answer
+        spellings = [key for key in repos if str(key).lower() == repo.lower()]
+        if len(spellings) > 1:
+            raise SettingsError("bad_setting", f"repos: {repo} written {len(spellings)} ways")
+        own = repos[spellings[0]] if spellings else {}
         if not isinstance(own, dict):
             raise SettingsError("bad_setting", f"repos.{repo}")
         merged |= _section(own.get(SECTION, {}), f"repos.{repo}.{SECTION}")
@@ -69,10 +75,10 @@ class MergeSettings:
                 if value not in METHODS:
                     raise SettingsError("bad_setting", f"{SECTION}.{key}: one of {', '.join(METHODS)}")
             elif key in ("max_updates", "red_in_a_row"):
-                if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000:
-                    raise SettingsError("bad_setting", f"{SECTION}.{key}: a whole number from 1")
+                if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= COUNT_MOST:
+                    raise SettingsError("bad_setting", f"{SECTION}.{key}: a whole number from 1 to {COUNT_MOST}")
             else:
-                value = _positive(key, value, MAX_MINUTES * (60 if key == "poll_seconds" else 1))
+                value = _bound(key, value, *_RANGES.get(key, (0, WEEK_MINUTES)))
             values[key] = value
         found = cls(**values)
         if found.lock_stale_minutes <= found.line_minutes:
@@ -86,13 +92,15 @@ def _section(value: object, where: str) -> dict:
     return value
 
 
-def _positive(key: str, value: object, most: float) -> float:
+def _bound(key: str, value: object, least: float, most: float) -> float:
+    """A number more than `least` (or `least` itself when it is not 0) and at most `most`."""
+
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise SettingsError("bad_setting", f"{SECTION}.{key}")
     try:
         number = float(value)
     except OverflowError:
         raise SettingsError("bad_setting", f"{SECTION}.{key}") from None
-    if not (math.isfinite(number) and 0 < number <= most):
-        raise SettingsError("bad_setting", f"{SECTION}.{key}: more than 0, at most {most:g}")
+    if not (math.isfinite(number) and (number > 0 if least == 0 else number >= least) and number <= most):
+        raise SettingsError("bad_setting", f"{SECTION}.{key}: from {least:g} to {most:g}")
     return value

@@ -537,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.group == "tickets":
             text, code = ticket_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of("."),
                                              render), 0
-        elif args.group in merge_commands.GROUPS:
+        elif args.group == merge_commands.GROUP:
             text, code = merge_commands.run(args, lambda: _store(args), lambda: _repo_of("."))
         else:
             text, code = _run(args), 0

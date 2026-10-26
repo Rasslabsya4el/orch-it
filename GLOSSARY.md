@@ -67,7 +67,8 @@ _Avoid_: sandbox, isolated environment
 
 **Bound**:
 The longest a test run or a research run may take; a run that reaches it is cut, which is never a failed run. A
-research run also has a stall bound: the longest its session tree may go without a new step.
+research run also has a stall bound: the longest its session tree may go without a new step. The merge line's run, its
+wait for its head's checks and the wait for its line lock each have a bound of their own.
 _Avoid_: timeout, limit, deadline
 
 ## Research
@@ -239,3 +240,17 @@ _Avoid_: parked note, wait marker
 **Park reader**:
 The one reader that looks at every park and returns, sends to triage or leaves waiting each parked ticket.
 _Avoid_: unparker, dispatcher, poller
+
+## Merge
+
+**Merge line**:
+The order in which a repo's green pull requests land on its main line, one at a time, the oldest ready first.
+_Avoid_: merge queue (GitHub's own feature), merge train, merge window
+
+**Line lock**:
+The one hold on a repo's merge line: while one line runs, a second waits for it and names who holds it.
+_Avoid_: merge turn, mutex, merge lock
+
+**Stale lock**:
+A line lock held longer than any line runs; it is reported and never taken, and only a person removes it.
+_Avoid_: dead lock, expired lock

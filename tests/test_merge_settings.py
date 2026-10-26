@@ -26,8 +26,9 @@ def test_a_repo_s_own_value_wins_over_the_machine_s():
 
 @pytest.mark.parametrize("key, value", [
     ("pr_max_hours", 0), ("pr_max_hours", -1), ("pr_max_hours", True), ("pr_max_hours", "24"),
-    ("pr_max_hours", float("nan")), ("pr_max_hours", 10 ** 400), ("line_minutes", 7 * 24 * 60 + 1),
-    ("poll_seconds", 0), ("max_updates", 0), ("max_updates", 2.5), ("red_in_a_row", 0),
+    ("pr_max_hours", float("nan")), ("pr_max_hours", 10 ** 400), ("pr_max_hours", 7 * 24 + 1),
+    ("line_minutes", 7 * 24 * 60 + 1), ("poll_seconds", 0), ("poll_seconds", 1e-9), ("max_updates", 0),
+    ("max_updates", 1001), ("max_updates", 2.5), ("red_in_a_row", 0),
     ("merge_method", "fast-forward"), ("merge_method", None), ("lock_wait_minutes", -0.5),
     ("unknown_key", 1),
 ])
@@ -42,6 +43,17 @@ def test_a_section_that_is_no_object_is_refused(raw):
     with pytest.raises(SettingsError) as caught:
         MergeSettings.from_settings(raw, REPO)
     assert caught.value.code == "bad_setting"
+
+
+def test_a_repo_written_two_ways_is_no_answer():
+    with pytest.raises(SettingsError) as caught:
+        MergeSettings.from_settings({"repos": {REPO: {}, REPO.upper(): {}}}, REPO)
+    assert "written 2 ways" in str(caught.value)
+
+
+def test_the_bounds_at_their_edges_are_taken():
+    found = MergeSettings.from_settings({"merge": {"pr_max_hours": 168, "poll_seconds": 1, "max_updates": 1000}}, REPO)
+    assert (found.pr_max_hours, found.poll_seconds, found.max_updates) == (168, 1, 1000)
 
 
 def test_a_stale_lock_bound_must_outlast_a_line_run():
