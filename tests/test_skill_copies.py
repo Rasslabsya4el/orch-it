@@ -186,6 +186,8 @@ def test_a_copy_never_overwrites_a_skill_of_ours_of_the_same_name(tmp_path):
      "bad_manifest"),
     ('{"upstream": "u", "commit": "c", "skills": {"a": {"path": "p", "files": {"../../x": "0"}}},'
      ' "not_copied": {}}', "bad_manifest"),
+    ('{"upstream": "u", "commit": "c", "skills": {}, "not_copied": {}, "gone": {"../x": "removed"}}', "bad_manifest"),
+    ('{"upstream": "u", "commit": "c", "skills": {}, "not_copied": {}, "gone": ["zoom-out"]}', "bad_manifest"),
 ])
 def test_a_bad_or_half_written_manifest_is_refused_with_its_code(tmp_path, text, code):
     skills = tmp_path / ".claude" / "skills"
