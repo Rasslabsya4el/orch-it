@@ -137,3 +137,64 @@ def test_a_link_whose_name_ends_in_a_dot_is_still_found(tmp_path):
     (tmp_path / "scratch").mkdir()
     make_junction(tmp_path / "scratch" / "lnk.", tmp_path / "other")
     assert hit(tmp_path / "scratch", [tmp_path / "other"]) == "link_outward"
+
+
+# --- decision 2 widening (brain comment 6405080397): inside another worktree -----------------
+
+def inside_hit(target, roots, own, **kw):
+    real = paths.resolve(str(target), None, windows=WINDOWS)
+    roots = [paths.resolve(str(r), None, windows=WINDOWS) for r in roots]
+    own = paths.resolve(str(own), None, windows=WINDOWS)
+    found = paths.judge(real, roots, windows=WINDOWS, own_root=own, **kw)
+    return found.rule if found else "pass"
+
+
+def two_worktrees(tmp_path):
+    for name in ("own", "other", "main"):
+        (tmp_path / name / "src").mkdir(parents=True)
+    return [tmp_path / "own", tmp_path / "other", tmp_path / "main"]
+
+
+def test_a_delete_inside_another_worktree_is_refused(tmp_path):
+    roots = two_worktrees(tmp_path)
+    own = tmp_path / "own"
+    (tmp_path / "main" / "src" / "x.py").write_text("x")
+    assert inside_hit(tmp_path / "other" / "src", roots, own) == "inside_other_root"
+    assert inside_hit(tmp_path / "main" / "src" / "x.py", roots, own) == "inside_other_root"
+    assert inside_hit(tmp_path / "other", roots, own) == "protected_root"
+
+
+def test_a_delete_inside_the_own_worktree_passes(tmp_path):
+    roots = two_worktrees(tmp_path)
+    own = tmp_path / "own"
+    (tmp_path / "own" / "scratch").mkdir()
+    assert inside_hit(tmp_path / "own" / "src", roots, own) == "pass"
+    assert inside_hit(tmp_path / "own" / "scratch", roots, own) == "pass"
+    # the own worktree root itself is still a protected root
+    assert inside_hit(tmp_path / "own", roots, own) == "protected_root"
+
+
+def test_without_an_own_root_the_inside_rule_is_off(tmp_path):
+    # the old behaviour (a path inside a root passes) holds when no own_root is given
+    roots = two_worktrees(tmp_path)
+    assert hit(tmp_path / "other" / "src", roots) == "pass"
+
+
+def test_nested_roots_take_the_deepest_holding_root(tmp_path):
+    # the main checkout holds its worktrees: a path can be below two roots at once
+    main = tmp_path / "repo"
+    (main / "build").mkdir(parents=True)
+    guards = main / ".claude" / "worktrees" / "guards"
+    tickets = main / ".claude" / "worktrees" / "tickets"
+    (guards / "build").mkdir(parents=True)
+    (tickets / "src").mkdir(parents=True)
+    roots = [main, guards, tickets]
+    # from the main checkout, a delete inside a worktree is refused
+    assert inside_hit(tickets / "src", roots, main) == "inside_other_root"
+    # from guards, a delete inside another worktree is refused; inside guards passes
+    assert inside_hit(tickets / "src", roots, guards) == "inside_other_root"
+    assert inside_hit(guards / "build", roots, guards) == "pass"
+    # from the main checkout, a delete inside the main checkout (not in a worktree) passes
+    assert inside_hit(main / "build", roots, main) == "pass"
+    # own_root is the deepest root holding cwd
+    assert paths.deepest_root(str(guards / "sub"), [paths.resolve(str(r), None, windows=WINDOWS) for r in roots], windows=WINDOWS) == paths.resolve(str(guards), None, windows=WINDOWS)

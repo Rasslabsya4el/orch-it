@@ -8,7 +8,8 @@ A skill is a folder under `skills/` holding a `SKILL.md`, outside `skills/deprec
 the folder's name. The manifest records the upstream repo and commit, and per skill its upstream
 path and the git blob hash of every file: the copies (`skills`) and his skills left out
 (`not_copied`, each with why), so a later commit's new skill is told from one that was always
-there. A folder of `.claude/skills/` the manifest does not name is ours: never written, never
+there; and `gone`, each name his upstream dropped with what became of it, written by the update
+(#397 decision 4) so a text still naming it is caught (decision 5). A folder of `.claude/skills/` the manifest does not name is ours: never written, never
 removed.
 """
 
@@ -33,7 +34,8 @@ SKILLS_ROOT = "skills/"
 LEFT_OUT_GROUP = "skills/deprecated/"
 SKILL_FILE = "SKILL.md"
 ABOUT = ("His skills copied byte for byte from `upstream` at `commit` (#397 decision 1): per copy its upstream path"
-         " and the git blob hash of every file; `not_copied` his skills left out and why. Written with the"
+         " and the git blob hash of every file; `not_copied` his skills left out and why; `gone` the names his"
+         " upstream dropped and what became of them. Written with the"
          " copies by `orch_it.skills.copies.write`; a skill folder this file does not name is ours.")
 
 SKILLS_ERROR_CODES = (
@@ -266,7 +268,7 @@ def _shape_problem(data) -> str | None:
                     return f"{group}.{name}.files.{rel}: bad file"
     gone = data.get("gone", {})
     if not isinstance(gone, dict) or any(not _NAME.fullmatch(n) or not isinstance(w, str) for n, w in gone.items()):
-        return "gone: not an object of skill names"
+        return "gone: not an object of skill name -> text"
     if set(data["skills"]) & set(data["not_copied"]):
         return "a skill both copied and not copied"
     return None

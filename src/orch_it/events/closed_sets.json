@@ -170,6 +170,7 @@
     "machine.booted": {},
     "tool.called": {"tool": {}, "args_head": {"max_chars": 120}, "outcome": {"codes": "tool_outcome"}, "refused_by": {"codes": "refused_by"}, "ms": {}},
     "skill.called": {"skill": {}, "called_at_step": {}, "before_first_edit": {}},
+    "skill.shadowed": {"skill": {}, "copy": {}, "same_text": {}},
     "report_line.checked": {"label": {"codes": "report_label"}, "claimed": {}, "verified": {}, "accepted": {}, "first_edit_path": {}},
     "rule_file.read": {"path": {}, "sha": {}, "lines_read": {}, "lines_total": {}},
     "context.crossed": {"threshold": {"codes": "context_threshold"}, "tokens": {}, "action_after": {"codes": "context_action"}},
