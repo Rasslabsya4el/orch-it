@@ -6,8 +6,10 @@ pinned tree is the one the manifest records file by file, and classifies every s
 (`orch_it.skills.classify`) with the renames git reports between the two commits.
 
 `report` is the daily run: on a change it keeps one issue per upstream commit, "His skills moved to
-<commit>", whose body is the class table; opened with the label `needs-triage` when a copy is renamed,
-removed or changed in contract, else `ready-for-agent`. A later run updates that issue's body (its
+<commit>", a ticket in #398's shape (the Russian human block, the class table, acceptance rows,
+`Outside case:`, `Same object:`, `Weight:`) whose shape rules are run on it at write; opened with the
+label `needs-triage` when a copy is renamed, removed or changed in contract or the body breaks a shape
+rule (the rules it breaks listed in it), else `ready-for-agent`. A later run updates that issue's body (its
 labels are the brain's from then on) rather than opening another, does not open again one the brain
 closed, and closes the issue of an older upstream commit as superseded; with no change, it closes the
 issue of the commit the copies are now at. It opens no pull request: a
@@ -44,6 +46,7 @@ from orch_it import settings
 from orch_it.skills import copies, references
 from orch_it.skills.classify import Change, classify
 from orch_it.skills.copies import GIT_TIMEOUT_SECONDS, NO_WINDOW, Manifest, SkillsError, Tree
+from orch_it.tickets import model, shape
 
 BRANCH_PREFIX = "skills-upstream/"
 BASE_REF = "main"
@@ -267,17 +270,62 @@ def pr_body(found: Check, problems: list[str]) -> str:
         rule, _class_table(found), refs, "Written by `python -m orch_it skills update`."])
 
 
-def issue_body(found: Check) -> str:
+# the human block of the issue (#398 decision 2: five fields, Russian, no file path); `{old}`, `{new}`, `{changed}`,
+# `{copies}` filled in per issue
+HUMAN_LINES = {
+    "What": "его апстрим навыков перешёл с `{old}` на `{new}`: изменилось навыков {changed}, из них копий репо {copies}.",
+    "Goal": "копии навыков в репо совпадают с новой версией его апстрима, и ни одна роль не теряет вызываемый навык молча.",
+    "Plan": "ORCH под gh владельца запускает `python -m orch_it skills update`; тот открывает один пулл-реквест с новыми"
+            " копиями, а тесты репо проверяют копии и ссылки на навыки.",
+    "Result": "пулл-реквест зелёный на обеих ОС, у 100 % копий хэши совпадают с манифестом новой версии, и каждый навык в нём"
+              " отнесён к своему классу.",
+    "Undo": "two-way door (один откат пулл-реквеста возвращает прежние копии); touches все роли, которые вызывают эти навыки.",
+}
+
+
+def issue(found: Check) -> tuple[str, str]:
+    """The title and the body of the issue of `found`, a ticket in #398's shape: the human block, then
+    the agent block with the class table, the acceptance rows, `Outside case:`, `Same object:`,
+    `Weight:`."""
+
+    old, new = found.manifest.commit[:12], found.new_commit[:12]
+    copies_changed = sum(1 for c in found.changed if found.held(c) == "copy")
+    filled = {name: text.format(old=old, new=new, changed=len(found.changed), copies=copies_changed)
+              for name, text in HUMAN_LINES.items()}
+    human = "\n".join(f"- **{name}:** {text}" for name, text in filled.items())
     if found.needs_triage:
         rule = (f"Label `{TRIAGE_LABEL}`: a copy is renamed, removed or changed in what it takes or returns;"
                 " the brain decides before the copies move.")
     else:
-        rule = (f"Label `{READY_LABEL}`: no copy is renamed, removed or changed in contract.")
-    return "\n\n".join([
-        _moved(found), rule, _class_table(found),
-        "To take it: `python -m orch_it skills update` under the owner's `gh` opens the pull request with the new"
-        " copies; its own tests run, and it merges as any pull request.",
+        rule = f"Label `{READY_LABEL}`: no copy is renamed, removed or changed in contract."
+    acceptance = "\n".join([
+        "| row | check | pass |", "|---|---|---|",
+        f"| 1 | copies | `python -m orch_it skills update` opens one pull request whose copies equal the manifest at"
+        f" `{new}` (`test_every_copy_is_on_disk_as_its_manifest_hashes_say` green) |",
+        "| 2 | references | `test_the_repo_names_no_skill_it_does_not_hold` green on that pull request: the names of a"
+        " renamed or removed copy fixed in it |",
+        "| 3 | classes | the class of every skill in the pull request's body equals the table above |"])
+    agent = "\n\n".join([
+        f"{_moved(found)} {rule}", _class_table(found), acceptance,
+        "Outside case: a skill changed only inside a support file, with no name or heading change, still stands in"
+        " the table above with its class (row 3)",
+        "Same object: `.claude/skills/` and its manifest, and the roles that call these skills by bare name (the"
+        " references test holds them); `skills update` writes only the copies and the manifest",
+        "Not in this ticket: which role calls an added skill (the brain decides)",
+        f"Weight: {3 if found.needs_triage else 2}",
         "Written by `python -m orch_it skills report` (the daily `skills-update` workflow)."])
+    return ISSUE_TITLE + new, f"## For the human\n\n{human}\n\n## For the agent\n\n{agent}\n"
+
+
+def checked_issue(found: Check) -> tuple[str, str, list[str]]:
+    """The issue with #398's shape rules run on it at write: the rules it breaks are listed in its body."""
+
+    title, body = issue(found)
+    broken = [v.message for v in shape.violations(model.parse(body, title=title))]
+    if broken:
+        body += ("\nShape violations (#398 decision 2; not ready for an agent until they are fixed):\n"
+                 + "\n".join(f"- {line}" for line in broken) + "\n")
+    return title, body, broken
 
 
 def report(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: str = "main",
@@ -293,16 +341,16 @@ def report(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
             if issue["title"] == done_title:
                 forge.close_issue(issue["url"], f"Done: the copies are at {found.manifest.commit[:12]}.")
         return Done("no_change", found.new_commit)
-    title = ISSUE_TITLE + found.new_commit[:12]
-    label = TRIAGE_LABEL if found.needs_triage else READY_LABEL
+    title, body, broken = checked_issue(found)
+    label = TRIAGE_LABEL if found.needs_triage or broken else READY_LABEL
     same = [i for i in ours if i["title"] == title]
     if any(i["state"] == "OPEN" for i in same):
         url, status = next(i["url"] for i in same if i["state"] == "OPEN"), "already_open"
-        forge.edit_issue(url, issue_body(found))  # its labels are the brain's from now on
+        forge.edit_issue(url, body)  # its labels are the brain's from now on
     elif same:
         url, status = same[0]["url"], "declined"
     else:
-        url, status = forge.create_issue(title, issue_body(found), label), "opened"
+        url, status = forge.create_issue(title, body, label), "opened"
     for older in open_:
         if older["title"] != title:
             forge.close_issue(older["url"], f"Superseded by {url}: his upstream moved on to {found.new_commit[:12]}.")
