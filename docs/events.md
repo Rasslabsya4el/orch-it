@@ -65,6 +65,8 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `unpark_by` | `event`, `hand` |
 | `wait_end_reason` | `kind_unknown`, `ref_bad`, `until_bad`, `date_after_until`, `until_past`, `ticket_missing`, `ticket_not_open`, `already_parked`, `ref_missing`, `ref_not_pr`, `ref_not_ticket`, `ref_self`, `ref_parent`, `event_passed`, `park_mismatch`, `ticket_changed`, `body_too_long`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
 | `park_return` | `due`, `other_way`, `late`, `comment`, `unreadable`, `hand` |
+| `hook_reason` | `write_ticket_missing`, `park_by_hand`, `body_unreadable`, `command_unreadable`, `issue_unreadable`, `shape`, `passed` |
+| `ticket_rule` | `title_too_long`, `title_parked`, `title_issue_number`, `human_block_missing`, `human_block_not_first`, `human_field_missing`, `human_field_order`, `human_field_not_russian`, `human_field_path`, `agent_block_missing`, `acceptance_missing`, `outside_case_missing`, `outside_case_no_row`, `same_object_missing`, `events_row_missing`, `weight_missing`, `weight_bad`, `write_ticket_missing`, `park_by_hand`, `body_unreadable`, `command_unreadable`, `issue_unreadable` |
 | `park_unreadable` | `line_missing`, `line_bad`, `lines_many`, `label_missing`, `ref_missing` |
 | `comment_kind` | `checkpoint`, `send_back`, `accepted`, `owner_answer`, `brain_answer`, `resolution`, `closing`, `machine` |
 | `close_via` | `close_command`, `github_keyword`, `manual` |
@@ -121,7 +123,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 |---|---|---|
 | `turn.used` | `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `usd`, `price_table`, `tickets_held`, `reason` (`turn_reason`) | every dollar and token; cost per ticket, role, model, step, week |
 | `test.result` | `test_id`, `outcome`, `skip_reason`, `ms`, `attempt`, `load_verdict` (`load_verdict`) | per test: flaky retries, slow tests, skips by reason |
-| `hook.ran` | `hook`, `action` (`hook_action`), `reason` | what a hook did or why it did nothing |
+| `hook.ran` | `hook`, `action` (`hook_action`), `reason` (`hook_reason`), `rules` (`ticket_rule`) | what a hook did or why it did nothing |
 | `run.checked` | `checked_run`, `result` (`run_check_result`) | a live run checked by another session |
 | `ticket.transferred` | `from_repo`, `from_number`, `to_repo`, `to_number` | a ticket moved between repos |
 | `machine.booted` | none | the gap a boot leaves in every running step |
@@ -221,6 +223,10 @@ It prints one line per hit, `<sha12> <where> <file or ->:<line or -> <kind>` (th
 `python -m orch_it [--store PATH] tickets parks [--repo R] [--role script]`: the one reader (the setting `owner_login` names whose comment answers an `owner_answer` park, default the repo owner): every open ticket with the `parked` label, reported `waiting`, `due` (back to its queue), `other_way`, `late`, `comment`, `unreadable` (each to the brain: `needs-triage` and a comment) or `failed` (read again next run); writes the end of each `wait`, `ticket.unparked`, `park.unreadable` or a `step.progressed`.
 
 `python -m orch_it [--store PATH] skills shadowed`: the SessionStart hook of `.claude/settings.json`. It reads the hook's JSON from stdin, compares the project's skills (`CLAUDE_PROJECT_DIR`, else the work tree around `cwd`) with the personal ones (`$CLAUDE_CONFIG_DIR/skills`, default `~/.claude/skills`), letter case aside, and writes one `skill.shadowed` per clash: `copy` true for his copy, false for ours, null when the manifest cannot be read; `same_text` when the two `SKILL.md` are byte-equal. A resumed or compacted session writes nothing new. It prints nothing and exits 0 whatever happens, an error on stderr.
+
+`python -m orch_it skills check [--ref main] [--work-tree PATH]`: fetch Pocock's upstream (`upstream` of `.claude/skills/pocock.json`) into a cache in the per-user data folder and give each of his skills its class against the manifest (`same`, `added`, `renamed`, `removed`, `text_changed`, `contract_changed`): one line per changed skill, the skills per class, the counts, then `no change`, `needs-triage: waits for the brain` or `merges when green`.
+
+`python -m orch_it skills update [--ref main] [--work-tree PATH] [--repo R] [--dispatch-tests]`: on a change, build the new copies and manifest on `origin/main` (the work tree is not touched), push them to `skills-upstream/<upstream commit>-<main commit>` and open one pull request listing every skill with its class, labelled `needs-triage` when a copy is renamed, removed or changed in contract, else (a skill not copied changing included) set to merge when green; an open pull request of the same upstream commit is brought up to date instead, one closed unmerged is not opened again, an open one of an older commit is closed as superseded. `--dispatch-tests` starts the `tests` workflow on the branch (a pull request a workflow's token opens starts none). Prints `no change`, `pull request: <url> <labels or merge rule>`, `pull request already open: <url> ...` or `pull request closed unmerged for this commit, not opened again: <url>`. The `skills-update` workflow runs it daily and on demand.
 
 `python -m orch_it [--store PATH] research <brief> [--model ALIAS] [--no-reddit] [--report PATH] [--work-tree PATH] [--repo R] [--ticket N]`:
 run the brief through the research bridge (#396): a private opencode server for this run, the model an alias of the
