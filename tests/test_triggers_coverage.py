@@ -162,3 +162,146 @@ def test_a_function_body_is_read():
 def test_a_malformed_case_select_or_function_never_raises(command):
     act(command)
     act(command, tool="PowerShell", windows=True)
+
+
+# --- 2. heredoc and interpreter-string bodies that are run are parsed ------------------------
+
+def test_a_python_heredoc_body_is_parsed_as_code():
+    out = deletes(f"python - <<'EOF'\nimport shutil; shutil.rmtree('{OTHER}')\nEOF")
+    assert out and out[0].targets == (OTHER,) and out[0].rule_id == "python-c"
+
+
+@pytest.mark.parametrize("head", ["python", "python3", "python3.12", "python -", "python3 -u -"])
+def test_a_python_reading_stdin_runs_its_heredoc(head):
+    command = f"{head} <<'EOF'\nimport os\nos.remove('{OTHER}/f')\nEOF"
+    assert deletes(command)[0].targets == (f"{OTHER}/f",)
+
+
+def test_a_python_stop_in_a_heredoc_is_found():
+    assert stops("python - <<'EOF'\nimport os\nos.kill(321, 9)\nEOF")[0].pids == (321,)
+
+
+def test_a_node_and_deno_heredoc_body_is_parsed_as_code():
+    out = deletes(f"node - <<'EOF'\nrequire('fs').rmSync('{OTHER}', {{recursive: true}})\nEOF")
+    assert out[0].targets == (OTHER,) and out[0].rule_id == "node-e"
+    out = deletes(f"deno run - <<'EOF'\nDeno.removeSync('{OTHER}', {{recursive: true}})\nEOF")
+    assert out[0].targets == (OTHER,)
+
+
+def test_a_python_given_a_script_file_does_not_run_the_heredoc_as_code():
+    # the heredoc is the script's stdin data, not code
+    assert deletes(f"python script.py <<'EOF'\nshutil.rmtree('{OTHER}')\nEOF") == []
+
+
+@pytest.mark.parametrize("head", ["bash", "sh", "zsh", "bash -s", "sh -", "sudo bash", "bash -e"])
+def test_a_shell_heredoc_body_is_parsed_as_commands(head):
+    out = deletes(f"{head} <<'EOF'\nrm -rf {OTHER}\nEOF")
+    assert out and out[0].targets == (OTHER,) and out[0].rule_id == "rm"
+
+
+def test_a_heredoc_piped_into_a_shell_is_parsed_as_commands():
+    assert deletes(f"cat <<EOF | bash\nrm -rf {OTHER}\nEOF")[0].targets == (OTHER,)
+    assert deletes(f"cat <<'EOF' | sh\nrm -rf {OTHER}\nEOF")[0].targets == (OTHER,)
+    assert deletes(f"cat <<'EOF' | /bin/bash -s\nrm -rf {OTHER}\nEOF")[0].targets == (OTHER,)
+
+
+def test_a_bash_heredoc_may_hold_several_commands_and_control_flow():
+    body = f"cd /work/self\nfor d in a b; do\n  rm -rf {OTHER}/$d\ndone\nkill 77"
+    out = deletes(f"bash <<'EOF'\n{body}\nEOF")
+    assert out and out[0].rule_id == "rm" and out[0].cwd == "/work/self"
+    assert stops(f"bash <<'EOF'\n{body}\nEOF")[0].pids == (77,)
+
+
+def test_a_heredoc_that_is_only_data_yields_nothing():
+    assert act("cat <<EOF > note\nrm -rf x\nEOF") == []
+    assert act(f"cat <<'EOF'\nrm -rf {OTHER}\nEOF") == []
+    assert act(f"tee notes.txt <<EOF\nrm -rf {OTHER}\nEOF") == []
+    assert act(f"python script.py <<EOF\nrm -rf {OTHER}\nEOF") == []
+    assert act(f"grep rm <<EOF | wc -l\nrm -rf {OTHER}\nEOF") == []
+
+
+def test_commands_after_a_heredoc_are_still_read():
+    out = deletes(f"cat <<'EOF'\ndata\nEOF\nrm -rf {OTHER}")
+    assert [d.targets for d in out] == [(OTHER,)]
+
+
+def test_an_unquoted_heredoc_runs_its_command_substitution():
+    out = deletes(f"cat <<EOF\nhello $(rm -rf {OTHER})\nEOF")
+    assert out and out[0].targets == (OTHER,)
+    out = deletes(f"cat <<EOF > note\n`rm -rf {OTHER}`\nEOF")
+    assert out and out[0].targets == (OTHER,)
+
+
+def test_a_quoted_heredoc_does_not_run_its_command_substitution():
+    assert act(f"cat <<'EOF'\n$(rm -rf {OTHER})\nEOF") == []
+    assert act("cat <<\\EOF\n$(rm -rf " + OTHER + ")\nEOF") == []
+    assert act(f'cat <<"EOF"\n$(rm -rf {OTHER})\nEOF') == []
+
+
+def test_heredoc_nesting_is_bounded():
+    body = f"rm -rf {OTHER}"
+    for _ in range(shell.MAX_DEPTH + 5):
+        body = "bash <<'EOF'\n" + body + "\nEOF"
+    out = act(body)  # never raises, never silent
+    assert any(isinstance(a, Delete) for a in out)
+
+
+def test_an_arithmetic_shift_is_no_heredoc():
+    out = deletes(f"echo $((1<<2))\nrm -rf {OTHER}")
+    assert [d.targets for d in out] == [(OTHER,)]
+
+
+# strings that are shell commands inside python and node bodies
+
+@pytest.mark.parametrize("command", [
+    f"python -c \"import os; os.system('rm -rf {OTHER}')\"",
+    f"python3 -c \"import subprocess; subprocess.run('rm -rf {OTHER}', shell=True)\"",
+    f"python -c \"import subprocess; subprocess.call('rm -rf {OTHER}', shell=True)\"",
+    f"python -c \"import subprocess; subprocess.Popen('rm -rf {OTHER}', shell=True)\"",
+    f"python -c \"import subprocess; subprocess.run(['rm','-rf','{OTHER}'])\"",
+    f"python -c \"import subprocess; subprocess.check_call(['rm', '-rf', '{OTHER}'], cwd='/')\"",
+    f"python -c \"import subprocess; subprocess.run(['bash','-c','rm -rf {OTHER}'])\"",
+    f"python -c \"import os; os.popen('rm -rf {OTHER}')\"",
+    f"node -e \"require('child_process').execSync('rm -rf {OTHER}')\"",
+    f"node -e \"require('child_process').exec('rm -rf {OTHER}')\"",
+    f"node -e \"const cp=require('child_process'); cp.spawnSync('rm',['-rf','{OTHER}'])\"",
+    f"node -e \"const {{execSync}}=require('child_process'); execSync('rm -rf {OTHER}')\"",
+    f"node -e \"require('child_process').spawn(['rm','-rf','{OTHER}'])\"",
+    f"node -e \"require('child_process').spawn('rm -rf {OTHER}', {{shell: true}})\"",
+])
+def test_a_shell_string_inside_an_interpreter_body_is_parsed(command):
+    out = deletes(command)
+    assert any(d.rule_id == "rm" and OTHER in d.targets for d in out), (command, out)
+
+
+def test_a_stop_inside_an_interpreter_string_is_found():
+    assert stops("python -c \"import os; os.system('kill -9 456')\"")[0].pids == (456,)
+    assert stops("node -e \"require('child_process').execSync('pkill -f runserver')\"")[0].matchers
+
+
+def test_a_python_f_string_command_keeps_the_unreadable_part_unreadable():
+    out = deletes("python -c \"import os; p='x'; os.system(f'rm -rf {p}')\"")
+    assert any(d.rule_id == "rm" and None in d.targets for d in out)
+
+
+def test_a_non_literal_shell_command_is_opaque():
+    out = deletes("python -c \"import os; os.system(cmd)\"")
+    assert any(None in d.targets for d in out)
+    out = deletes("python -c \"import subprocess; subprocess.run(cmd, shell=True)\"")
+    assert any(None in d.targets for d in out)
+
+
+@pytest.mark.parametrize("command", [
+    "python -c \"print('rm -rf /work/other')\"",
+    "python -c \"x = 'os.system(\\\"rm -rf /work/other\\\")'\"",
+    "python -c \"import os; os.system('ls /work/other')\"",
+    "python -c \"import subprocess; subprocess.run('rm -rf /work/other')\"",  # no shell=True: not a shell
+    "python -c \"import subprocess; subprocess.run(['ls', '/work/other'])\"",
+    "python -c \"import subprocess; subprocess.run(cmd)\"",
+    "node -e \"console.log('execSync(rm -rf /work/other)')\"",
+    "node -e \"/rm -rf x/.exec('rm -rf /work/other')\"",
+    "node -e \"require('child_process').execSync('ls')\"",
+    "python -c \"# os.system('rm -rf /work/other')\"",
+])
+def test_a_delete_word_in_a_plain_string_without_a_shell_call_does_not_fire(command):
+    assert not any(isinstance(a, (Delete, Stop)) for a in act(command)), act(command)

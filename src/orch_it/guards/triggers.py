@@ -108,16 +108,19 @@ _SKIP_WHOLE = {"for", "while", "until", "if", "case", "fi", "done", "esac", "in"
 
 
 def _read_simple(simple: shell.Simple, windows: bool, out: list[Action], depth: int = 0) -> None:
+    if simple.stdin is not None and simple.stdin_to_shell:
+        # `cat <<EOF | bash`: the heredoc body is the script the shell runs
+        _run_text(simple.stdin, "posix", windows, out, simple.cwd, depth)
     words = _arm_commands(list(simple.argv))
     if words and words[0] in _SKIP_WHOLE:
         return  # a control-flow header (`for x in ...`) runs no delete itself
-    argv = _unwrap(words, simple.dialect, windows, out, simple.cwd, depth)
+    argv = _unwrap(words, simple.dialect, windows, out, simple.cwd, depth, simple.stdin)
     if not argv:  # None: the wrapper's work is done; []: nothing left to read
         return
     if argv[0] is None:
         out.append(_opaque_head(argv, simple))
         return
-    _emit(_match(argv, simple, windows), out)
+    _emit(_match(argv, simple, windows, depth), out)
 
 
 _CASE_LABEL = re.compile(r"^\(?[^()\s]*\)(.*)$", re.S)
@@ -182,7 +185,7 @@ _PASS_THROUGH = {"env", "sudo", "nice", "nohup", "setsid", "stdbuf", "ionice", "
 _EVAL = {"eval", "iex", "invoke-expression"}
 
 
-def _unwrap(argv, dialect, windows, out, cwd, depth):
+def _unwrap(argv, dialect, windows, out, cwd, depth, stdin=None):
     """Peel wrapper commands (`bash -c '...'`, `eval`, `env`, `sudo`, `timeout`, `xargs`,
     `cmd /c`, `pwsh -Command`, `wsl`), running an inner shell string back through the splitter.
     Returns the real argv to match, or None when the wrapper's work is already handled (an
@@ -210,6 +213,8 @@ def _unwrap(argv, dialect, windows, out, cwd, depth):
             argv = inner + [None]
             continue
         if dialect == "posix" and name in _POSIX_SHELLS:
+            if stdin is not None and _shell_reads_stdin(rest):
+                return _run_text(stdin, "posix", windows, out, cwd, depth)  # `bash <<EOF`
             return _run_inner_string(rest, "posix", windows, out, cwd, depth)
         if (windows or dialect == "windows") and name in ("sh", "bash") and _has_c(rest):
             return _run_inner_string(rest, "posix", windows, out, cwd, depth)
@@ -265,11 +270,41 @@ def _run_inner_string(rest, dialect, windows, out, cwd, depth):
     script = _first_non_option(rest)
     if script is None:
         return None
+    return _run_text(script, dialect, windows, out, cwd, depth)
+
+
+def _run_text(script, dialect, windows, out, cwd, depth):
+    """Parse `script` as a command list of `dialect` and read every command in it. Always None:
+    the caller's own work is done."""
+
     tool = "PowerShell" if dialect == "windows" else "Bash"
     for simple in shell.simple_commands(script, tool=tool, cwd=cwd, env={}, windows=windows,
                                         depth=depth + 1):
         _read_tree(simple, windows, out, depth + 1)
     return None
+
+
+def _shell_reads_stdin(rest) -> bool:
+    """A shell with no script file and no `-c` (`bash`, `bash -s`, `sh -`, `bash -e`) reads its
+    commands from stdin."""
+
+    i = 0
+    while i < len(rest):
+        word = rest[i]
+        if word is None:
+            return False
+        if word in ("-s", "-"):
+            return True
+        if word.startswith("-") and not word.startswith("--") and "c" in word[1:]:
+            return False  # `-c`, `-ec`: the command string is its own argument
+        if word in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):
+            i += 2
+            continue
+        if word.startswith(("-", "+")):
+            i += 1
+            continue
+        return False  # a script file: stdin is its data
+    return True
 
 
 def _name(word: str, windows: bool) -> str:
@@ -398,7 +433,7 @@ _MOVE = {"mv", "move", "move-item", "ren", "rename", "rename-item"}
 _RECURSIVE_FLAGS_POSIX = {"-r", "-R", "--recursive", "-rf", "-fr", "-Rf", "-fR"}
 
 
-def _match(words: list[str | None], simple: shell.Simple, windows: bool):
+def _match(words: list[str | None], simple: shell.Simple, windows: bool, depth: int = 0):
     """The action(s) one simple command performs: None, one action, or a list."""
 
     is_win = windows or simple.dialect == "windows"
@@ -425,9 +460,9 @@ def _match(words: list[str | None], simple: shell.Simple, windows: bool):
     if head in _STOP_HEADS:
         return _stop(head, words, simple, segment, is_win)
     if re.fullmatch(r"python[0-9.]*|py|pypy[0-9.]*", head):
-        return _python_c(words, simple, segment, is_win)
+        return _python_c(words, simple, segment, windows, depth)
     if head in ("node", "nodejs", "deno", "bun"):
-        return _node_e(words, simple, segment, is_win)
+        return _node_e(head, words, simple, segment, windows, depth)
     return None
 
 
@@ -905,14 +940,49 @@ _NODE_DELETE = re.compile(
 _NODE_STOP = re.compile(r"(?:process\.kill|\.kill|treeKill)\s*\(\s*(?:(\d+))?")
 
 
-def _python_c(words, simple, segment, is_win):
+def _python_c(words, simple, segment, windows, depth):
     body = _dash_body(words, ("-c",))
-    return _code_body(body, simple, segment, "python-c", _PY_DELETE, _PY_STOP, "python-os-kill")
+    if body is None and "-c" not in words:
+        body = _stdin_code(words[1:], simple, {"-W", "-X", "-Q"}, {"-c", "-m"})
+    return _code_body(body, simple, segment, [(_PY_DELETE, "python-c")], _PY_STOP,
+                      "python-os-kill", "python", windows, depth)
 
 
-def _node_e(words, simple, segment, is_win):
+def _node_e(head, words, simple, segment, windows, depth):
     body = _dash_body(words, ("-e", "--eval", "-p", "--print"))
-    return _code_body(body, simple, segment, "node-e", _NODE_DELETE, _NODE_STOP, "node-process-kill")
+    if body is None and head == "deno" and len(words) > 1 and words[1] == "eval":
+        body = _first_non_option(words[2:])
+    if body is None and not any(w in ("-e", "--eval", "-p", "--print") for w in words):
+        rest = words[1:]
+        if head in ("deno", "bun") and rest[:1] == ["run"]:
+            rest = rest[1:]
+        body = _stdin_code(rest, simple, {"-r", "--require", "--loader", "--import",
+                                          "--input-type"}, {"-c", "--check"})
+    return _code_body(body, simple, segment, [(_NODE_DELETE, "node-e")], _NODE_STOP,
+                      "node-process-kill", "node", windows, depth)
+
+
+def _stdin_code(rest, simple, value_options, code_flags):
+    """The heredoc body an interpreter runs when it is given no script file and no code string of
+    its own (`python -`, `python3 -u`, `node -`, `deno run -`): its stdin is the program."""
+
+    if simple.stdin is None:
+        return None
+    i = 0
+    while i < len(rest):
+        word = rest[i]
+        if word is None or word in code_flags:
+            return None
+        if word == "-":
+            return simple.stdin
+        if word in value_options:
+            i += 2
+            continue
+        if word.startswith("-"):
+            i += 1
+            continue
+        return None  # a script file: the heredoc is its data
+    return simple.stdin
 
 
 def _dash_body(words, flags):
@@ -925,25 +995,179 @@ def _dash_body(words, flags):
     return None
 
 
-def _code_body(body, simple, segment, rule, delete_re, stop_re, stop_rule):
-    """A delete or stop inside a `-c`/`-e` body. Shapes are matched on the code with its string
-    and comment contents blanked, so a delete word written inside a string or comment does not
-    fire; a delete call's own string-literal argument is the target (a non-literal argument is
-    unreadable, so None)."""
+def _code_body(body, simple, segment, delete_res, stop_re, stop_rule, flavor, windows, depth):
+    """The deletes, stops and shell commands inside a `-c`/`-e` body. Shapes are matched on the
+    code with its string and comment contents blanked, so a delete word written inside a string
+    or comment does not fire; a delete call's own string-literal argument is the target (a
+    non-literal argument is unreadable, so None). A shell command run through `os.system`,
+    `subprocess` or `child_process` is parsed as the command it is."""
 
     if body is None:
         return None
-    code = _blank_code(body)
-    deletes = list(delete_re.finditer(code))
-    if deletes:
-        targets = tuple(_arg_target(body, m) for m in deletes)
-        return Delete(targets, simple.cwd, True, True, True, rule, segment)
+    code = _blank_code(body, ("//", "/*") if flavor == "node" else ("#",))
+    found: list[Action] = []
+    for delete_re, rule in delete_res:
+        deletes = list(delete_re.finditer(code))
+        if deletes:
+            targets = tuple(_arg_target(body, m) for m in deletes)
+            found.append(Delete(targets, simple.cwd, True, True, True, rule, segment))
     stops = list(stop_re.finditer(code))
     if stops:
         pids = tuple(int(m.group(1)) for m in stops if m.group(1))
         opaque = any(not m.group(1) for m in stops)
-        return _finish_stop(list(pids), [], opaque, True, stop_rule, segment)
-    return None
+        found.append(_finish_stop(list(pids), [], opaque, True, stop_rule, segment))
+    found += _shell_calls(body, code, flavor, simple, segment, windows, depth)
+    return found or None
+
+
+# a call that runs a shell command (python: os.system/popen, subprocess; node: child_process)
+_PY_SHELL_CALL = re.compile(
+    r"(?<![\w.])(?:os\.(?P<os>system|popen)"
+    r"|subprocess\.(?P<sp>run|call|Popen|check_call|check_output|getoutput|getstatusoutput))\s*\(")
+_NODE_SHELL_CALL = re.compile(
+    r"(?:(?<![\w$.])|(?:child_process|childProcess|cp)\s*\.\s*|(?<=\))\s*\.\s*)"
+    r"(?P<fn>execSync|exec|spawnSync|spawn|execFileSync|execFile)\s*\(")
+
+
+def _shell_calls(body, code, flavor, simple, segment, windows, depth) -> list[Action]:
+    rule = "python-c" if flavor == "python" else "node-e"
+    opaque = Delete((None,), simple.cwd, True, True, True, rule, segment)
+    found: list[Action] = []
+    pattern = _PY_SHELL_CALL if flavor == "python" else _NODE_SHELL_CALL
+    for m in pattern.finditer(code):
+        args, _ = _split_call(body, m.end() - 1)
+        first = args[0] if args else ""
+        items = _list_items(first)
+        text = _literal(first)
+        if flavor == "python":
+            as_shell = bool(m.group("os")) or m.group("sp") in ("getoutput", "getstatusoutput") or any(
+                re.fullmatch(r"shell\s*=\s*True", a) for a in args[1:])
+            if items is not None and not m.group("os"):
+                found += _run_argv(items, simple, windows, depth)
+            elif as_shell and text is not None:
+                found += _run_shell_text(text, simple, windows, depth)
+            elif as_shell:
+                found.append(opaque)
+        elif m.group("fn") in ("exec", "execSync"):
+            if text is not None:
+                found += _run_shell_text(text, simple, windows, depth)
+            else:
+                found.append(opaque)
+        elif items is not None:
+            found += _run_argv(items, simple, windows, depth)
+        elif text is not None:
+            more = _list_items(args[1]) if len(args) > 1 else None
+            if more is not None:
+                found += _run_argv([text] + more, simple, windows, depth)
+            elif re.search(r"\s", text):
+                found += _run_shell_text(text, simple, windows, depth)
+            else:
+                found += _run_argv([text], simple, windows, depth)
+    return found
+
+
+def _run_shell_text(text, simple, windows, depth) -> list[Action]:
+    local: list[Action] = []
+    _run_text(text, "posix", windows, local, simple.cwd, depth)
+    return local
+
+
+def _run_argv(items, simple, windows, depth) -> list[Action]:
+    local: list[Action] = []
+    _read_tree(shell.Simple(list(items), simple.cwd, "posix"), windows, local, depth + 1)
+    return local
+
+
+def _string_end(text: str, i: int) -> int:
+    """Where the string literal opened at `text[i]` ends (a triple-quoted one included)."""
+
+    n = len(text)
+    quote = text[i]
+    if quote != "`" and text[i:i + 3] == quote * 3:
+        close = text.find(quote * 3, i + 3)
+        return n if close == -1 else close + 3
+    j = i + 1
+    while j < n:
+        if text[j] == "\\":
+            j += 2
+        elif text[j] == quote:
+            return j + 1
+        else:
+            j += 1
+    return n
+
+
+def _split_call(text: str, start: int) -> tuple[list[str], int]:
+    """The top-level arguments (source text) of the call or list whose opener is at `text[start]`,
+    and the index of its closer (the end of the text when unclosed)."""
+
+    args: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    i = start + 1
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in "'\"`":
+            end = _string_end(text, i)
+            buf.append(text[i:end])
+            i = end
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append("".join(buf).strip())
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if "".join(buf).strip():
+        args.append("".join(buf).strip())
+    return args, i
+
+
+_STRING_OPEN = re.compile("^(?P<p>[rRbBuUfF]{0,2})(?P<q>'''|\"\"\"|'|\"|`)")
+
+
+def _literal(arg: str) -> str | None:
+    """The text of a plain string literal `arg`, or None when it is anything else (a name, a
+    sum, two literals side by side). A part computed inside an f-string or template literal
+    becomes `${__x}`, which the shell parser reads as unreadable."""
+
+    arg = arg.strip()
+    opened = _STRING_OPEN.match(arg)
+    if not opened:
+        return None
+    quote = opened.group("q")
+    if _string_end(arg, opened.end("p")) != len(arg) or len(arg) < opened.end() + len(quote):
+        return None
+    text = arg[opened.end():len(arg) - len(quote)]
+    prefix = opened.group("p").lower()
+    if "r" not in prefix:
+        text = re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), text, flags=re.S)
+    if "f" in prefix:
+        text = re.sub(r"(?<!\{)\{[^{}]*\}(?!\})", "${__x}", text).replace("{{", "{").replace("}}", "}")
+    if quote == "`":
+        text = re.sub(r"\$\{[^}]*\}", "${__x}", text)
+    return text
+
+
+def _list_items(arg: str) -> list[str | None] | None:
+    """The items of a list literal `[...]` / `(...)` as string literals (None for any other item),
+    or None when `arg` is not a list literal."""
+
+    arg = arg.strip()
+    if arg[:1] not in ("[", "("):
+        return None
+    items, end = _split_call(arg, 0)
+    if end != len(arg) - 1:
+        return None
+    return [_literal(item) for item in items]
 
 
 def _arg_target(body: str, match: re.Match) -> str | None:
@@ -955,9 +1179,9 @@ def _arg_target(body: str, match: re.Match) -> str | None:
     return found.group(2) if found else None
 
 
-def _blank_code(body: str) -> str:
-    """`body` with the contents of every string literal emptied and every `#` or `//` comment
-    removed, so only real code is left to match shapes against."""
+def _blank_code(body: str, comments=("#",)) -> str:
+    """`body` with the contents of every string literal and every comment replaced by spaces, so
+    only real code is left to match shapes against; every character keeps its position."""
 
     out = []
     i = 0
@@ -965,13 +1189,19 @@ def _blank_code(body: str) -> str:
     while i < n:
         ch = body[i]
         if ch in "'\"`":
-            j = i + 1
-            while j < n and body[j] != ch:
-                j += 2 if body[j] == "\\" else 1
-            out.append(ch + ch)  # an empty string of the same quote keeps the call shape
-            i = j + 1
-        elif ch == "#" or body[i:i + 2] == "//":
+            end = _string_end(body, i)
+            size = end - i
+            out.append(ch + " " * (size - 2) + ch if size >= 2 and body[end - 1] == ch
+                       else ch + " " * (size - 1))
+            i = end
+        elif "/*" in comments and body[i:i + 2] == "/*":
+            end = body.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            out.append(" " * (end - i))
+            i = end
+        elif any(body.startswith(c, i) for c in comments if c != "/*"):
             while i < n and body[i] != "\n":
+                out.append(" ")
                 i += 1
         else:
             out.append(ch)

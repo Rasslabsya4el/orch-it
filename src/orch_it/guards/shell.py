@@ -31,6 +31,9 @@ class Simple:
     cwd: str | None
     dialect: str
     subs: list["Simple"] = field(default_factory=list)
+    stdin: str | None = None        # the heredoc body fed to it, if any
+    stdin_to_shell: bool = False    # its heredoc line pipes into a shell, which runs the body
+    text: str = ""                  # the segment as written (heredoc markers removed)
 
 
 # a command nested deeper than this (substitutions or `-c` wrappers inside one another) is read
@@ -93,10 +96,13 @@ class _PosixSplit:
         self.walker = walker
         self.env = dict(walker.env)
         self.cwd: str | None = None
+        self.heredocs: list[Heredoc] | None = None  # shared by a subshell and a substitution
 
     def walk(self, command: str, cwd: str | None) -> None:
         self.cwd = cwd
-        for segment in _posix_segments(_strip_heredocs(command)):
+        if self.heredocs is None:
+            command, self.heredocs = _strip_heredocs(command)
+        for segment in _posix_segments(command):
             self._simple(segment)
 
     def _simple(self, segment: str) -> None:
@@ -107,6 +113,7 @@ class _PosixSplit:
             child = _PosixSplit(_Walker(self.env, self.walker.windows, self.walker.depth + 1))
             child.walker.out = self.walker.out  # a subshell's cd/assignments do not leak out
             child.env = dict(self.env)
+            child.heredocs = self.heredocs
             child.walk(segment[1:-1], self.cwd)
             return
         if segment[:1] == "{" and segment[-1:] == "}":
@@ -122,6 +129,8 @@ class _PosixSplit:
         tokens = _posix_tokens(segment)
         if not tokens:
             return
+        held = [self.heredocs[int(k)] for k in _HD_FIND.findall(segment)
+                if int(k) < len(self.heredocs)]
         assignments, rest = _leading_assignments(tokens)
         for name, raw in assignments:
             self.env[name] = self._expand_word(raw)[0] or ""
@@ -136,7 +145,15 @@ class _PosixSplit:
                 return
             if name == "popd":
                 return
-        self.walker.out.append(Simple(words, self.cwd, "posix", subs))
+        for heredoc in held:
+            if not heredoc.quoted:  # an unquoted heredoc expands `$( )` and backticks: they run
+                for kind, text in _dquote_pieces(heredoc.body):
+                    if kind == "sub":
+                        subs += self._parse_sub(text, fresh=True)
+        self.walker.out.append(Simple(
+            words, self.cwd, "posix", subs,
+            "\n".join(h.body for h in held) if held else None,
+            any(h.to_shell for h in held), _HD_FIND.sub("", segment)))
 
     def _change_dir(self, words: list[str | None]) -> None:
         args = words[1:]
@@ -226,12 +243,14 @@ class _PosixSplit:
             return self.env[name]
         return default
 
-    def _parse_sub(self, body: str) -> list[Simple]:
+    def _parse_sub(self, body: str, fresh: bool = False) -> list[Simple]:
         if self.walker.depth >= MAX_DEPTH:
             return [_too_deep(self.cwd, "posix")]  # nested too deep: left unread, as opaque
         sink = _Walker(self.env, self.walker.windows, self.walker.depth + 1)
         inner = _PosixSplit(sink)
         inner.env = dict(self.env)
+        if not fresh:
+            inner.heredocs = self.heredocs  # the body came from the already-stripped text
         inner.walk(body, self.cwd)
         return sink.out
 
@@ -320,16 +339,36 @@ def _win_command_name(head: str) -> str:
 
 # --- tokenisers ------------------------------------------------------------------------------
 
-def _strip_heredocs(command: str) -> str:
-    """Remove every heredoc body (`<<WORD ... WORD`): it is data the shell feeds a command on
-    stdin, not commands, so a delete word in it is no command (O35, P222). The redirection
-    operator itself stays; only the lines from the end of its line to the delimiter go."""
+@dataclass
+class Heredoc:
+    """One heredoc: `body` the lines it feeds a command, `quoted` whether its delimiter was quoted
+    (a quoted one does not expand `$( )`), `to_shell` whether its line pipes into a shell."""
 
-    out = []
+    body: str
+    quoted: bool
+    to_shell: bool
+
+
+# a heredoc's place in the stripped text: `<<` then this marker, which the tokeniser drops as part
+# of the redirection and `_simple` reads back to find the body
+_HD_FIND = re.compile("\x00H(\\d+)\x00")
+_PIPE_TO_SHELL = re.compile(
+    r"\|\s*(?:(?:sudo|env)\s+(?:-\S+\s+)*)?(?:\S*/)?(?:bash|sh|zsh|dash|ksh)\b(?!\s+-\w*c)")
+
+
+def _strip_heredocs(command: str) -> tuple[str, list[Heredoc]]:
+    """Take every heredoc body (`<<WORD ... WORD`) out of the command text and return the text
+    with each `<<WORD` turned into `<<` plus a marker, with the bodies in order. A body is data
+    fed to a command on stdin, not commands, so a delete word in it is no command (O35, P222);
+    whether a consumer RUNS it is decided by the caller from the command it is fed to (#395 unit
+    2b)."""
+
+    out: list[str] = []
+    heredocs: list[Heredoc] = []
     i = 0
     n = len(command)
-    pending: list[str] = []  # delimiters opened on the current line, in order
-    line_start = True
+    pending: list[tuple[int, str]] = []  # (index into heredocs, delimiter) opened on this line
+    line_start = 0
     while i < n:
         ch = command[i]
         if ch in "'\"":
@@ -338,51 +377,76 @@ def _strip_heredocs(command: str) -> str:
             i = end
             continue
         if ch == "<" and command[i:i + 2] == "<<" and command[i:i + 3] != "<<<":
-            out.append("<<")
+            prefix = command[line_start:i]
             j = i + 2
             if j < n and command[j] == "-":
-                out.append("-")
                 j += 1
             while j < n and command[j] in " \t":
                 j += 1
-            delimiter, j = _heredoc_delimiter(command, j)
-            if delimiter is not None:
-                pending.append(delimiter)
+            delimiter, quoted, j = _heredoc_delimiter(command, j)
+            if (delimiter is None or prefix.count("((") > prefix.count("))")
+                    or (delimiter.isdigit() and not quoted)):
+                out.append("<<")  # a shift (`$((1<<2))`, `1<<2`), not a heredoc
+                i += 2
+                continue
+            eol = command.find("\n", j)
+            heredocs.append(Heredoc("", quoted,
+                                    bool(_PIPE_TO_SHELL.search(command[j:n if eol == -1 else eol]))))
+            pending.append((len(heredocs) - 1, delimiter))
+            out.append("<<\x00H%d\x00" % (len(heredocs) - 1))
             i = j
             continue
         if ch == "\n":
             out.append("\n")
             i += 1
             if pending:
-                i = _skip_heredoc_bodies(command, i, pending)
+                i = _read_heredoc_bodies(command, i, pending, heredocs)
                 pending = []
+            line_start = i
             continue
         out.append(ch)
         i += 1
-    return "".join(out)
+    return "".join(out), heredocs
 
 
-def _heredoc_delimiter(text: str, i: int) -> tuple[str | None, int]:
+def _heredoc_delimiter(text: str, i: int) -> tuple[str | None, bool, int]:
+    """The delimiter word at `i` with its quotes removed, whether any part of it was quoted, and
+    where it ends."""
+
     n = len(text)
-    if i < n and text[i] in "'\"":
-        end = _skip_quote(text, i, text[i])
-        return text[i + 1:end - 1], end
     j = i
-    while j < n and (text[j].isalnum() or text[j] in "_"):
-        j += 1
-    return (text[i:j] or None), j
+    chars: list[str] = []
+    quoted = False
+    while j < n and text[j] not in " \t\n;|&<>()":
+        c = text[j]
+        if c in "'\"":
+            end = _skip_quote(text, j, c)
+            chars.append(text[j + 1:end - 1])
+            quoted = True
+            j = end
+        elif c == "\\" and j + 1 < n:
+            chars.append(text[j + 1])
+            quoted = True
+            j += 2
+        else:
+            chars.append(c)
+            j += 1
+    return ("".join(chars) or None), quoted, j
 
 
-def _skip_heredoc_bodies(text: str, i: int, delimiters: list[str]) -> int:
+def _read_heredoc_bodies(text: str, i: int, pending, heredocs: list[Heredoc]) -> int:
     n = len(text)
-    for delimiter in delimiters:
+    for index, delimiter in pending:
+        lines: list[str] = []
         while i < n:
             end = text.find("\n", i)
             end = n if end == -1 else end
-            if text[i:end].strip() == delimiter:
-                i = end + 1 if end < n else n
-                break
+            line = text[i:end]
             i = end + 1 if end < n else n
+            if line.strip() == delimiter:
+                break
+            lines.append(line)
+        heredocs[index].body = "\n".join(lines)
     return i
 
 
