@@ -5,7 +5,7 @@ Reference for `docs/agents/brain.md`. Each section is read when its case comes; 
 
 ## The start of a chat
 
-After a clear it starts from the open `wayfinder:map` issues,
+After a clear it starts from the open `wayfinder:map` issues (CLAUDE.md "Big efforts"),
 then the hand-off and the issues, inside a start-up budget: the reads, not the base, put a brain chat over the
 line (a fresh chat's base was measured at about 68k; one chat stood at 158k after 12 tool calls of reading). The first turn
 of a new brain chat reads only the newest hand-off (the session hook hands it in, from the repo's hand-off issue), `ListAgents`,
@@ -18,10 +18,11 @@ reading them, before any other work, and says what it found for each (alive, end
 or an ADR settled is not asked again, and nothing that contradicts it is proposed without putting the contradiction
 to the owner.
 
-**The core.** Waits on part 8 (targets): in a target the brain reads at the start of a chat what core update
-  waits and which core issues it would close, and tells the owner its lines. A core issue
-  the taken update or an older one closed is never named as open. A core update runs only on the owner's
-  word, never on its own.
+**The core.** Waits on part 8 (targets): in a target (any update rule but `home`) the brain reads the core status
+  at the start of a chat and tells the owner its lines: what waits, which core issues the core update already
+  taken closed, and which ones the waiting update would close (each marked when it is this repo's own). A core issue
+  the taken update or an older one closed is never named as open. Under the update rule `word`, a core update runs
+  only on the owner's word, never on its own.
 
 **The areas of a target.** Waits on part 8 (targets): while a target has no areas, the brain sorts every open ticket
 of the target into areas, parents
@@ -29,7 +30,7 @@ and maps with their whole trees included: the owner's ask is that the agent sort
 or grills him on it. Where the roots, their tree sizes, the
 loners and the labels in use show the areas plainly, the brain proposes them in one table with the
 counts and takes his yes or his edit in one message; where they do not, it grills him on what the areas are first.
-After his yes it creates the area labels, writes the areas, sorts the tickets
+After his yes it creates the area labels, writes the areas, sorts the tickets until the areas check passes,
 and shows him the count per area, one filter link per area and
 the tickets it was unsure of. One area per subtree: a parent's area is its children's, and a goal that spans areas
 holds no child of another area (such a ticket goes under the stream of its own area).
@@ -69,9 +70,10 @@ job due after this chat (a count tomorrow, a later re-check) goes to the app's s
 self-contained prompt; a session timer dies with the clear.
 
 The brain's session hook (`python -m orch_it hook brain`, registered in `.claude/settings.json`) reminds it on every owner prompt from
-the line on. A "wait" text while something is live, a firmer text past the ceiling and the reminder after
-the close of a `wayfinder:` ticket wait on part 6 (the launcher), as does the refusal, from the line on, of the brain's commands that open, reopen,
-retitle, rewrite or close an issue. It reminds only the brain: a background session or any other `--agent` /
+the line on; a firmer text past the ceiling, a "wait" text while something is live and a reminder after `gh issue close`
+of a `wayfinder:` ticket are no check of orch-it yet (the port's gap, recorded on orchestration-layer#403). From the
+line on the brain opens, reopens, retitles, rewrites and closes no issue, comments aside; no check refuses such a
+command yet (the same gap). It reminds only the brain: a background session or any other `--agent` /
 subagent is skipped, so nothing nudges ORCH to park early; every crossing of the line is a `context.crossed` event in the store.
 
 The hand-off is one reply, then the brain takes no new step until the owner clears it:
@@ -166,16 +168,21 @@ The brain keeps the queue in the order that serves the owner; a wrong order is i
   (accepted, redone, wrong fact, abandoned, with one line why) is recorded per route, and the routing table in
   `.claude/agents/orch.md` follows a route's numbers when they say to.
 - **A long investigation is cut** into independent questions, one short `researcher-how` each, run in parallel,
-  when one context would pass the measured line (`python -m orch_it events session-cost`, the numbers in the store):
+  when one context would pass the measured line (the role's `context_line` in the roles settings):
   cost grows with turns times context, so two halves under the line cost less than one context grown past it.
 - **Every helper runs on the model its role names.** A dearer model is the owner's call, put to him with its cost;
   no session hands work to one on its own.
 
-## Loops: the goal stop
+## Loops: three failures and the goal stop
 
 Repeating what already failed is the loop to stop, whoever runs it: ORCH, a worker, or the brain
 itself.
 
+- **On a ticket: three failed attempts in a row go to the brain.** A result the brain sends back to ORCH gets a
+  `<!-- send-back -->` comment (first line, then the reason). Three failed attempts in a row (only `failed` counts
+  as an attempt; the merge settings' `red_in_a_row`, default 3) send the ticket to the brain, `needs-triage`, instead
+  of back to ready, and the brain settles it as any ticket of its sweep. The owner is asked, in plain words, only his
+  own questions: his work or talk, money or limits, product scope, a one-way door.
 - **In the brain's own work and the agents it watches**: the third try of a thing that failed twice the same way
   (a command, a read, a reply, a worker's fix) is not made; the brain says what failed and re-thinks, or says it
   cannot.
@@ -193,6 +200,19 @@ itself.
   it reads the process's own chain and refuses one that still reaches a live session, rather
   than a guess from CPU or a command line alone.
   A merge is never stopped by pid: the brain withdraws any merge it knows is doomed by closing its pull request with a one-line reason (`gh pr close <n> --comment "<why>"`); the follow moves its ticket.
+
+## The purpose tags
+
+The tags say where the brain's money goes: the owner asked for them on nearly all of its spend, kept cheap, and the
+15% line of `brain.md` reads them. When the brain starts a stretch of work with one purpose, the first Bash or
+PowerShell call of that stretch starts with the line `# purpose: <word>`, one of: `closure-review` (reading a closed
+or closing ticket against its acceptance rows), `grill`, `ticket` (writing or rewriting a ticket), `notice` (a
+dispatcher or ORCH message), `owner` (answering the owner), `research` (a reading the brain runs or reads). A tag
+holds until the next tag or the next owner message; a turn with none in force counts as `untagged`, and a subagent's
+turns count to the tag in force when it started. A one-time reminder at the first untagged shell call after an owner
+message is no check of orch-it yet (the port's gap, recorded on orchestration-layer#403). The weekly count is a query
+of the store: the brain's `tool.called` events, whose `args_head` holds the tag line, and the `turn.used` events after
+each (`python -m orch_it events query "<sql>"`).
 
 ## A new target
 

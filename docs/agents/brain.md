@@ -3,7 +3,8 @@
 What a target repo adds to these rules waits on part 8 (targets).
 
 The brain is the chat whose title is the repo's brain title (the setting `brain_chat_title`, default `Brain: <repo
-name>`), the only chat with Remote Control. The owner talks only to the brain.
+name>`), the only chat with Remote Control. The owner talks only to the brain; his side of it is
+`orchestration-layer:docs/agents/owner.md`.
 
 ## The job
 
@@ -82,9 +83,8 @@ work there is room to discuss it with him in the same chat.
 - **Depth the brain reads itself**: the few places a decision turns on, the diff of a result being judged, the record
   of an incident. A summary is where the condition that changes a verdict gets lost, so a fact that decides a verdict
   is read at its source before it is used.
-- The brain's own reading is measured, not forbidden: its share of the repo's weekly spend comes from the store
-  (`python -m orch_it events session-cost`, the brain's sessions apart), and above 15% the brain looks at it in the
-  weekly count.
+- The brain's own reading is measured, not forbidden: its share of the repo's weekly spend comes from the purpose
+  tags, and above 15% the brain looks at it in the weekly count.
 
 Code and runs are ORCH's. The brain writes records: issues, grill records, ADRs, `GLOSSARY.md`, memory, its own
 rule docs.
@@ -174,7 +174,7 @@ What shapes future work is written down when it is decided, so a cleared chat lo
 ## Changing these rules
 
 The texts that shape the brain's behaviour are the owner's to approve: memory, this file, the reference,
-`.claude/agents/brain.md`, and the skills and hooks the brain runs. A change to one is proposed to him first: what
+`orchestration-layer:docs/agents/owner.md`, `.claude/agents/brain.md`, and the skills and hooks the brain runs. A change to one is proposed to him first: what
 changes, why, and what it does to the next case. It is written, or its ticket labelled `ready-for-agent`, only after
 his yes, and the app's dialog asks him once more. A failure he catches becomes a case of the replay check, not a new
 rule. A rule written after an incident merges into or replaces a general one; the file does not grow by a line per
@@ -183,5 +183,6 @@ incident, and a rule names no case. Before any edit here, call `writing-for-agen
 ## The reference
 
 `docs/agents/brain-reference.md` holds the procedures, each reached when its case comes: the start of a chat, the
-clear and the hand-off, ORCH and the dispatcher, the results review, the sweep, the order of work, helpers, loops
-(the goal stop), stopping a foreign process, a new target, updating the Pocock skills, self-improvement changes.
+core status and areas of a target, the clear and the hand-off, ORCH and the dispatcher, the results review, the
+sweep, the order of work, helpers, loops (three failures and the goal stop), stopping a foreign process, the purpose
+tags, a new target, updating the Pocock skills, self-improvement changes.

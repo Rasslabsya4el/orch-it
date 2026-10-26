@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SOURCES = ("brain.md", "brain-reference.md", "agent-brain.md", "note.md")
-VERDICT = re.compile(r"^(kept|changed: .+|dropped: .*#\d+.*|waits on part [0-9]+: .+)$")
+VERDICT = re.compile(r"^(kept|changed: .+|dropped: .*#\d+\b.*|waits on part [0-9]+: .+)$")
 WINDOW_LINES = 12  # a sentence of the new text may wrap over this many lines from its place
 _ITEM = re.compile(r"^\s*(?:[-*] |\d+\. )")
 _ITEMS = re.compile(r"(?m)^\s*(?:[-*] |\d+\. )")
@@ -48,7 +48,7 @@ def norm(text: str) -> str:
 
 
 def rules(source: str, text: str) -> list[Rule]:
-    lines = text.replace("\r\n", "\n").split("\n")
+    lines = text.removeprefix("﻿").replace("\r\n", "\n").split("\n")
     found: list[Rule] = []
     start = 0
     if lines and lines[0].strip() == "---":
@@ -116,25 +116,29 @@ def rows(table: str) -> list[Row]:
 
 
 def check(sources: dict[str, str], table: str, repo: Path) -> list[str]:
-    """Every problem of the table against the sources; [] when it accounts for every rule."""
+    """Every problem of the table against the sources; [] when it accounts for every rule: one row per
+    rule (a sentence said twice in a source takes two rows), at the rule's own source line."""
 
-    wanted = [rule for name, text in sources.items() for rule in rules(name, text)]
-    by_key: dict[tuple[str, str], list[Row]] = {}
+    wanted: dict[tuple[str, str], list[Rule]] = {}
+    for name, text in sources.items():
+        for rule in rules(name, text):
+            wanted.setdefault((rule.source, rule.text), []).append(rule)
+    held: dict[tuple[str, str], list[Row]] = {}
     for row in rows(table):
-        by_key.setdefault((row.source, norm(row.text)), []).append(row)
-    problems, seen = [], set()
-    for rule in wanted:
-        key = (rule.source, rule.text)
-        matches = by_key.get(key, [])
-        if not matches:
-            problems.append(f"{rule.source}:{rule.line}: no row: {rule.text[:80]}")
-            continue
-        seen.add(key)
-        for row in matches:
+        held.setdefault((row.source, norm(row.text)), []).append(row)
+    problems = []
+    for key, said in wanted.items():
+        found = held.get(key, [])
+        problems += [f"{rule.source}:{rule.line}: no row: {rule.text[:80]}" for rule in said[len(found):]]
+        problems += [f"row {row.number}: a second row for one rule of {row.source}" for row in found[len(said):]]
+        lines = {rule.line for rule in said}
+        for row in found[:len(said)]:
+            if row.line not in lines:
+                problems.append(f"row {row.number}: line {row.line} of {row.source} holds no such rule")
             problems += _judged(row, repo)
-    for key, matches in by_key.items():
-        if key not in seen:
-            problems += [f"row {row.number}: no such rule in {row.source}: {row.text[:80]}" for row in matches]
+    for key, found in held.items():
+        if key not in wanted:
+            problems += [f"row {row.number}: no such rule in {row.source}: {row.text[:80]}" for row in found]
     return problems
 
 
@@ -146,7 +150,7 @@ def _judged(row: Row, repo: Path) -> list[str]:
     problems = _placed(row, repo)
     if problems:
         return problems
-    if row.verdict == "kept" and row.text not in _window(row, repo):
+    if row.verdict == "kept" and not (row.text in _window(row, repo) and row.text not in _window(row, repo, after=1)):
         return [f"row {row.number}: kept, but not found at {row.place}: {row.text[:60]}"]
     if row.verdict.startswith("waits"):
         part = re.match(r"waits on part (\d+)", row.verdict).group(1)
@@ -159,18 +163,25 @@ def _placed(row: Row, repo: Path) -> list[str]:
     found = _PLACE.match(row.place)
     if not found or not (repo / found.group(1)).is_file():
         return [f"row {row.number}: no new place: {row.place!r}"]
-    if not 1 <= int(found.group(2)) <= len((repo / found.group(1)).read_text("utf-8").split("\n")):
+    if not (repo / found.group(1)).resolve().is_relative_to(repo.resolve()):
+        return [f"row {row.number}: {row.place} is outside the repo"]
+    try:
+        lines = (repo / found.group(1)).read_text("utf-8").split("\n")
+    except UnicodeDecodeError:
+        return [f"row {row.number}: {row.place} is not UTF-8"]
+    if not 1 <= int(found.group(2)) <= len(lines):
         return [f"row {row.number}: {row.place} is past the file's end"]
     return []
 
 
-def _window(row: Row, repo: Path, *, paragraph: bool = False) -> str:
-    """The new text from the row's place on (from the start of its paragraph, when `paragraph`: a
-    `Waits on part N` line opens the paragraph it covers), list marks left out, white space folded."""
+def _window(row: Row, repo: Path, *, paragraph: bool = False, after: int = 0) -> str:
+    """The new text from the row's place on (`after` lines past it; from the start of its paragraph,
+    when `paragraph`: a `Waits on part N` line opens the paragraph it covers), list marks left out,
+    white space folded."""
 
     found = _PLACE.match(row.place)
     lines = (repo / found.group(1)).read_text("utf-8").split("\n")
-    at = start = int(found.group(2)) - 1
+    at = start = int(found.group(2)) - 1 + after
     while paragraph and start > 0 and lines[start - 1].strip() and not _HEADING.match(lines[start - 1]):
         start -= 1
     return norm(_ITEMS.sub("", "\n".join(lines[start:at + WINDOW_LINES])))

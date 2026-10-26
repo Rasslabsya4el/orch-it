@@ -109,6 +109,51 @@ def test_a_waiting_row_whose_place_says_nothing_of_the_part_is_refused():
     assert any("says nothing of part 8" in p for p in check(sources(), moved, ROOT))
 
 
+def test_a_sentence_said_twice_in_a_source_needs_two_rows_and_a_rule_two_rows_is_refused():
+    twice = sources()
+    twice["brain-reference.md"] += "\nReference for `docs/agents/brain.md`.\n"
+    assert any("no row" in p for p in check(twice, TABLE.read_text("utf-8"), ROOT))
+    table = TABLE.read_text("utf-8")
+    first = next(line for line in table.split("\n") if line.startswith("| 1 |"))
+    assert any("a second row" in p for p in check(sources(), table + first.replace("| 1 |", "| 998 |", 1) + "\n", ROOT))
+
+
+def test_a_row_with_the_wrong_source_line_is_refused():
+    table = TABLE.read_text("utf-8").replace("| 1 | `brain.md:1` |", "| 1 | `brain.md:99` |", 1)
+    assert any("line" in p and "row 1" in p for p in check(sources(), table, ROOT))
+
+
+def test_a_kept_row_pointing_before_its_text_is_refused():
+    [row] = [row for row in table_rows() if row.text.startswith("A weak model answers the words")]
+    path, line = row.place.split(":")
+    table = TABLE.read_text("utf-8").replace(f"`{row.place}` | kept |", f"`{path}:{int(line) - 2}` | kept |", 1)
+    assert any("not found at" in p for p in check(sources(), table, ROOT))
+
+
+@pytest.mark.parametrize("verdict", ["dropped: see #12abc", "dropped: #", "waits on part x: y", "kept, mostly"])
+def test_a_verdict_of_no_known_form_is_refused(verdict):
+    table = TABLE.read_text("utf-8").replace("| `docs/agents/brain.md:1` | kept |",
+                                             f"| `docs/agents/brain.md:1` | {verdict} |", 1)
+    assert any("no verdict" in p for p in check(sources(), table, ROOT))
+
+
+def test_a_place_outside_the_repo_or_not_utf8_is_a_problem_not_a_crash(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "docs" / "bad.md").write_bytes(b"\xff\xfe\x00")
+    (tmp_path / "outside.md").write_text("y\n", "utf-8")
+    table = ("| # | source | old text | new place | verdict |\n|---|---|---|---|---|\n"
+             "| 1 | `note.md:1` | x | `docs/bad.md:1` | kept |\n| 2 | `note.md:3` | y | `../outside.md:1` | changed: a -> b |\n")
+    problems = check({"note.md": "x\n\ny\n"}, table, repo)
+    assert any("not UTF-8" in p for p in problems) and any("outside the repo" in p for p in problems)
+
+
+def test_a_source_with_a_byte_order_mark_reads_as_without():
+    bom = sources()
+    bom["brain-reference.md"] = "﻿" + bom["brain-reference.md"]
+    assert check(bom, TABLE.read_text("utf-8"), ROOT) == []
+
+
 def test_a_kept_row_whose_text_is_not_at_its_place_is_refused():
     table = TABLE.read_text("utf-8").replace("| `docs/agents/brain.md:1` | kept |", "| `docs/agents/brain.md:60` | kept |",
                                              1)
