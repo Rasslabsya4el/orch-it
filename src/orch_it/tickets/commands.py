@@ -1,24 +1,28 @@
-"""The `tickets` commands of the command line (#398 decisions 4 and 5):
+"""The `tickets` commands of the command line (#398 decisions 3, 4 and 5):
 
 - `tickets park <n> <kind> <ref> --until <YYYY-MM-DD> [--repo R] [--role script]`: the one way a
   ticket is parked: its `Parked:` line and the `parked` label in one write; prints the line;
 - `tickets unpark <n> [--repo R]`: line and label off together, by hand;
-- `tickets parks [--repo R]`: the reader: every parked ticket read, acted on and reported.
+- `tickets parks [--repo R]`: the reader: every parked ticket read, acted on and reported;
+- `tickets check-github --event <file>`: the shape check of an `issues` event, run by the
+  workflow `ticket-shape`; prints `#<n> kept`, `#<n> removed: <codes>` or `skipped`.
 
 `--repo` defaults to the work tree's GitHub origin. A refusal is a `ParkError`: `error: <code>`.
+The session hook runs as its own module, `python -m orch_it.tickets.hook`, to start fast.
 """
 
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from orch_it import settings
 from orch_it.events.store import QueryResult, Store
+from orch_it.tickets.gh_check import check_event, read_event
 from orch_it.tickets.hub import GhHub
 from orch_it.tickets.park import KINDS, ROLE, park, unpark
 from orch_it.tickets.reader import read_parks
-
 
 OWNER_SETTING = "owner_login"  # whose comment answers an `owner_answer` park; default the repo's owner
 
@@ -37,19 +41,26 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p = group.add_parser("unpark", parents=[ticket], help="take a ticket's park off by hand")
     p.add_argument("number", type=int)
     group.add_parser("parks", parents=[ticket], help="read every parked ticket and act on it")
+    p = group.add_parser("check-github", parents=[common], help="judge the ticket of a GitHub issues event")
+    p.add_argument("--event", required=True, metavar="PATH", help="the event payload ($GITHUB_EVENT_PATH)")
 
 
-def run(args, store: Store, repo: str, render) -> str:
+def run(args, store_of: Callable[[], Store], repo_of: Callable[[], str], render) -> str:
+    """The command's printed result; the store and the repo are opened only by the commands
+    that need them."""
+
     now = datetime.now(UTC)
+    if args.command == "check-github":
+        return check_event(read_event(args.event), GhHub()).line + "\n"
     if args.command == "park":
-        made = park(GhHub(), store, repo, args.number, args.kind, args.ref, args.until, today=now.date(),
+        made = park(GhHub(), store_of(), repo_of(), args.number, args.kind, args.ref, args.until, today=now.date(),
                     role=args.role)
         return made.line + "\n"
     if args.command == "unpark":
-        taken = unpark(GhHub(), store, repo, args.number, now=now, role=args.role)
+        taken = unpark(GhHub(), store_of(), repo_of(), args.number, now=now, role=args.role)
         return f"unparked: {taken.line if taken else 'a park that could not be read'}\n"
     owner = settings.load().get(OWNER_SETTING)
-    reports = read_parks(GhHub(), store, repo, now=now, owner=owner if isinstance(owner, str) else None,
+    reports = read_parks(GhHub(), store_of(), repo_of(), now=now, owner=owner if isinstance(owner, str) else None,
                          role=args.role)
     return render(QueryResult(["ticket", "outcome", "park", "detail"],
                               [(r.number, r.outcome, r.line, r.detail) for r in reports]))

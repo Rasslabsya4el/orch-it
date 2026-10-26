@@ -66,6 +66,12 @@ _SECRET = re.compile(
     r"|(?P<private_key>-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----)"
     r")")
 
+# The names an OS gives a machine nobody named (Windows setup, upper-case), which are a host name
+# on any machine: found by their shape, so a job on a runner catches a leaked one (#395 decision 4,
+# brain answer on the generic host-name shapes).
+_DEFAULT_HOST = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:WIN-[A-Z0-9]{8,15}|DESKTOP-[A-Z0-9]{7}|LAPTOP-[A-Z0-9]{8})(?![A-Za-z0-9_-])")
+
 _LOCAL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._%+-")
 _DOMAIN_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-")
 _DOMAIN = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
@@ -147,8 +153,8 @@ def _private_email(local: str, domain: str, allowed: frozenset[str]) -> bool:
 class Patterns:
     """What to look for. `homes`: this machine's home folder(s), each matched in every spelling;
     `host`: this machine's host name; `words`: private words and phrases; `allowed_emails`:
-    addresses that are no hit. The secrets, any user's home folders and the addresses of people
-    are always on."""
+    addresses that are no hit. The secrets, any user's home folders, the default host names of an
+    OS and the addresses of people are always on."""
 
     homes: tuple[str, ...] = ()
     host: str | None = None
@@ -179,7 +185,7 @@ class Patterns:
     @classmethod
     def machine_independent(cls, *, allowed_emails=()) -> Patterns:
         """The patterns that hold on any machine (a job on a runner): secrets, any user's home
-        folder and the addresses of people; no home, host name or word of this machine."""
+        folder, the default host names of an OS and the addresses of people; no home, host name or word of this machine."""
 
         return cls(allowed_emails=frozenset(allowed_emails))
 
@@ -225,7 +231,8 @@ class Patterns:
         spans: list[tuple[str, int, int]] = []
         own_home, host, words = self._own
         for pattern, kind in ((_ANY_HOME, "home_path"), (own_home, "home_path"),
-                              (host, "host_name"), (words, "private_word")):
+                              (host, "host_name"), (_DEFAULT_HOST, "host_name"),
+                              (words, "private_word")):
             if pattern is not None:
                 spans += [(kind, m.start(), m.end()) for m in pattern.finditer(text)]
         spans += [(m.lastgroup, m.start(), m.end()) for m in _SECRET.finditer(text)]
@@ -407,6 +414,17 @@ def _unknown_rev(error: ScanError, what: str) -> ScanError:
     if error.code == "git_failed" and _BAD_REVISION.search(str(error)):
         return ScanError("bad_rev", f"{what} is not one git knows")
     return error
+
+
+def commits_of_revs(work_tree: Path, *revs: str) -> list[str]:
+    """The commits `git rev-list` names for `revs`, oldest first, as full shas. The caller has
+    checked `revs` (full shas, `--not`, `--remotes=<name>`): none of it comes from a person."""
+
+    try:
+        out = _git_output(work_tree, "rev-list", "--reverse", *revs)
+    except ScanError as e:
+        raise _unknown_rev(e, "the revisions") from None
+    return out.decode("ascii", "replace").split()
 
 
 def commits_of_range(work_tree: Path, rev_range: str) -> list[str]:
