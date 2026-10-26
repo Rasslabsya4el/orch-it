@@ -346,17 +346,21 @@ def judge(target: str | None, roots, *, windows: bool, own_root=_NO_OWN_ROOT,
         return None
     flavour = ntpath if windows else posixpath
     insensitive = _cached(case_rule)
-    inside: list[str] = []
+    covering: list[str] = []  # the roots at or above the target (for the inside rule)
     for root in roots:
         relation = _relation(target, root, flavour, insensitive)
-        if relation == "same" and roots_too:
-            return Finding("protected_root", root)
-        if relation == "ancestor":
+        if relation == "same":
+            if roots_too:
+                return Finding("protected_root", root)  # deleting the root itself
+            covering.append(root)  # the target IS this root; the inside rule decides whose
+        elif relation == "ancestor":
             return Finding("ancestor_of_root", root)
-        if relation is None and _relation(root, target, flavour, insensitive) == "ancestor":
-            inside.append(root)
-    if own_root is not _NO_OWN_ROOT and inside:
-        closest = max(inside, key=len)
+        elif _relation(root, target, flavour, insensitive) == "ancestor":
+            covering.append(root)  # the root holds the target
+    if own_root is not _NO_OWN_ROOT and covering:
+        # the deepest covering root owns the target, since roots nest (a worktree inside the
+        # main checkout); the target is another's unless that deepest root is the own one
+        closest = max(covering, key=len)
         if own_root is None or _relation(closest, own_root, flavour, insensitive) != "same":
             return Finding("inside_other_root", closest)
     if walk_links and os.path.isdir(target):

@@ -39,7 +39,7 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `test_os` | `linux`, `windows`, `macos` |
 | `place_reason` | `earliest_finish`, `nothing_measured`, `forced` |
 | `test_run_reason` | `red`, `cut`, `none_collected`, `ids_not_collected`, `summary_missing`, `job_missing`, `busy`, `os_missing`, `place_off`, `out_of_minutes`, `place_vanished`, `superseded` |
-| `research_run_reason` | `too_short`, `few_links`, `no_reddit`, `model_error`, `no_reply`, `empty`, `time_bound`, `stalled`, `server_failed` |
+| `research_run_reason` | `too_short`, `few_links`, `no_reddit`, `model_error`, `no_reply`, `empty`, `time_bound`, `stalled`, `server_failed`, `bridge_error` |
 | `report_from` | `last`, `earlier`, `joined` |
 | `review_axis` | `standards`, `spec`, `edge` |
 | `unit_reason` | `format`, `result`, `merge` |
@@ -92,7 +92,7 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 | `pr` | `pr`, `branch`, `base`, `head` | `merge_sha`, `reason` (`pr_reason`) | time from PR to merge; PRs that never end |
 | `core_update` | `target`, `from_version`, `to_version`, `pr` | `files_changed`, `files_removed`, `hooks_added`, `hooks_removed`, `settings_removed` | does an update remove what the core removed |
 | `install` | `target`, `version`, `steps` | `files_copied`, `stubs_written`, `labels_created` | an install into any repo, step by step |
-| `research_run` | `brief`, `model_alias`, `no_reddit` | `tokens_in`, `tokens_out`, `helper_tokens_in`, `helper_tokens_out`, `reddit_urls`, `search_429`, `compactions`, `report_path`, `report_chars`, `reason` (`research_run_reason`), `report_from` (`report_from`), `links`, `last_chars`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`, `helper_tokens_reasoning`, `helper_tokens_cache_read`, `helper_tokens_cache_write`, `helper_sessions`, `helper_depth`, `unread_sessions` | bridge cost and why a report was rejected |
+| `research_run` | `brief`, `model_alias`, `no_reddit`, `brief_chars`, `brief_sha`, `model`, `helpers`, `job` | `tokens_in`, `tokens_out`, `helper_tokens_in`, `helper_tokens_out`, `reddit_urls`, `search_429`, `compactions`, `report_path`, `report_chars`, `reason` (`research_run_reason`), `report_from` (`report_from`), `links`, `last_chars`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`, `helper_tokens_reasoning`, `helper_tokens_cache_read`, `helper_tokens_cache_write`, `helper_sessions`, `helper_depth`, `unread_sessions`, `partial_path`, `minutes`, `opencode_session`, `server_error`, `abort_failed`, `named_path_unwritable`, `error`, `model_error` (≤200) | bridge cost and why a report was rejected |
 | `process` | `program`, `pid`, `argv0`, `hidden`, `launched_by`, `mechanism` | `rc` | every process the layer starts; a console window seen |
 | `external_call` | `target` (`call_target`), `command` | `rc`, `transient`, `retries`, `timed_out` | which calls fail or are slow, per machine |
 | `check` | `check` (`check`), `target` | `findings`, `facts` | a periodic or start-up check and what it found |
@@ -208,3 +208,18 @@ It prints one line per hit, `<sha12> <where> <file or ->:<line or -> <kind>` (th
 `python -m orch_it labels sync [--repo R]`: make the repo's labels match the layer's set (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `parked`, `priority`, each with a colour and description from `labels/labels.json`; default repo the work tree's GitHub origin): a missing label is created, one with another colour, description or letter case is updated, an equal one is kept, every other label is listed `foreign` and never changed or deleted; prints `label`, `action` rows.
 
 `python -m orch_it [--store PATH] skills shadowed`: the SessionStart hook of `.claude/settings.json`. It reads the hook's JSON from stdin, compares the project's skills (`CLAUDE_PROJECT_DIR`, else the work tree around `cwd`) with the personal ones (`$CLAUDE_CONFIG_DIR/skills`, default `~/.claude/skills`), letter case aside, and writes one `skill.shadowed` per clash: `copy` true for his copy, false for ours, null when the manifest cannot be read; `same_text` when the two `SKILL.md` are byte-equal. A resumed or compacted session writes nothing new. It prints nothing and exits 0 whatever happens, an error on stderr.
+
+`python -m orch_it [--store PATH] research <brief> [--model ALIAS] [--no-reddit] [--report PATH] [--work-tree PATH] [--repo R] [--ticket N]`:
+run the brief through the research bridge (#396): a private opencode server for this run, the model an alias of the
+setting `research.models`, the report written to the `docs/research/<name>.md` path the brief names (else `--report`,
+else the run's folder), a run with no report leaving what the model wrote beside it as `<name>.partial.md`; the
+`research_run` pair and its `step.progressed` events land in the store. It prints `run=… outcome=… reason=… report=…
+report_from=… chars=… links=… reddit_urls=… compactions=… minutes=… tokens_in=… helper_tokens_in=…` and exits 0 on
+passed, 1 on failed, 3 on any other outcome; a run the settings cannot serve is refused before any server starts
+(`error: <code>`, exit 2: `research_not_set`, `unknown_model`, `key_missing`, `brief_unreadable`,
+`report_path_outside`, `repo_unknown`, `opencode_missing`, `state_in_git_tree`).
+
+`python -m orch_it research-mcp`: the same bridge as an MCP server on stdin and stdout, registered in `.mcp.json` as
+`orch-it-research`; its tools `research_start` and `research_job` run a brief as a background job: `research_job` answers `running` (with
+the run's latest progress), `ended` (the run's end as the command line's `--done-file` writes it, plus the report text
+and its path) or `gone` (`worker_died`, `worker_lost`: the job's process ended with no answer).
