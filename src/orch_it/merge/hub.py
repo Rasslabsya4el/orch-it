@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 from orch_it.tickets.hub import Comment, Hub
@@ -121,3 +122,10 @@ class PullHub(Hub, Protocol):
         """Close an issue as `completed` or `not_planned`."""
 
     def actions_enabled(self, repo: str) -> bool: ...
+
+    def event_artifacts(self, repo: str) -> list[tuple[str, str]]:
+        """(run id, name) of every artifact of the repo's workflows named `orch-it-events-*` that
+        has not expired: the events a workflow's run wrote in its own store."""
+
+    def download_artifact(self, repo: str, run_id: str, name: str, folder: Path) -> None:
+        """Unpack one artifact of a run into `folder`."""

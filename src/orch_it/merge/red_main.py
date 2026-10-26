@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from orch_it.tickets import parse, violations
 from orch_it.tickets.model import PRIORITY_LABEL, READY_LABEL
+from orch_it.tickets.reader import TRIAGE_LABEL
 
 MARK = "<!-- orch-it red-main -->"
 IDS_HEADING = "Failing tests:"
@@ -72,6 +73,45 @@ Weight: {WEIGHT}
 {fence}
 {rest}"""
     broken = violations(parse(body, title=title, labels=LABELS))
+    if broken:
+        raise RedMainShapeError(", ".join(v.message for v in broken))
+    return title, body
+
+
+NO_RESULT_MARK = "<!-- orch-it main-no-result run={run_id} -->"
+NO_RESULT_LABELS = (TRIAGE_LABEL,)
+
+
+def build_no_result(*, sha: str, run_id: str, jobs: dict[str, str]) -> tuple[str, str]:
+    """(title, body) of the ticket to the brain when main's tests gave no result twice on one run."""
+
+    named = ", ".join(f"`{name}` {state}" for name, state in sorted(jobs.items()))
+    title = "Main's tests gave no result twice"
+    body = f"""{NO_RESULT_MARK.format(run_id=run_id)}
+## For the human
+- **What:** тесты на main дважды подряд не дали результата: прогон обрезан, отменён или без отчёта.
+- **Goal:** снова видно, зелёный main или красный, и пулл-реквесты, красные только на нём, понятны.
+- **Plan:** мозг смотрит, почему прогон не дал ответа (место, лимит, отчёт), и решает, что чинить.
+- **Result:** следующий прогон тестов на main даёт результат на обеих системах.
+- **Undo:** two-way door (один откат); touches только проверку main.
+
+## For the agent
+Facts: the `tests` run {run_id} on main at `{sha}` ended with no result on its first attempt and again on its
+second: {named}. No result is never red: no red-on-main ticket was opened.
+Rule: find why the run gives no result and make the next main run give one.
+
+| row | check | pass |
+|---|---|---|
+| 1 | the next run of `tests` on main | every required job ends passed or failed, with its report |
+| 2 | a run cut at its bound | read as no result, never red |
+
+Outside case: a run that ends with a report but no test collected in it (row 1).
+Same object: the main check reruns a run with no result once and opens this ticket on the second; the follow reads
+no-result runs of a pull request the same way.
+Not in this ticket: red tests on main: they get a red-on-main ticket.
+Weight: 2
+"""
+    broken = violations(parse(body, title=title, labels=NO_RESULT_LABELS))
     if broken:
         raise RedMainShapeError(", ".join(v.message for v in broken))
     return title, body
