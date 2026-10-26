@@ -206,6 +206,22 @@ def test_two_processes_started_at_once_one_holds_the_other_waits_and_names_it(tm
     assert not any((tmp_path / "locks").iterdir())
 
 
+def test_a_waiter_that_reads_the_lock_before_its_owner_file_names_the_holder_once_it_is_written(tmp_path):
+    folder = lock.lock_folder(REPO, root=tmp_path)
+    folder.mkdir(parents=True)  # the holder made the folder and has not written its owner file yet
+
+    def owner_written(clock):
+        (folder / "owner").write_text(json.dumps({"holder": "line A", "since": clock.now.isoformat()}), "utf-8")
+        clock.during_sleep = None
+
+    clock, told = Clock(owner_written), []
+    clock.now = datetime.now(UTC)
+    with pytest.raises(LockError):
+        with hold(tmp_path, clock, told=told, lock_wait_minutes=0.5):
+            pass
+    assert [h.holder for h in told] == ["line A"]
+
+
 def test_a_since_in_the_future_reads_stale_and_can_be_unlocked(tmp_path):
     clock = Clock()
     folder = lock.lock_folder(REPO, root=tmp_path)

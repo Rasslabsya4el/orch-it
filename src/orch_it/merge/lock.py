@@ -39,6 +39,8 @@ FOLDER = "merge-lock"
 OWNER_FILE = "owner"
 LOCK_ERROR_CODES = ("lock_busy", "lock_stale", "lock_not_stale", "lock_missing", "lock_unwritable", "bad_repo")
 CLOCK_SKEW = timedelta(minutes=5)  # a `since` further ahead than this is no time a holder took it
+UNKNOWN = "unknown"  # the holder of a lock whose owner file is not written yet, or unreadable
+WRITE_GRACE_MINUTES = 1  # so long a waiter gives a fresh lock to name its holder before it says `unknown`
 RELEASE_TRIES = 5  # a file held open for a moment by another program (Windows) is tried again
 _REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/(?!\.\.?$)[A-Za-z0-9_.-]{0,99}[A-Za-z0-9_-]")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -111,7 +113,9 @@ def hold(repo: str, holder: str, *, settings: MergeSettings, root: Path | None =
             continue
         if found.age_minutes(clock()) > settings.lock_stale_minutes:
             raise LockError("lock_stale", f"{repo} held by {found.said()}", found)
-        if not told and on_wait is not None:
+        # a folder taken a moment ago whose owner file is still being written names its holder soon
+        being_written = found.holder == UNKNOWN and found.age_minutes(clock()) < WRITE_GRACE_MINUTES
+        if not told and on_wait is not None and not being_written:
             on_wait(found)
             told = True
         if waited >= bound:
@@ -144,7 +148,7 @@ def holder_of(repo: str, *, root: Path | None = None) -> Holder | None:
                       _of_type(owner.get("pid"), int), _of_type(owner.get("machine"), str),
                       _of_type(owner.get("token"), str))
     except (OSError, ValueError, KeyError, TypeError):
-        return Holder("unknown", taken)
+        return Holder(UNKNOWN, taken)
 
 
 def unlock_stale(repo: str, *, settings: MergeSettings, root: Path | None = None,
