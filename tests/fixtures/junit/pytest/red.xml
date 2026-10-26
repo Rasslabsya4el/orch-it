@@ -1,5 +1,5 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="3" time="0.059" timestamp="2026-10-25T21:19:40.412366+01:00" hostname="WIN-OHK3JQ5AM84"><testcase classname="test_math" name="test_adds" time="0.000" /><testcase classname="test_math" name="test_subtracts" time="0.001"><failure message="assert (1 - 1) == 1">def test_subtracts():
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="3" time="0.059" timestamp="2026-10-25T21:19:40.412366+01:00" hostname="fixture-host"><testcase classname="test_math" name="test_adds" time="0.000" /><testcase classname="test_math" name="test_subtracts" time="0.001"><failure message="assert (1 - 1) == 1">def test_subtracts():
 &gt;       assert 1 - 1 == 1
 E       assert (1 - 1) == 1
 
-test_math.py:9: AssertionError</failure></testcase><testcase classname="test_math" name="test_skips" time="0.000"><skipped type="pytest.skip" message="not now">C:\Users\user\.claude\jobs\59ec802c\tmp\fixtures-tools\run-pytest\red\test_math.py:12: not now</skipped></testcase></testsuite></testsuites>
+test_math.py:9: AssertionError</failure></testcase><testcase classname="test_math" name="test_skips" time="0.000"><skipped type="pytest.skip" message="not now">C:\fixtures\.claude\jobs\59ec802c\tmp\fixtures-tools\run-pytest\red\test_math.py:12: not now</skipped></testcase></testsuite></testsuites>
