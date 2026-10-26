@@ -268,3 +268,16 @@ def test_long_adversarial_text_is_read_in_bounded_time():
     one(many, many + "x\n")
     one(wide, wide + "x\n")
     assert time.perf_counter() - start < 5
+
+
+def test_a_heading_with_a_verb_of_writing_is_no_contract_section():
+    # his chief-of-staff at 5beb35b: "### Write history, not the present" tells how to write, not what it returns
+    old = "Intro.\n\n## Wiki\n\nKeep a wiki.\n\n### Write history, not the present\n\nDate every claim.\n"
+    assert one(old, old.replace("Date every claim.", "Date every claim, cite the commit.")) == (
+        "text_changed", ["SKILL.md"])
+    for heading in ("4. Write", "Write the config", "Read the glossary first"):  # steps that tell what to do
+        body = f"Intro.\n\n## {heading}\n\none\n\n## Notes\n\nn\n"
+        assert one(body, body.replace("one", "two"))[0] == "text_changed", heading
+    for heading in ("Writes", "What it reads", "Produces", "Outputs"):  # sections that say what it reads or writes
+        body = f"Intro.\n\n## {heading}\n\none\n\n## Notes\n\nn\n"
+        assert one(body, body.replace("one", "two"))[0] == "contract_changed", heading

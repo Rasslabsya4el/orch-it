@@ -188,13 +188,24 @@ def test_update_with_only_text_changes_and_additions_merges_when_green_after_its
     assert done.status == "already_open" and forge.auto == [done.pr]
 
 
-def test_a_not_copied_skill_changing_in_contract_also_waits_for_the_brain(world):
+def test_a_skill_the_layer_does_not_copy_is_listed_and_merges_when_green(world):
+    # the brain's word on orch-it #35: only a copy renamed, removed or changed in contract waits for it
     newer(world, {"skills/productivity/teach/SKILL.md": skill("teach", description="new")})
     forge = FakeForge()
     done = run_update(world, forge)
-    assert forge.labels == [(done.pr, "needs-triage")]
+    assert forge.labels == [] and forge.auto == [done.pr]
     [(_, _, body)] = forge.created
     assert "| `teach` | contract_changed | not copied (no job) |" in body
+    found = update.check(world["repo"], cache=world["cache"])
+    assert update.render(found).splitlines()[-1] == "merges when green"
+
+
+def test_a_skill_not_copied_removed_upstream_does_not_wait_but_a_copy_does(world):
+    newer(world, {"skills/productivity/teach/SKILL.md": None})
+    assert not update.check(world["repo"], cache=world["cache"]).needs_triage
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne slice.\nAt seams.\n",
+                                                            description="the tdd skill, now with seams")})
+    assert update.check(world["repo"], cache=world["cache"]).needs_triage
 
 
 def test_a_removed_copy_still_named_by_a_role_file_is_red_in_the_body(world):

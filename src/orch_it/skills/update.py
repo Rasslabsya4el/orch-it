@@ -10,8 +10,8 @@ caller's work tree: it fetches `origin/main`, exports its tree to a scratch fold
 copies and manifest there (added skills copied, the names his upstream dropped recorded as `gone`),
 runs the references check of decision 5 on it, and builds the commit with a scratch index, then pushes
 it to `skills-upstream/<upstream commit>-<main commit>`. The pull request's body lists every skill with
-its class. A renamed, removed or contract-changed skill, his copy or one left out, labels it
-`needs-triage`: it waits for the brain. Only `text_changed` and `added` set it to merge when green.
+its class. A copy renamed, removed or changed in contract labels it
+`needs-triage`: it waits for the brain. Anything else, a skill not copied changing included, merges when green.
 A later run finds the open pull request of the same upstream commit and brings it up to date
 instead of opening another, leaves one the brain closed alone, and closes the open one of an older
 upstream commit as superseded. The forge (GitHub) sits behind `Forge`.
@@ -78,7 +78,10 @@ class Check:
 
     @property
     def needs_triage(self) -> bool:
-        return any(c.cls in TRIAGE_CLASSES for c in self.changes)
+        """A copy renamed, removed or changed in contract (the brain's word on orch-it #35: a skill the
+        layer does not copy is listed, and merges when green)."""
+
+        return any(c.cls in TRIAGE_CLASSES and self.held(c) == "copy" for c in self.changes)
 
 
 @dataclass
@@ -226,10 +229,10 @@ def pr_body(found: Check, problems: list[str]) -> str:
         path = f"{change.old_path} -> {change.new_path}" if change.cls == "renamed" else (change.new_path or change.old_path)
         rows.append(f"| `{change.name}` | {change.cls} | {held} | `{path}` | {', '.join(change.why) or '-'} |")
     if found.needs_triage:
-        rule = (f"Label `{TRIAGE_LABEL}`: a skill is renamed, removed or changed in what it takes or returns."
+        rule = (f"Label `{TRIAGE_LABEL}`: a copy is renamed, removed or changed in what it takes or returns."
                 " It waits for the brain; it is not merged by itself.")
     else:
-        rule = "Only `text_changed` and `added`: it merges when `linux` and `windows` are green."
+        rule = "No copy renamed, removed or changed in contract: it merges when `linux` and `windows` are green."
     refs = ("references: none outside the repo's skills" if not problems else
             "references (decision 5; the tests are red until these are fixed in this pull request):\n"
             + "\n".join(f"- {p}" for p in problems))
