@@ -28,9 +28,11 @@ from orch_it.skills.copies import SKILL_FILE, Tree, blob_hash, skill_name
 from orch_it.skills.references import skill_calls
 
 CLASSES = ("same", "added", "renamed", "removed", "text_changed", "contract_changed")
+# a heading that names what the skill takes or returns; a verb counts only as "it reads/writes/produces/
+# returns/takes" (third person), so a step telling what to do ("4. Write", "Write history, not the present") is text
 _CONTRACT_HEADING = re.compile(
-    r"\b(inputs?|outputs?|returns?|arguments?|parameters?|invocation|usage|preconditions?|templates?"
-    r"|formats?|files?|deliverables?|definition of done|acceptance criteria|reads?|writes?|produces?|results?"
+    r"\b(inputs?|outputs?|returns|return value|arguments?|parameters?|invocation|usage|preconditions?|templates?"
+    r"|formats?|files?|deliverables?|definition of done|acceptance criteria|reads|writes|produces|takes|results?"
     r"|options?|interface|args?|requirements?)\b")
 # support files that shape what the skill writes: his formats, templates, report and brief shapes, the files his
 # setup writes (tracker, labels, domain) and configs it installs
