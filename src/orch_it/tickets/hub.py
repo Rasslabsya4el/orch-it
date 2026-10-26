@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import quote
 
 from orch_it.testruns.github import Gh, GithubError, json_values, run_gh
 
@@ -66,6 +67,9 @@ class Hub(Protocol):
 
     def write(self, repo: str, number: int, body: str, labels: list[str]) -> None:
         """Set the issue's body and its whole label set in one request."""
+
+    def remove_label(self, repo: str, number: int, name: str) -> None:
+        """Take one label off the issue, the others untouched; a label not on it is no error."""
 
     def comment(self, repo: str, number: int, body: str) -> None: ...
 
@@ -132,6 +136,13 @@ class GhHub:
 
     def write(self, repo: str, number: int, body: str, labels: list[str]) -> None:
         self._send(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}"], {"body": body, "labels": labels})
+
+    def remove_label(self, repo: str, number: int, name: str) -> None:
+        try:  # GitHub answers with the labels left: nothing here to read
+            self.gh(["api", "-X", "DELETE", f"repos/{repo}/issues/{number}/labels/{quote(name, safe='')}"])
+        except GithubError as e:
+            if "HTTP 404" not in str(e):
+                raise
 
     def comment(self, repo: str, number: int, body: str) -> None:
         self._send(["api", "-X", "POST", f"repos/{repo}/issues/{number}/comments"], {"body": body})

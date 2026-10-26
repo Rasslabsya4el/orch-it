@@ -22,6 +22,7 @@ from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
 from orch_it.tickets import commands as ticket_commands
+from orch_it.tickets.gh_check import CheckError
 from orch_it.tickets.park import ParkError
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
@@ -239,11 +240,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.group == "labels":
             text, code = _labels_sync(args), 0
         elif args.group == "tickets":
-            text, code = ticket_commands.run(args, _store(args), args.repo or _repo_of("."), render), 0
+            text, code = ticket_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of("."),
+                                             render), 0
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, labels.LabelError, ParkError, CommandError, RunError) as e:
+            queries.QueryError, github.GithubError, labels.LabelError, ParkError, CheckError, CommandError,
+            RunError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end

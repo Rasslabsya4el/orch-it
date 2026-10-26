@@ -70,6 +70,11 @@ class FakeHub:
         self.issues[(repo, number)] = replace(before, body=body, labels=tuple(labels))
         self.writes.append((repo, number, body, list(labels)))
 
+    def remove_label(self, repo, number, name):
+        self._check(repo, number)
+        before = self.issues[(repo, number)]
+        self.issues[(repo, number)] = replace(before, labels=tuple(l for l in before.labels if l != name))
+
     def comment(self, repo, number, body):
         self._check(repo, number)
         self.say(number, body, author="the-layer", repo=repo)
