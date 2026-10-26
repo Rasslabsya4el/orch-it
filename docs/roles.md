@@ -8,6 +8,10 @@ The rules that matter are checks, not sentences:
 - `python -m orch_it spawn` starts a subagent with its inputs filled and refuses one whose input is missing.
 - `python -m orch_it hook subagent-stop` holds the stop of a subagent whose report claims a skill it never called, edits code with no `tdd:` line, lacks a line its role owes, or runs past its cap or its context line.
 
+## Records
+
+Before an edit of a role file, a skill or a CLAUDE.md, call the Skill tool with `writing-for-agents`; before an edit of `GLOSSARY.md` or an ADR, call the Skill tool with `domain-modeling`. This holds for every role that edits records. His setup files stay his: the layer's rules live in our own files.
+
 ## Every subagent
 
 What every role started by a spawn does (all roles but the brain and ORCH, which are sessions):
