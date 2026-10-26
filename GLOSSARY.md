@@ -122,3 +122,31 @@ _Avoid_: model name, model id
 **Job**:
 A research run started by the MCP front and read back later by its id.
 _Avoid_: task, ticket, request
+
+## Skills
+
+**Skill copy**:
+One of Pocock's skills held in the repo, byte for byte as his upstream had it at the upstream pin.
+_Avoid_: vendored skill, fork, local skill, plugin skill
+
+**Skill of ours**:
+A skill the layer itself wrote, held in the repo beside the skill copies.
+_Avoid_: custom skill, own skill, hybrid
+
+**Upstream pin**:
+The one commit of Pocock's upstream that every skill copy of a repo comes from.
+_Avoid_: version, release, tag
+
+**Skill contract**:
+What a skill takes and returns: its name, its description, who may invoke it, the skills it calls, and the parts of it
+that say what it reads, writes or produces.
+_Avoid_: interface, API, signature
+
+**Update class**:
+What a move of the upstream pin did to one skill, one of a closed set: same, added, renamed, removed, text changed,
+contract changed.
+_Avoid_: diff type, change kind, status
+
+**Shadowing**:
+A personal skill of the same name taking a repo skill's place in every session of that user.
+_Avoid_: override, conflict, clash
