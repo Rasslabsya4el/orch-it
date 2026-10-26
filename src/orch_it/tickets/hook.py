@@ -73,13 +73,13 @@ def judge(payload: dict, *, hub, repo_of) -> Refusal | None:
         return None
     if not _QUICK.search(command):
         return None
-    from orch_it.guards.shell import simple_commands
-
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
-    commands = simple_commands(command, tool=payload["tool_name"], cwd=cwd, env=os.environ,
-                               windows=sys.platform == "win32")
-    judged = [_Call.of(simple) for simple in _flatten(commands)]
-    judged = [call for call in judged if call is not None]
+    dialect = "windows" if payload["tool_name"] == "PowerShell" else "posix"
+    judged = [call for argv, here in _commands(command, dialect, cwd, 0)
+              if (call := _Call.of(argv, here)) is not None]
+    if not judged:  # a substitution the splitter drops (`x=$(gh ...)`) is read from its text
+        judged = [call for inner in _substitution_texts(command) for argv, here in _commands(inner, dialect, cwd, 1)
+                  if (call := _Call.of(argv, here)) is not None]
     if not judged:
         return None
     codes: list[str] = []
@@ -92,10 +92,88 @@ def judge(payload: dict, *, hub, repo_of) -> Refusal | None:
     return Refusal(codes, "\n".join(said), repo)
 
 
-def _flatten(commands):
-    for simple in commands:
-        yield simple
-        yield from _flatten(simple.subs)
+MAX_DEPTH = 8  # wrappers inside wrappers read this deep; deeper is no command the hook sees
+_LEAD = {"do", "then", "else", "elif", "!", "{", "}", "time", "&", "."}
+_PASS = {"env", "sudo", "nice", "nohup", "setsid", "stdbuf", "ionice", "doas", "command", "builtin", "exec",
+         "start-process", "invoke-command"}
+_SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd"}
+_INNER = {"-c", "-lc", "-ic", "-command", "/c", "/k", "-commandwithargs"}
+_EVALS = {"eval", "iex", "invoke-expression"}
+
+
+def _commands(command: str, dialect: str, cwd: str | None, depth: int):
+    """(argv, cwd) of every simple command `command` runs, through command substitutions and
+    wrappers (`env`, `sudo`, `timeout 5`, `xargs`, `bash -c '...'`, `cmd /c`, `pwsh -Command`,
+    `eval`), each inner command line read again by part 3's splitter."""
+
+    from orch_it.guards.shell import simple_commands
+
+    if depth > MAX_DEPTH:
+        return
+    tool = "PowerShell" if dialect == "windows" else "Bash"
+    for simple in simple_commands(command, tool=tool, cwd=cwd, env=os.environ, windows=sys.platform == "win32"):
+        yield from _peeled(simple, depth)
+
+
+def _peeled(simple, depth: int):
+    for sub in simple.subs:
+        yield from _peeled(sub, depth + 1)
+    words = list(simple.argv)
+    while words and words[0] is not None:
+        name = re.split(r"[\\/]", words[0])[-1].lower().removesuffix(".exe")
+        if words[0] in _LEAD or name in _PASS:
+            words = _past_options(words[1:]) if name in _PASS else words[1:]
+            while words and words[0] is not None and re.fullmatch(r"\w+=.*", words[0]):
+                words = words[1:]  # `env GH_REPO=x gh ...`
+        elif name == "timeout":
+            words = _past_options(words[1:])[1:]  # the duration
+        elif name == "xargs":
+            words = _past_options(words[1:]) + [None]  # its words come from input the hook cannot read
+        elif name in _EVALS or (name in _SHELLS and any(w and w.lower() in _INNER for w in words[1:])):
+            inner = _inner_line(words[1:]) if name not in _EVALS else " ".join(w or "" for w in words[1:])
+            if inner:
+                dialect = "windows" if name in ("pwsh", "powershell", "cmd", "iex", "invoke-expression") else "posix"
+                yield from _commands(inner, dialect, simple.cwd, depth + 1)
+            return
+        else:
+            break
+    yield words, simple.cwd
+
+
+def _substitution_texts(command: str) -> list[str]:
+    """The text inside each `$( ... )` (brackets matched) and each pair of backticks."""
+
+    found = re.findall(r"`([^`]*)`", command)
+    start = command.find("$(")
+    while start != -1:
+        depth, i = 0, start + 1
+        while i < len(command):
+            depth += {"(": 1, ")": -1}.get(command[i], 0)
+            if depth == 0:
+                found.append(command[start + 2:i])
+                break
+            i += 1
+        start = command.find("$(", start + 2)
+    return found
+
+
+def _past_options(words: list) -> list:
+    i = 0
+    while i < len(words) and words[i] is not None and words[i].startswith("-") and words[i] != "--":
+        i += 2 if words[i] in ("-u", "-g", "-n", "-s", "-k", "-C", "-S", "-I", "-P", "-L") else 1
+    return words[i + 1:] if i < len(words) and words[i] == "--" else words[i:]
+
+
+def _inner_line(words: list) -> str | None:
+    """The command line after a shell's `-c` / `/c` / `-Command`: one word, or the rest joined."""
+
+    for i, word in enumerate(words):
+        if word is not None and word.lower() in _INNER:
+            rest = words[i + 1:]
+            if any(w is None for w in rest):
+                return None
+            return rest[0] if len(rest) == 1 else " ".join(rest)
+    return None
 
 
 @dataclass
@@ -105,15 +183,15 @@ class _Call:
     cwd: str | None
 
     @classmethod
-    def of(cls, simple) -> _Call | None:
-        argv = simple.argv
+    def of(cls, argv: list, cwd: str | None) -> _Call | None:
         if len(argv) < 3 or not isinstance(argv[0], str):
             return None
         if re.split(r"[\\/]", argv[0])[-1].lower() not in ("gh", "gh.exe"):
             return None
-        if argv[1] != "issue" or argv[2] not in ("create", "edit"):
+        action = {"create": "create", "new": "create", "edit": "edit"}.get(argv[2] or "")
+        if argv[1] != "issue" or action is None:
             return None
-        return cls(argv[2], argv[3:], simple.cwd)
+        return cls(action, argv[3:], cwd)
 
     def judge(self, payload: dict, hub, repo_of, cwd: str | None) -> tuple[list[str], list[str], str | None]:
         from orch_it.tickets import shape
@@ -121,7 +199,8 @@ class _Call:
 
         flags, targets, unreadable = self._read()
         here = self.cwd or cwd
-        repo = flags.get("repo", [None])[-1] or next((t[0] for t in targets if t and t[0]), None)
+        repo = (flags.get("repo", [None])[-1] or next((t[0] for t in targets if t and t[0]), None)
+                or os.environ.get("GH_REPO") or None)  # as gh itself picks the repo
         if unreadable:
             return ["command_unreadable"], [f"command_unreadable: {unreadable}: write it as a literal"], repo
         body, problem = self._body(flags, here)
@@ -155,6 +234,8 @@ class _Call:
                     refuse(violation.code, violation.message.split(": ", 1)[1])
             return codes, lines, repo
         repo = repo or repo_of(here)
+        if not targets:
+            refuse("issue_unreadable", "the edit names no ticket the hook can read")
         for target_repo, number in targets:
             current = _current(hub, target_repo or repo, number)
             if current is None:

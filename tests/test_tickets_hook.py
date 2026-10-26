@@ -91,6 +91,33 @@ def test_an_inline_body_and_a_relative_body_file_after_cd_are_read(hub, tmp_path
     assert judge(hub, inline, tmp_path).codes == ["weight_missing"]
 
 
+@pytest.mark.parametrize("wrapped", [
+    "bash -c {cmd}", "sh -c {cmd}", "eval {cmd}", "timeout 5 {raw}", "env GH_PAGER= {raw}", "command {raw}",
+    "sudo -u x {raw}", "nohup {raw}", "/usr/bin/gh issue edit 10 --add-label parked", "gh.exe issue edit 10 --add-label parked",
+    "cmd /c {raw}", "pwsh -NoProfile -Command {cmd}", "echo 10 | xargs gh issue edit --add-label parked",
+    "if true; then {raw}; fi", "x=$(gh issue edit 10 --add-label parked)",
+])
+def test_a_wrapped_command_is_judged_like_the_plain_one(hub, tmp_path, wrapped):
+    raw = "gh issue edit 10 --add-label parked"
+    command = wrapped.format(raw=raw, cmd=shlex.quote(raw))
+    refused = judge(hub, command, tmp_path)
+    assert refused and refused.codes[0] in ("park_by_hand", "command_unreadable"), command
+
+
+def test_gh_s_own_alias_new_is_a_create(hub, tmp_path):
+    refused = judge(hub, f"gh issue new --title T --body-file {shlex.quote(str(body_file(tmp_path, BODY)))}",
+                    tmp_path, transcript=WITHOUT_SKILL)
+    assert refused.codes == ["write_ticket_missing"]
+
+
+def test_the_repo_of_an_edit_is_the_one_gh_would_use(hub, tmp_path, monkeypatch):
+    monkeypatch.setenv("GH_REPO", "someone/else")
+    hub.add(10, fixture("bad_weight_missing")[1], ["ready-for-agent"], repo="someone/else")
+    refused = hook.judge(payload("gh issue edit 10 --add-label ready-for-agent", tmp_path), hub=hub,
+                         repo_of=lambda folder: REPO)
+    assert refused.codes == ["weight_missing"] and refused.repo == "someone/else"
+
+
 def test_powershell_writes_the_same_command(hub, tmp_path):
     path = body_file(tmp_path, fixture("bad_weight_missing")[1])
     command = f'gh issue create --repo {REPO} --title "Fine title" --body-file "{path}"'
