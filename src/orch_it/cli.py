@@ -7,7 +7,8 @@
 shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m orch_it
 research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m orch_it
 tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`); `python -m orch_it skills check`,
-`skills report` and `skills update` (#397 decision 4).
+`skills report` and `skills update` (#397 decision 4); `python -m orch_it merge ...` and the
+other commands of the merge flow (#400, in `orch_it.merge.commands`).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -26,6 +27,8 @@ from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.guards import hook, install, prepush, scanner
 from orch_it.guards import status as guards_status
+from orch_it.merge import commands as merge_commands
+from orch_it.merge.lock import LockError
 from orch_it.research import mcp as research_mcp
 from orch_it.research import run as research_run
 from orch_it.research.settings import ResearchRefused, ResearchSettings
@@ -242,6 +245,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("research-mcp", help="the research bridge's MCP server on stdin and stdout")
 
     ticket_commands.add_parsers(commands, common)
+    merge_commands.add_parsers(commands, common)
 
     p = commands.add_parser("spawn", parents=[common],
                             help="build a role's subagent prompt from its inputs, or refuse naming the missing one")
@@ -587,12 +591,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.group == "tickets":
             text, code = ticket_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of("."),
                                              render), 0
+        elif args.group == merge_commands.GROUP:
+            text, code = merge_commands.run(args, lambda: _store(args), lambda: _repo_of("."))
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError,
             SkillsError, SpawnRefused, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
-            ResearchRefused) as e:
+            ResearchRefused, LockError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
