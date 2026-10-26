@@ -7,7 +7,7 @@ The inputs:
 - `issue`: the ticket `#N` (a positive number) of `repo`, fetched with `gh issue view` (body, labels and
   every comment) into `issue-<N>.md` of the spawn's folder; a ticket `gh` cannot read is
   `issue_unreadable`;
-- `unit`: a unit id of ORCH's plan, a data row of a Markdown table whose first cell is the id, from the
+- `unit`: a unit id of ORCH's plan, a data row of a table headed `| unit | ...` whose first cell is the id, from the
   newest comment that has one, else the body (two rows of the id in one text are `unit_ambiguous`);
   the row goes into the prompt, and an id with no row is `unit_not_found`;
 - `diff`: a diff file, or a git range of the worktree (`main...HEAD`) that spawn writes to `diff.patch`;
@@ -123,22 +123,28 @@ def _issue_text(raw: dict) -> str:
     return "\n".join(parts).rstrip() + "\n"
 
 
-def _data_rows(text: str) -> list[str]:
-    """The data rows of the Markdown tables of `text`: not a header, a separator or a fenced line."""
+def _first_cell(row: str) -> str:
+    return row.strip().strip("|").split("|")[0].strip().strip("`*").strip()
 
-    rows, in_table, fence = [], False, None
+
+def _data_rows(text: str) -> list[str]:
+    """The data rows of the plan tables of `text`: tables whose header's first cell is `unit`, not
+    a separator or a fenced line."""
+
+    rows, header, fence = [], None, None
     for line in text.replace("\r\n", "\n").split("\n"):
         opened = re.match(r"^\s*(```+|~~~+)", line)
         if opened:
             fence = None if fence and opened.group(1)[0] == fence[0] else (fence or opened.group(1))
-            in_table = False
+            header = None
             continue
         if fence or not _TABLE_ROW.match(line):
-            in_table = False
+            header = None
             continue
-        if in_table and not _SEPARATOR_ROW.match(line):
+        if header is None:
+            header = _first_cell(line).lower()  # the first line of a table is its header
+        elif header == "unit" and not _SEPARATOR_ROW.match(line):
             rows.append(line.strip())
-        in_table = True  # the first line of a table is its header
     return rows
 
 
@@ -149,7 +155,7 @@ def _unit_row(raw: dict, unit: str) -> str | None:
 
     comments = [str(c.get("body") or "") for c in raw.get("comments") or [] if isinstance(c, dict)]
     for source in [*reversed(comments), str(raw.get("body") or "")]:
-        found = [row for row in _data_rows(source) if row.strip("|").split("|")[0].strip().strip("`*").strip() == unit]
+        found = [row for row in _data_rows(source) if _first_cell(row) == unit]
         if len(found) > 1:
             raise LookupError(f"{len(found)} rows of `{unit}` in one text of the ticket")
         if found:
@@ -318,6 +324,13 @@ def spawn(role: str, request: SpawnRequest, *, roles: RoleSet, store: Store,
     if "issue" in needs:
         lines.append(f"Ticket: #{request.issue} {title}".rstrip())
     lines += [f"{_LABELS[name]}: {job.filled[name]}" for name in needs]
+    report = job.role.report  # the rules the stop hold reads, named here so the role file names no number
+    if report and report.cap_lines:
+        lines.append(f"Report cap: {report.cap_lines} lines")
+    if report and report.owes:
+        lines.append(f"Report lines owed: {', '.join(report.owes)}")
+    if report and report.context_line:
+        lines.append(f"Context line: {report.context_line} tokens, then hand back with `table: <path>`")
     lines.append("Every file above was written at spawn for you: read each one whole before your first step.")
     prompt = "\n".join(lines) + "\n"
     job.record(prompt)
