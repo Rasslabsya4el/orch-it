@@ -18,7 +18,7 @@
     "note": {"type": "text", "nullable": true}
   },
   "codes": {
-    "role": ["owner", "brain", "orch", "worker", "worker-strong", "reviewer-standards", "reviewer-spec", "researcher-find", "researcher-how", "researcher-survey", "external-researcher", "launcher", "github", "hook", "script"],
+    "role": ["owner", "brain", "orch", "worker", "worker-strong", "reviewer-standards", "reviewer-spec", "reviewer-edge", "researcher-find", "researcher-how", "researcher-survey", "external-researcher", "launcher", "github", "hook", "script"],
     "outcome": ["passed", "failed", "no_result", "refused", "lost", "stopped"],
     "step_ended_any": ["suspended", "lease_lost"],
     "launched_by": ["launcher", "owner", "session", "boot"],
