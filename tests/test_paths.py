@@ -67,4 +67,5 @@ def test_the_error_codes_are_a_closed_set():
     import pytest
     with pytest.raises(ValueError):
         paths.GuardError("made_up")
-    assert paths.FINDING_RULES == ("protected_root", "ancestor_of_root", "link_outward")
+    assert paths.FINDING_RULES == ("protected_root", "ancestor_of_root", "inside_other_root",
+                                   "link_outward")
