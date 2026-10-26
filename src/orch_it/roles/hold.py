@@ -17,8 +17,8 @@ final report breaks a rule of its role's `report` in the roles settings:
   read and cache write tokens, as the transcript's usage records them) with no `table: <path>` line
   naming a file that exists: survey's 100k hand-back, its table written as it goes.
 
-A role with no `report` in the settings (ORCH, the brain, any other agent type) is never read. The
-final report is `last_assistant_message`, else the last assistant text of the transcript; lines in a
+A role with no `report` in the settings (ORCH), a session (a role with no inputs: the brain) and any
+other agent type are never read. The final report is `last_assistant_message`, else the last assistant text of the transcript; lines in a
 fenced block or a quote are no report lines. A stop already held once (`stop_hook_active` true)
 passes, so a subagent is held at most once and never loops. All problems of a stop go into one
 reason.
@@ -82,7 +82,7 @@ class TranscriptUnreadable(Exception):
     """The subagent's transcript cannot be read at all: the stop goes through with an event."""
 
 
-def _records(path: str) -> list[dict]:
+def transcript_records(path: str) -> list[dict]:
     """The transcript's JSON objects; a half-written, broken or too deeply nested line is skipped."""
 
     records = []
@@ -190,15 +190,20 @@ def _report_lines(text: str) -> list[str]:
     return kept
 
 
-def _context(records: list[dict]) -> int:
-    largest = 0
-    for record in records:
-        message = record.get("message")
-        usage = message.get("usage") if isinstance(message, dict) else None
-        if isinstance(usage, dict):
-            parts = [usage.get(k) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
-            largest = max(largest, sum(p for p in parts if type(p) is int and p > 0))
-    return largest
+def largest_prompt(records: list[dict]) -> int:
+    return max((prompt_tokens(record) for record in records), default=0)
+
+
+def prompt_tokens(record: object) -> int:
+    """The prompt size of one transcript record: input, cache read and cache write tokens of its
+    usage (0 for a record that carries none)."""
+
+    message = record.get("message") if isinstance(record, dict) else None
+    usage = message.get("usage") if isinstance(message, dict) else None
+    if not isinstance(usage, dict):
+        return 0
+    parts = [usage.get(k) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
+    return sum(p for p in parts if type(p) is int and p > 0)
 
 
 def _spawn_run(records: list[dict]) -> str | None:
@@ -231,15 +236,15 @@ def judge(payload: dict, roles: RoleSet, *, work_tree: str | Path | None = None)
     """The verdict on a SubagentStop payload, or None for a role with no `report`. A transcript
     that cannot be read raises `TranscriptUnreadable`."""
 
-    agent = payload.get("agent_type")
-    role = agent.rsplit(":", 1)[-1] if isinstance(agent, str) else None
-    role_settings = roles.roles.get(role) if role else None
-    if role_settings is None or role_settings.report is None:
+    role_settings = role_of(payload, roles)
+    # a role with no inputs is never spawned (the brain): its `report` holds only its context line
+    if role_settings is None or role_settings.report is None or not role_settings.inputs:
         return None
+    role = role_settings.name
     path = payload.get("agent_transcript_path")
     if not isinstance(path, str) or not path:
         raise TranscriptUnreadable("no transcript path")
-    records = _records(path)
+    records = transcript_records(path)
     rule = role_settings.report
     cwd = work_tree or payload.get("cwd")
     worktree = Path(cwd) if isinstance(cwd, (str, Path)) and str(cwd) else None
@@ -247,7 +252,7 @@ def judge(payload: dict, roles: RoleSet, *, work_tree: str | Path | None = None)
     uses = _tool_uses(records)
     called = _skills(uses)
     edits = _code_edits(uses, worktree)
-    verdict = Verdict(role, _spawn_run(records), context_tokens=_context(records))
+    verdict = Verdict(role, _spawn_run(records), context_tokens=largest_prompt(records))
     claims = _claims(_report_lines(final))
     verdict.present = [label for label in claims if label != "table"]
     for label, values in claims.items():
@@ -302,18 +307,22 @@ def _envelope(payload: dict | None, repo: str, role: str, run: str | None, step:
 def record(verdict: Verdict, payload: dict, *, store, repo: str, let_through: bool) -> None:
     """The events of a judged stop: its checks, a crossed context line, and the spawn's end."""
 
-    envelope = _envelope(payload, repo, verdict.role, verdict.run)
     with store.writer() as writer:
-        for check in verdict.checks:
-            writer.write(envelope | {"kind": "report_line.checked", "detail": check})
-        if verdict.crossed:
-            writer.write(envelope | {"kind": "context.crossed", "detail": {
-                "threshold": "context_line", "tokens": verdict.context_tokens,
-                "action_after": "handed_off" if verdict.table_named else "told"}})
-        if let_through and verdict.run:
-            writer.write(envelope | {"step": "subagent", "kind": "step.ended", "detail": {
-                "outcome": "failed" if verdict.problems else "passed", "report_lines_owed": verdict.owed,
-                "report_lines_present": verdict.present}})
+        _record_with(writer, verdict, payload, repo, let_through)
+
+
+def _record_with(writer, verdict: Verdict, payload: dict, repo: str, let_through: bool) -> None:
+    envelope = _envelope(payload, repo, verdict.role, verdict.run)
+    for check in verdict.checks:
+        writer.write(envelope | {"kind": "report_line.checked", "detail": check})
+    if verdict.crossed:
+        writer.write(envelope | {"kind": "context.crossed", "detail": {
+            "threshold": "context_line", "tokens": verdict.context_tokens,
+            "action_after": "handed_off" if verdict.table_named else "told"}})
+    if let_through and verdict.run:
+        writer.write(envelope | {"step": "subagent", "kind": "step.ended", "detail": {
+            "outcome": "failed" if verdict.problems else "passed", "report_lines_owed": verdict.owed,
+            "report_lines_present": verdict.present}})
 
 
 def run_subagent_stop(raw: str, *, store=None, open_store: Callable | None = None,
@@ -347,14 +356,26 @@ def run_subagent_stop(raw: str, *, store=None, open_store: Callable | None = Non
         return "", 0
 
 
-def _error_event(payload: dict | None, repo: str, code: str) -> dict:
+def role_of(payload: dict, roles: RoleSet):
+    """The role of a hook's payload, from its `agent_type` (a plugin's `plugin:role` too), or None."""
+
+    agent = payload.get("agent_type")
+    return roles.roles.get(agent.rsplit(":", 1)[-1]) if isinstance(agent, str) else None
+
+
+def error_event(payload: dict | None, repo: str, component: str, code: str) -> dict:
+    """The `error.raised` of a hook that let its event through (`failed_open`)."""
+
     return _envelope(payload, repo, "hook", None) | {
-        "kind": "error.raised", "detail": {"component": "subagent_stop", "error_code": code[:60], "failed_open": True}}
+        "kind": "error.raised", "detail": {"component": component, "error_code": code[:60], "failed_open": True}}
 
 
-def _write(write_one, payload, store, open_store, repo, *, verdict: Verdict | None = None,
-           let_through: bool = True) -> None:
-    """Write the hook's events; a store or repo that cannot be had is said on stderr, never raised."""
+def write_events(payload: dict | None, write: Callable, *, store=None, open_store: Callable | None = None,
+                 repo: str | None = None, hook: str = "subagent-stop") -> None:
+    """Call `write(writer, repo)` on a writer of the store: the repo is `repo`, else the GitHub
+    origin around the payload's `cwd` (none: nothing is written); the store is `store`, else
+    `open_store()`, else the default store. A store or repo that cannot be had is said on stderr,
+    never raised: a hook's answer stands whatever the store does."""
 
     try:
         if repo is None:
@@ -370,10 +391,18 @@ def _write(write_one, payload, store, open_store, repo, *, verdict: Verdict | No
 
                 open_store = Store.open
             store = open_store()
-        if verdict is not None:
-            record(verdict, payload, store=store, repo=repo, let_through=let_through)
-        else:
-            with store.writer() as writer:
-                write_one(writer, repo)
-    except Exception as e:  # noqa: BLE001 - the verdict stands whatever the store does
-        print(f"subagent-stop hook: events not written: {type(e).__name__}: {e}", file=sys.stderr)
+        with store.writer() as writer:
+            write(writer, repo)
+    except Exception as e:  # noqa: BLE001
+        print(f"{hook} hook: events not written: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def _write(write_one, payload, store, open_store, repo, *, verdict: Verdict | None = None,
+           let_through: bool = True) -> None:
+    if verdict is not None:
+        write_one = lambda writer, repo_: _record_with(writer, verdict, payload, repo_, let_through)  # noqa: E731
+    write_events(payload, write_one, store=store, open_store=open_store, repo=repo)
+
+
+def _error_event(payload: dict | None, repo: str, code: str) -> dict:
+    return error_event(payload, repo, "subagent_stop", code)

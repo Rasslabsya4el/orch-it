@@ -105,17 +105,29 @@ def _title_in(lines: Iterable[bytes]) -> str | None:
     return title
 
 
+def is_background(payload: dict) -> bool:
+    """A background session (`claude --bg`): its transcript's head records `sessionKind` `bg`. A
+    transcript that cannot be read raises `TranscriptUnreadable`."""
+
+    return any(record.get("sessionKind") == "bg" for record in _head(_path(payload), b"sessionKind"))
+
+
 def _agent_setting(path: str) -> str | None:
+    for record in _head(path, b"agentSetting"):
+        value = record.get("agentSetting")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _head(path: str, key: bytes) -> list[dict]:
+    """The records of the transcript's first `HEAD_LINES` lines that name `key`."""
+
     try:
         with open(path, "rb") as source:
-            for number, raw in enumerate(source):
-                if number >= HEAD_LINES:
-                    break
-                if b"agentSetting" in raw and (value := agent_setting_in_head(number, _record(raw))):
-                    return value
+            return [_record(raw) for number, raw in zip(range(HEAD_LINES), source) if key in raw]
     except (OSError, ValueError) as e:
         raise TranscriptUnreadable(type(e).__name__) from None
-    return None
 
 
 def _record(raw: bytes) -> dict:
