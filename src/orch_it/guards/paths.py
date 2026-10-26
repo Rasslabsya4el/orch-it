@@ -245,6 +245,24 @@ def protected_roots(cwd: str, *, windows: bool) -> tuple[str, ...]:
     return tuple(dict.fromkeys(root for root in roots if root))
 
 
+def nearest_existing_dir(path: str | None) -> str | None:
+    """The deepest existing directory at or above `path`, or None. A delete target may not
+    exist yet (or be a file), but its repo's worktrees are read by running git at the nearest
+    folder that does exist, so a delete aimed into another repo is seen (brain comment on #395)."""
+
+    if not path:
+        return None
+    current = path
+    while current:
+        if os.path.isdir(current):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+    return None
+
+
 def _git(cwd: str, *args: str) -> str | None:
     import subprocess
 
@@ -287,6 +305,11 @@ class Finding:
 
 
 CaseRule = Callable[[str], bool]
+# `own_root` not given at all: the inside rule is off (a plain judge, for the unit's own tests).
+# `own_root=None` given: the inside rule is on and the command runs in no worktree, so a target
+# inside any root is another's work (the hook always passes own_root, None when cwd is outside a
+# repo). The sentinel keeps the two apart.
+_NO_OWN_ROOT = object()
 
 
 def deepest_root(path: str | None, roots, *, windows: bool,
@@ -305,35 +328,40 @@ def deepest_root(path: str | None, roots, *, windows: bool,
     return max(holding, key=len, default=None)
 
 
-def judge(target: str | None, roots, *, windows: bool, own_root: str | None = None,
+def judge(target: str | None, roots, *, windows: bool, own_root=_NO_OWN_ROOT,
           roots_too: bool = True, walk_links: bool = True,
           case_rule: CaseRule = measure_case_rule) -> Finding | None:
     """Whether deleting (or moving) the real path `target` reaches a protected object: None
     when it does not, or it is not there. A target equal to a root is `protected_root`, one
-    above a root `ancestor_of_root`. With `own_root` given (the worktree the command runs in),
-    a target inside a root other than `own_root` is `inside_other_root`, while one inside
-    `own_root` passes — deleting another session's work is refused, deleting inside one's own
-    worktree allowed; the deepest holding root decides, since roots nest. `roots_too` False
-    lets a root itself through (a filtered `find` deletes only what matches below it);
-    `walk_links` False skips the walk (a move goes through no link). `case_rule(folder)` says
-    whether names in `folder` are case-insensitive; measured once per folder per call."""
+    above a root `ancestor_of_root`. When `own_root` is given (the worktree the command runs
+    in, or `None` for a command running in no worktree), a target inside a root other than
+    `own_root` is `inside_other_root`, while one inside `own_root` passes — deleting another
+    session's work is refused, deleting inside one's own worktree allowed; with `own_root=None`
+    every holding root is another's. The deepest holding root decides, since roots nest.
+    `roots_too` False lets a root itself through (a filtered `find`); `walk_links` False skips
+    the link walk (a move goes through no link). `case_rule(folder)` says whether names in
+    `folder` are case-insensitive; measured once per folder per call."""
 
     if target is None or not os.path.lexists(target):
         return None
     flavour = ntpath if windows else posixpath
     insensitive = _cached(case_rule)
-    inside: list[str] = []
+    covering: list[str] = []  # the roots at or above the target (for the inside rule)
     for root in roots:
         relation = _relation(target, root, flavour, insensitive)
-        if relation == "same" and roots_too:
-            return Finding("protected_root", root)
-        if relation == "ancestor":
+        if relation == "same":
+            if roots_too:
+                return Finding("protected_root", root)  # deleting the root itself
+            covering.append(root)  # the target IS this root; the inside rule decides whose
+        elif relation == "ancestor":
             return Finding("ancestor_of_root", root)
-        if relation is None and _relation(root, target, flavour, insensitive) == "ancestor":
-            inside.append(root)
-    if own_root is not None and inside:
-        closest = max(inside, key=len)
-        if _relation(closest, own_root, flavour, insensitive) != "same":
+        elif _relation(root, target, flavour, insensitive) == "ancestor":
+            covering.append(root)  # the root holds the target
+    if own_root is not _NO_OWN_ROOT and covering:
+        # the deepest covering root owns the target, since roots nest (a worktree inside the
+        # main checkout); the target is another's unless that deepest root is the own one
+        closest = max(covering, key=len)
+        if own_root is None or _relation(closest, own_root, flavour, insensitive) != "same":
             return Finding("inside_other_root", closest)
     if walk_links and os.path.isdir(target):
         link = _outward_link(target, flavour, windows, insensitive)

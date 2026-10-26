@@ -192,6 +192,7 @@ after its prefix.
 - `import <transcript folder> --repo R [--role worker] [--subagent-role ROLE] [--ticket N] [--session ID] [--quiet-minutes 30]`: write the events of Claude Code transcripts.
 - `import-github [--repo R] [--since ISO]`: write a `test_run` pair, a `github_queue` wait and the `test.result` rows per required job of the repo's `tests` workflow runs (default repo `Rasslabsya4el/orch-it`); a second import writes nothing.
 - `test-places [--repo R]`: per place and OS, the runs, their outcomes, the median run minutes and the median GitHub queue minutes.
+- `guard-fires`: per guard and week, the denies, passes, reversals and failed-open errors the guards wrote.
 
 `python -m orch_it [--store PATH] tests run [--ids-file F] [--place P] [--work-tree PATH] [--repo R] [--ticket N] [--role script]`:
 run the repo's test command once at a test place, write its `test_run` pair and one `test.result` per test case, and
@@ -202,6 +203,10 @@ print `run=… place=… outcome=… reason=… collected=… failed=…`; exit 
 look for private data (this machine's home folder or host name, any user's home folder, GitHub, Anthropic, OpenAI and AWS keys, private keys, addresses of people, the words of `private_words_file`) in the lines, file paths, messages, authors and committers of the commits of a range (`--all`: everything reachable from HEAD) or in every tracked file of a revision (`--tree`).
 It prints one line per hit, `<sha12> <where> <file or ->:<line or -> <kind>` (the value found is never printed; a value in a file path shows as `<kind>`), then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits, 2 with `error: <code>`.
 `--machine-independent` leaves out what is this machine's own (its home folder, host name and words); `--allow-email-of LOGIN` allows that GitHub account's public email (`gh api users/LOGIN`), else `warning: email_of_unreadable: LOGIN`.
+
+`python -m orch_it guards reverse <event id> [--by WHO]`: mark a `guard.fired` deny a false fire, writing a `guard.reversed` that names the fired event and who reversed it (so false fires are counted from the store, never from memory); `error: no_such_fire` or `not_a_deny` when the id names no reversible deny.
+
+`python -m orch_it hook pre-tool-use`: the Claude Code PreToolUse guard. It reads the hook's JSON on stdin (the tool, its command, the session id and the cwd), reads the command into its delete, move and stop actions, judges each against the object (the real path against the repo's worktrees, the real process tree), writes a `guard.fired` per triggered action, and prints the deny decision that refuses the tool call when one is refused; a guard that crashes lets the call through and writes `error.raised` with `failed_open`. It is wired in orch-it's `.claude/settings.json` for the Bash and PowerShell tools.
 
 `python -m orch_it labels sync [--repo R]`: make the repo's labels match the layer's set (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `parked`, `priority`, each with a colour and description from `labels/labels.json`; default repo the work tree's GitHub origin): a missing label is created, one with another colour, description or letter case is updated, an equal one is kept, every other label is listed `foreign` and never changed or deleted; prints `label`, `action` rows.
 
