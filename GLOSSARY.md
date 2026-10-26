@@ -127,26 +127,27 @@ _Avoid_: task, ticket, request
 
 **Skill copy**:
 One of Pocock's skills held in the repo, byte for byte as his upstream had it at the upstream pin.
-_Avoid_: vendored skill, fork, local skill, plugin skill
+_Avoid_: vendored skill, fork, plugin skill
 
 **Skill of ours**:
 A skill the layer itself wrote, held in the repo beside the skill copies.
-_Avoid_: custom skill, own skill, hybrid
+_Avoid_: custom skill, own skill
 
 **Upstream pin**:
 The one commit of Pocock's upstream that every skill copy of a repo comes from.
 _Avoid_: version, release, tag
 
 **Skill contract**:
-What a skill takes and returns: its name, its description, who may invoke it, the skills it calls, and the parts of it
-that say what it reads, writes or produces.
+What a skill takes and returns: how it is named, described and invoked, the skills it calls, and the parts of it that
+say what it reads, writes or produces.
 _Avoid_: interface, API, signature
 
 **Update class**:
-What a move of the upstream pin did to one skill, one of a closed set: same, added, renamed, removed, text changed,
-contract changed.
-_Avoid_: diff type, change kind, status
+What a move of the upstream pin did to one skill, one of a closed set: `same`, `added`, `renamed`, `removed`,
+`text_changed`, `contract_changed`.
+_Avoid_: diff type, change kind
 
 **Shadowing**:
-A personal skill of the same name taking a repo skill's place in every session of that user.
+A skill in a user's own skills folder taking the place of a repo skill of the same name, in every session of that user
+in that repo.
 _Avoid_: override, conflict, clash
