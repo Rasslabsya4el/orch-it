@@ -1,10 +1,11 @@
 name: skills-update
 
 # Daily and on demand (#397 decision 4): compare his upstream with the repo's skill copies and, on a
-# change, open one pull request with the new copies and every skill's class. The log's last line is
-# `no change`, `pull request already open: <url>` or `pull request: <url> <labels or merge rule>`.
-# A pull request opened with this workflow's token starts no workflow, so the update asks for the
-# `tests` workflow on its branch by name (`--dispatch-tests`).
+# change, keep one pull request with the new copies and every skill's class. The log's last line is
+# `no change`, `pull request: <url> ...`, `pull request already open: <url> ...` or `pull request
+# closed unmerged ...`. A pull request opened with this workflow's token starts no workflow, so the
+# update asks for the `tests` workflow on its branch by name (`--dispatch-tests`). The repo must let
+# Actions create pull requests and allow auto-merge.
 on:
   schedule:
     - cron: "41 4 * * *"
@@ -32,9 +33,8 @@ jobs:
       - name: skills update
         env:
           GH_TOKEN: ${{ github.token }}
-          BOT_NAME: github-actions[bot]
-          BOT_ADDRESS: ${{ format('{0}+{1}@users.noreply.github.com', '41898282', 'github-actions[bot]') }}
+          REPO: ${{ github.repository }}
         run: |
-          git config user.name "$BOT_NAME"
-          git config user.email "$BOT_ADDRESS"
-          python -m orch_it skills update --repo "${{ github.repository }}" --dispatch-tests
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python -m orch_it skills update --repo "$REPO" --dispatch-tests

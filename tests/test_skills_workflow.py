@@ -41,8 +41,8 @@ def test_the_token_may_push_a_branch_open_a_pull_request_and_start_the_tests():
 
 def test_it_calls_the_update_with_the_tests_dispatched():
     text = "\n".join(lines())
-    assert 'python -m orch_it skills update --repo "${{ github.repository }}" --dispatch-tests' in text
-    assert "GH_TOKEN: ${{ github.token }}" in text
+    assert 'python -m orch_it skills update --repo "$REPO" --dispatch-tests' in text
+    assert "GH_TOKEN: ${{ github.token }}" in text and "REPO: ${{ github.repository }}" in text
     assert "timeout-minutes: 15" in text
 
 

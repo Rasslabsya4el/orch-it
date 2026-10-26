@@ -340,9 +340,11 @@ def _skills(args) -> str:
                          dispatch_tests=args.dispatch_tests)
     if done.status == "no_change":
         return "no change\n"
-    if done.status == "already_open":
-        return f"pull request already open: {done.pr}\n"
     rule = f"labels={','.join(done.labels)}" if done.labels else "merges when green"
+    if done.status == "already_open":
+        return f"pull request already open: {done.pr} {rule}\n"
+    if done.status == "declined":
+        return f"pull request closed unmerged for this commit, not opened again: {done.pr}\n"
     return f"pull request: {done.pr} {rule}\n"
 
 
