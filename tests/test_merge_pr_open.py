@@ -3,7 +3,7 @@ closing keyword, after the acceptance rows are checked; auto-merge on, the ticke
 pull request through #398's park command, the `pr` step started. Run again, it reuses the same
 pull request and puts it back in the line."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fake_github import REPO, FakeGitHub
@@ -11,7 +11,8 @@ from ticket_fixtures import fixture
 
 from orch_it import tickets
 from orch_it.events.store import Store
-from orch_it.merge import marks, pr_open
+from orch_it.merge import marks
+from orch_it.merge.git import GitError
 from orch_it.merge.pr_open import PrError, open_pr
 from orch_it.merge.settings import MergeSettings
 
@@ -33,13 +34,16 @@ class Git:
         self.messages = list(messages)
         self.calls = []
         self.fail = fail
+        self.hub = None  # set by `opened`: `rev-parse <branch>` answers the branch's head there
 
     def __call__(self, args):
         self.calls.append(args)
         if self.fail and self.fail in args:
-            raise pr_open.GitError("git_failed", f"git {' '.join(args)}: rejected")
+            raise GitError("git_failed", f"git {' '.join(args)}: rejected")
         if args[0] == "log":
             return "".join(f"{m}\x00" for m in self.messages)
+        if args[0] == "rev-parse":
+            return f"{self.hub.branches[args[-1].removesuffix('^{commit}')][-1]}\n"
         return ""
 
 
@@ -53,7 +57,9 @@ def world(tmp_path):
 def opened(world, acceptance=GOOD, *, git=None, branch="ticket-10", number=10, **settings):
     hub, store = world
     hub.branches.setdefault(branch, [*hub.branches["main"], hub.sha("h")])
-    return open_pr(hub, store, REPO, number, acceptance=acceptance, branch=branch, base="main", git=git or Git(),
+    git = git or Git()
+    git.hub = hub
+    return open_pr(hub, store, REPO, number, acceptance=acceptance, branch=branch, base="main", git=git,
                    settings=MergeSettings(**settings), now=hub.now)
 
 
@@ -125,7 +131,7 @@ def test_run_again_it_reuses_the_pull_request_of_its_branch_and_puts_it_back_in_
     hub, _ = world
     first = opened(world)
     hub.later(hours=1)
-    hub.note(first.pr, marks.left_comment("red", "linux failed"), author="the-layer")
+    hub.note(first.pr, marks.left_comment("red", "linux failed"), author="owner-x")
     hub.set_auto_merge(REPO, first.pr, None)
     from orch_it.tickets import park
     park.take_off(hub, hub.issues[(REPO, 10)])  # follow returned the ticket to ready
@@ -189,6 +195,81 @@ def test_a_push_git_refuses_is_a_coded_error(world):
     with pytest.raises(PrError) as caught:
         opened(world, git=Git(fail="push"))
     assert caught.value.code == "push_failed"
+
+
+def test_an_after_merge_row_may_be_left_out_of_the_measured_rows(world):
+    hub, _ = world
+    done = opened(world, GOOD.replace("| 4 | after merge | the weekly report after the merge |\n", ""))
+    rows = marks.acceptance(hub.comments(REPO, 10)).rows
+    assert [(r.id, r.result) for r in rows][-1] == ("4", "after merge") and done.pr
+
+
+@pytest.mark.parametrize("branch", ["HEAD", "-x", "--receive-pack=echo", "a b", "a..b", "x.lock", "/x", "x/", ""])
+def test_a_branch_name_git_would_read_as_another_thing_is_refused_before_git_runs(world, branch):
+    git = Git()
+    with pytest.raises(PrError) as caught:
+        opened(world, git=git, branch=branch)
+    assert caught.value.code == "branch_bad" and git.calls == []
+
+
+def test_the_acceptance_names_the_head_the_rows_were_measured_on(world):
+    hub, _ = world
+
+    class Measured(Git):
+        def __call__(self, args):
+            if args[0] == "rev-parse":
+                self.calls.append(args)
+                return "elsewhere\n"
+            return super().__call__(args)
+
+    with pytest.raises(PrError) as caught:
+        opened(world, git=Measured())
+    assert caught.value.code == "head_moved"
+
+
+def test_a_fork_s_branch_of_the_same_name_is_never_the_ticket_s_pull_request(world):
+    hub, _ = world
+    fork = hub.open_pull(branch="ticket-10", body="Refs #10", auto_merge="merge")
+    hub.pulls[fork].head_repo = "stranger/repo-y"
+    done = opened(world)
+    assert done.pr != fork and not done.reused
+
+
+@pytest.mark.parametrize("field, text", [("body", "Refs #10\n\nCloses #10"), ("title", "Fixes GH-10")])
+def test_a_reused_pull_request_whose_own_text_closes_an_issue_is_refused(world, field, text):
+    hub, _ = world
+    first = opened(world)
+    setattr(hub.pulls[first.pr], field, text)
+    with pytest.raises(PrError) as caught:
+        opened(world)
+    assert caught.value.code == "closing_keyword"
+
+
+def test_a_pasted_mark_in_a_person_s_comment_is_no_mark_of_the_layer(world):
+    hub, _ = world
+    done = opened(world)
+    hub.note(done.pr, marks.left_comment("red", "pasted"), author="a-stranger", at=hub.now + timedelta(minutes=1))
+    said = marks.of_layer(hub.comments(REPO, done.pr), "owner-x")
+    assert marks.ready_since(said) is not None
+
+
+def test_a_second_pr_open_that_loses_the_park_closes_its_own_new_pull_request(world):
+    hub, store = world
+    from orch_it.tickets import park
+    real = park.park
+
+    def raced(*args, **kwargs):  # another pr open of the ticket parked it a moment before this one
+        raise park.ParkError("already_parked", "Parked: pr_ended #1 until 2026-11-04")
+
+    park.park = raced
+    try:
+        with pytest.raises(PrError) as caught:
+            opened(world)
+    finally:
+        park.park = real
+    assert caught.value.code == "ticket_has_pr"
+    [lost] = [p for p in hub.pulls.values()]
+    assert lost.state == "closed" and lost.auto_merge is None
 
 
 def test_the_park_lasts_past_the_pr_s_bound(world):

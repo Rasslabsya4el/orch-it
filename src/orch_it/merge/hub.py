@@ -39,6 +39,7 @@ class Pull:
     merged_at: datetime | None = None
     merge_sha: str | None = None
     closed_at: datetime | None = None
+    head_repo: str | None = None  # the repo of the head branch: a fork's is not this repo; None when deleted
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,7 @@ class PullHub(Hub, Protocol):
     def pull(self, repo: str, number: int) -> Pull | None: ...
 
     def open_pulls(self, repo: str, base: str) -> list[Pull]:
-        """Every open pull request into `base`, drafts too, oldest first."""
+        """Every open pull request into `base`, drafts and forks too, oldest first."""
 
     def checks(self, repo: str, sha: str) -> list[Check]:
         """The latest check run of each name on `sha`."""
@@ -78,6 +79,9 @@ class PullHub(Hub, Protocol):
         or asking for changes, and its review comments."""
 
     def create_pull(self, repo: str, base: str, branch: str, title: str, body: str) -> int: ...
+
+    def close_pull(self, repo: str, number: int) -> None:
+        """Close a pull request unmerged."""
 
     def set_auto_merge(self, repo: str, number: int, method: str | None) -> None:
         """Turn auto-merge on with `method`, or off with None; already so is no error."""

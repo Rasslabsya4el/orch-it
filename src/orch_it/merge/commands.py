@@ -16,24 +16,22 @@
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from orch_it import settings
 from orch_it.events.store import Store
+from orch_it.merge import git as merge_git
 from orch_it.merge import lock
 from orch_it.merge.gh import GhPullHub
-from orch_it.merge.pr_open import GitError, PrError, open_pr
+from orch_it.merge.git import GitError
+from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr
 from orch_it.merge.settings import MergeSettings
 from orch_it.tickets.park import ROLE
 
 GROUPS = ("merge", "pr")
 ERRORS = (lock.LockError, PrError)
-GIT_TIMEOUT_S = 300
-GIT_ERROR_CHARS = 300
 
 
 def add_parsers(commands, common: argparse.ArgumentParser) -> None:
@@ -50,7 +48,7 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p.add_argument("--branch", help="the ticket's branch (default: the work tree's)")
     p.add_argument("--base", default="main", help="the branch it merges into (default: main)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
-    p.add_argument("--role", default="orch")
+    p.add_argument("--role", default=ORCH)
 
 
 def run(args, store_of: Callable[[], Store], repo_of: Callable[[str], str]) -> tuple[str, int]:
@@ -74,7 +72,7 @@ def _pr_open(args, store_of, repo_of, now: datetime) -> str:
         acceptance = Path(args.acceptance).read_text("utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
         raise PrError("acceptance_unreadable", f"{args.acceptance}: {e}") from None
-    git = work_tree_git(Path(args.work_tree))
+    git = merge_git.work_tree(Path(args.work_tree))
     try:
         branch = args.branch or git(["rev-parse", "--abbrev-ref", "HEAD"]).strip()
     except GitError as e:
@@ -83,22 +81,3 @@ def _pr_open(args, store_of, repo_of, now: datetime) -> str:
                    git=git, settings=MergeSettings.from_settings(settings.load(), repo), now=now, role=args.role)
     return f"pr #{done.pr} {'reused' if done.reused else 'opened'} at {done.head[:12]}: {done.park}\n"
 
-
-def work_tree_git(work_tree: Path) -> Callable[[list[str]], str]:
-    """`git -C <work tree> <args>`, bounded, no prompt, no console window; a failure is `GitError`."""
-
-    def git(args: list[str]) -> str:
-        try:
-            done = subprocess.run(["git", "-C", str(work_tree), *args], capture_output=True, timeout=GIT_TIMEOUT_S,
-                                  stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except subprocess.TimeoutExpired:
-            raise GitError("git_failed", f"git {' '.join(args[:2])}: no answer in {GIT_TIMEOUT_S} s") from None
-        except OSError as e:
-            raise GitError("git_failed", f"git could not be started: {e}") from None
-        if done.returncode != 0:
-            said = done.stderr.decode("utf-8", "replace").strip()[:GIT_ERROR_CHARS]
-            raise GitError("git_failed", f"git {' '.join(args[:2])}: {said}")
-        return done.stdout.decode("utf-8", "replace")
-
-    return git

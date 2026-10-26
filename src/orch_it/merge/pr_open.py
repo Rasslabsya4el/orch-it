@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 
 from orch_it.events.store import Store
 from orch_it.merge import marks, record
+from orch_it.merge.git import GitError, branch_ok
 from orch_it.merge.hub import Pull, PullHub
 from orch_it.merge.settings import MergeSettings
 from orch_it.tickets import park
@@ -38,12 +39,13 @@ from orch_it.tickets.model import AcceptanceRow, parse
 ROLE = "orch"
 PR_ERROR_CODES = (
     "ticket_missing", "ticket_not_open", "acceptance_missing", "acceptance_unreadable", "row_missing",
-    "row_failed", "row_unknown", "row_twice", "row_bad", "branch_is_base", "ticket_has_pr", "pr_other_ticket",
-    "parked_elsewhere", "closing_keyword", "git_failed", "push_failed",
+    "row_failed", "row_unknown", "row_twice", "row_bad", "branch_is_base", "branch_bad", "ticket_has_pr",
+    "pr_other_ticket", "parked_elsewhere", "closing_keyword", "git_failed", "push_failed", "head_moved",
 )
 _REFS = re.compile(r"(?m)^Refs #([1-9][0-9]{0,9})\b")
 
-Git = Callable[[list[str]], str]  # `git <args>` in the work tree; raises GitError
+EVIDENCE_CHARS = 200  # an event's evidence; the comment keeps the whole of it
+Git = Callable[[list[str]], str]  # `git <args>` in the work tree; raises `orch_it.merge.git.GitError`
 
 
 class PrError(ValueError):
@@ -52,12 +54,6 @@ class PrError(ValueError):
     def __init__(self, code: str, detail: str = ""):
         if code not in PR_ERROR_CODES:
             raise ValueError(f"not a pr open error code: {code}")
-        self.code = code
-        super().__init__(f"{code}: {detail}" if detail else code)
-
-
-class GitError(RuntimeError):
-    def __init__(self, code: str, detail: str = ""):
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
 
@@ -79,6 +75,9 @@ def refers_to(body: str) -> int | None:
 
 def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: str, branch: str, base: str,
             git: Git, settings: MergeSettings, now: datetime, role: str = ROLE) -> Opened:
+    for name in (branch, base):
+        if not branch_ok(name):
+            raise PrError("branch_bad", f"{name[:60]!r} is no branch name git would read as one")
     if branch == base:
         raise PrError("branch_is_base", f"{branch} is the base itself")
     issue = hub.issue(repo, number)
@@ -91,10 +90,12 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
         raise PrError("acceptance_missing", f"{repo}#{number} has no acceptance table")
     rows = checked_rows(ticket.acceptance, acceptance)
 
-    pulls = hub.open_pulls(repo, base)
+    # a fork's branch of the same name is never the ticket's: only this repo's heads count
+    pulls = [p for p in hub.open_pulls(repo, base) if (p.head_repo or "").lower() == repo.lower()]
     mine = next((p for p in pulls if p.branch == branch), None)
     if mine is not None and refers_to(mine.body) != number:
-        raise PrError("pr_other_ticket", f"#{mine.number} of {branch} refers to #{refers_to(mine.body)}")
+        said = f"refers to #{refers_to(mine.body)}" if refers_to(mine.body) else "has no line `Refs #N`"
+        raise PrError("pr_other_ticket", f"#{mine.number} of {branch} {said}")
     other = next((p for p in pulls if p.branch != branch and refers_to(p.body) == number), None)
     if other is not None:
         raise PrError("ticket_has_pr", f"#{other.number} ({other.branch}) is the pull request of #{number}")
@@ -104,10 +105,12 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
 
     try:
         git(["fetch", "origin", base])
-        messages = git(["log", "--format=%B%x00", f"origin/{base}..{branch}"])
+        messages = git(["log", "--format=%B%x00", f"origin/{base}..{branch}", "--"])
+        measured = git(["rev-parse", "--verify", "--end-of-options", f"{branch}^{{commit}}"]).strip()
     except GitError as e:
         raise PrError("git_failed", str(e)) from None
-    closing = marks.closing_keywords(messages) + marks.closing_keywords(issue.title)
+    texts = [messages, issue.title, *((mine.title, mine.body) if mine else ())]
+    closing = [found for text in texts for found in marks.closing_keywords(text)]
     if closing:
         raise PrError("closing_keyword", f"{', '.join(dict.fromkeys(closing))}: write `Refs #{number}`")
     try:
@@ -118,22 +121,36 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
     reused = mine is not None
     pr = mine.number if reused else hub.create_pull(repo, base, branch, issue.title, _pr_body(number, issue.title, rows))
     pull = hub.pull(repo, pr)
-    hub.comment(repo, number, marks.acceptance_comment(pr, pull.head_sha, marks.body_hash(issue.body), rows))
-    hub.comment(repo, pr, marks.ready_comment(number, pull.head_sha, now))
+    if pull is None or pull.head_sha != measured:
+        # the rows were measured on the work tree's head; another one would land unmeasured
+        raise PrError("head_moved", f"#{pr} is at {pull.head_sha[:12] if pull else 'nothing'}, the rows were "
+                      f"measured at {measured[:12]}")
+    hub.comment(repo, number, marks.acceptance_comment(pr, measured, marks.body_hash(issue.body), rows))
+    hub.comment(repo, pr, marks.ready_comment(number, measured, now))
     hub.set_auto_merge(repo, pr, settings.merge_method)
     if parked_on_it:
         line = ticket.park_lines[0]
     else:
         until = (now + timedelta(hours=settings.pr_max_hours)).date() + timedelta(days=1)
-        line = park.park(hub, store, repo, number, "pr_ended", f"#{pr}", until, today=now.date(), role=role).line
-    ready = marks.ready_since(hub.pull_comments(repo, pr))
-    events = [("step.started", {"pr": pr, "branch": branch, "base": base, "head": pull.head_sha}),
+        try:
+            line = park.park(hub, store, repo, number, "pr_ended", f"#{pr}", until, today=now.date(), role=role).line
+        except park.ParkError as e:
+            if reused or e.code != "already_parked":
+                raise
+            # another `pr open` of this ticket parked it on its own pull request a moment before:
+            # this one, just opened, never enters the line
+            hub.set_auto_merge(repo, pr, None)
+            hub.comment(repo, pr, marks.left_comment("ticket_has_pr", f"#{number} took another pull request first"))
+            hub.close_pull(repo, pr)
+            raise PrError("ticket_has_pr", f"#{number} was parked by another pull request first: {e}") from None
+    ready = marks.ready_since(marks.of_layer(hub.pull_comments(repo, pr), repo.split("/")[0]))
+    events = [("step.started", {"pr": pr, "branch": branch, "base": base, "head": measured}),
               ("comment.written", {"comment_kind": "accepted"})]
     events += [("acceptance_row.checked", {"row": row.id, "result": row.result, "place": "branch",
-                                           "evidence": row.evidence[:200]})
+                                           "evidence": row.evidence[:EVIDENCE_CHARS]})
                for row in rows if row.result != "after merge"]
     record.write(store, repo, number, role, record.pr_run(repo, pr, ready.at if ready else None), "pr", events)
-    return Opened(pr, pull.head_sha, reused, line)
+    return Opened(pr, measured, reused, line)
 
 
 def checked_rows(rows: tuple[AcceptanceRow, ...], text: str) -> list[marks.ResultRow]:
@@ -150,6 +167,10 @@ def checked_rows(rows: tuple[AcceptanceRow, ...], text: str) -> list[marks.Resul
         if result.id in by_id:
             raise PrError("row_twice", f"row {result.id}")
         by_id[result.id] = result
+    # a row checked only after the merge is not run before it: left out, it is `after merge`
+    for row in rows:
+        if row.after_merge and row.id not in by_id:
+            by_id[row.id] = marks.ResultRow(row.id, "after merge", "")
     missing = [row.id for row in rows if row.id not in by_id]
     if missing:
         raise PrError("row_missing", f"row {', '.join(missing)}")

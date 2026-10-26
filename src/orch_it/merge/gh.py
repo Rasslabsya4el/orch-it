@@ -16,7 +16,7 @@ It is the tickets' `GhHub` (issues, comments, runs, all through `gh api`) plus t
 - the conflicting files of a pull request: exact, by `git merge-tree --write-tree` in a bare
   cache repo under the data folder (`merge-cache/<owner>__<name>.git`) that fetches the base and
   `refs/pull/<n>/head` over https with `gh` as the credential helper; git runs through an
-  injectable callable, as `gh` does;
+  injectable callable (`orch_it.merge.git.run` by default), as `gh` does;
 - issues of red main: by label, create, close; and whether Actions is on for the repo.
 
 The error rule is the `Hub`'s: a call that fails or answers badly raises
@@ -31,20 +31,19 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import tempfile
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
 from orch_it import settings
 from orch_it.events import schema
+from orch_it.merge import git as merge_git
+from orch_it.merge.git import GitDone, GitError
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
-    ERROR_TEXT_CHARS,
     REPORT_FILE,
     WORKFLOW_FILE,
     Gh,
@@ -54,7 +53,6 @@ from orch_it.testruns.github import (
 )
 from orch_it.tickets.hub import Comment, GhHub, _moment, _text
 
-GIT_TIMEOUT_S = 300
 CACHE_FOLDER = "merge-cache"
 BASE_REF, PULL_REF = "refs/orch/base", "refs/orch/pr"
 BRANCH_RUN_EVENTS = ("push", "schedule", "workflow_dispatch")
@@ -65,37 +63,13 @@ _JUNIT_NAME = re.compile(r"junit-(.+)-(\d+)")
 _CREDENTIAL = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
 
 
-@dataclass(frozen=True)
-class GitDone:
-    code: int
-    out: str
-    err: str
-
-
 Git = Callable[[list[str]], GitDone]
-
-
-def run_git(args: list[str]) -> GitDone:
-    """The default git runner: `git <args>` bounded by a timeout, never asking for a password;
-    its exit code is the caller's to read."""
-
-    try:
-        done = subprocess.run(
-            ["git", *args], capture_output=True, timeout=GIT_TIMEOUT_S, stdin=subprocess.DEVNULL,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except subprocess.TimeoutExpired:
-        raise GithubError("gh_timeout", f"git {' '.join(args[:3])}") from None
-    except OSError as e:
-        raise GithubError("gh_failed", f"git could not be started: {e}") from None
-    return GitDone(done.returncode, done.stdout.decode("utf-8", "replace"),
-                   done.stderr.decode("utf-8", "replace").strip()[:ERROR_TEXT_CHARS])
 
 
 class GhPullHub(GhHub):
     def __init__(self, gh: Gh | None = None, git: Git | None = None):
         super().__init__(gh)
-        self.git = git or run_git
+        self.git = git or merge_git.run
 
     # --- pull requests ----------------------------------------------------------------------
 
@@ -113,7 +87,7 @@ class GhPullHub(GhHub):
             if type(item.get("number")) is not int:
                 raise GithubError("gh_bad_output", f"{repo}: a pull request with no number")
             found = self.pull(repo, item["number"])  # the list holds no `mergeable`
-            if found is not None:
+            if found is not None and found.state == "open":  # it may have merged since the list
                 pulls.append(found)
         return sorted(pulls, key=lambda p: (p.created_at, p.number))
 
@@ -136,7 +110,8 @@ class GhPullHub(GhHub):
             mergeable={True: "mergeable", False: "conflicting"}.get(found.get("mergeable"), "unknown"),
             behind=behind, created_at=created, merged_at=merged_at,
             merge_sha=_text(found.get("merge_commit_sha")) or None if merged_at else None,
-            closed_at=_moment(found.get("closed_at")))
+            closed_at=_moment(found.get("closed_at")),
+            head_repo=_text((head.get("repo") or {}).get("full_name")) or None)
 
     def _behind(self, repo: str, base: str, head_sha: str) -> int | None:
         """The base's commits the head lacks: the compare reads `base...head`. The base is
@@ -166,6 +141,9 @@ class GhPullHub(GhHub):
         if match is None:
             raise GithubError("gh_bad_output", f"pr create: no pull request url in {printed[:80]!r}")
         return int(match.group(1))
+
+    def close_pull(self, repo: str, number: int) -> None:
+        self._send(["api", "-X", "PATCH", f"repos/{repo}/pulls/{number}"], {"state": "closed"})
 
     def set_auto_merge(self, repo: str, number: int, method: str | None) -> None:
         if method is None:
@@ -311,19 +289,26 @@ class GhPullHub(GhHub):
             self._git(["init", "--bare", "--quiet", str(cache)])
         self._git([*_CREDENTIAL, "-C", str(cache), "fetch", "--quiet", "--no-tags", self.remote(repo),
                    f"+refs/heads/{base}:{BASE_REF}", f"+refs/pull/{number}/head:{PULL_REF}"])
-        done = self.git(["-C", str(cache), "merge-tree", "--write-tree", "--name-only", "--no-messages",
-                         BASE_REF, PULL_REF])
+        done = self._run_git(["-C", str(cache), "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z",
+                              BASE_REF, PULL_REF])
         if done.code == 0:
             return []
         if done.code != 1:
             raise GithubError("gh_failed", f"git merge-tree: exit {done.code}: {done.err}")
-        return sorted({line.strip() for line in done.out.splitlines()[1:] if line.strip()})
+        # `-z`: the tree id, then each conflicted file, NUL-ended: a name with any character comes whole
+        return sorted({name for name in done.out.split("\0")[1:] if name})
 
     def remote(self, repo: str) -> str:
         return f"https://github.com/{repo}.git"
 
+    def _run_git(self, args: list[str]) -> GitDone:
+        try:
+            return self.git(args)
+        except GitError as e:  # git that cannot start or gives no answer is a failed call of this hub
+            raise GithubError("gh_failed", str(e)) from None
+
     def _git(self, args: list[str]) -> None:
-        done = self.git(args)
+        done = self._run_git(args)
         if done.code != 0:
             raise GithubError("gh_failed", f"git {' '.join(a for a in args if not a.startswith('-'))[:60]}: "
                               f"exit {done.code}: {done.err}")
