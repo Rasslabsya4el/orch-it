@@ -67,4 +67,17 @@ def test_a_failed_run_exits_1(tmp_path, monkeypatch, capsys):
 def test_a_bounded_run_exits_3(tmp_path, monkeypatch, capsys):
     bridge = prepared(tmp_path, monkeypatch, mode="hang", messages=PROMPT_ONLY, minutes=0.02)
     assert main(bridge) == 3
-    assert "reason=time_bound" in capsys.readouterr().out
+    line = capsys.readouterr().out
+    assert "reason=time_bound" in line and "2026-10-26-test.partial.md" in line
+
+
+def test_with_no_research_settings_the_command_says_which_are_missing_in_one_line(tmp_path, monkeypatch, capsys):
+    """#59 carried: settings that cannot serve a run print one coded line and exit non-zero."""
+
+    bridge = prepared(tmp_path, monkeypatch)
+    for text in ("{}", '{"research": {}}'):
+        bridge.settings_file.write_text(text, "utf-8")
+        assert main(bridge) == 2
+        err = capsys.readouterr().err
+        assert err.count("\n") == 1 and err.startswith("error: research_not_set")
+        assert "research.models" in err and "research.provider" in err and "research.key_env" in err

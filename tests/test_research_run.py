@@ -60,7 +60,8 @@ def test_a_run_past_its_time_bound_ends_no_result_with_the_partial_report_and_no
     assert (done.outcome, done.reason) == ("no_result", "time_bound")
     assert done.partial_path == str(target) and "of the work" in target.read_text("utf-8")
     assert done.report_path is None and not target.with_name("2026-10-26-test.md").exists()
-    assert bridge.events("step.progressed")
+    progressed = bridge.events("step.progressed")
+    assert progressed and progressed[-1]["steps"] > progressed[0]["steps"]
     assert "run" in bridge.seen()["aborted"]
     bridge.assert_tree_gone()
 
@@ -212,3 +213,55 @@ def test_a_failed_model_call_carries_the_provider_s_error_without_its_headers(tm
     assert (done.outcome, done.reason, done.model_error) == ("no_result", "model_error", "APIError: 429 Too Many Requests")
     [ended] = bridge.events("step.ended")
     assert ended["model_error"] == "APIError: 429 Too Many Requests"
+
+
+def test_a_failed_abort_is_recorded_and_the_partial_report_still_kept(tmp_path, monkeypatch):
+    def refuse(self, session):
+        raise OpencodeError("http_error", "POST abort: HTTP 500")
+
+    monkeypatch.setattr(opencode.Client, "abort", refuse)
+    bridge = Bridge(tmp_path, mode="stall", messages=PROMPT_ONLY, minutes=5, stall_minutes=0.03)
+    done = bridge.run()
+    assert (done.outcome, done.reason) == ("no_result", "stalled") and done.partial_path
+    [ended] = bridge.events("step.ended")
+    assert ended["abort_failed"] is True
+    bridge.assert_tree_gone()
+
+
+def fetch(url: str, status: str) -> dict:
+    return {"type": "tool", "tool": "webfetch", "state": {"status": status, "input": {"url": url}}}
+
+
+def test_progress_counts_completed_fetches_and_reddit_only_when_a_reddit_fetch_completed(tmp_path):
+    """#333 carried: sources are completed fetches; Reddit is reached by a completed fetch only."""
+
+    def run_with(parts):
+        folder = tmp_path / str(len(list(tmp_path.iterdir())))
+        folder.mkdir()
+        messages = PROMPT_ONLY + [{"info": {"role": "assistant", "time": {"created": 1}},
+                                   "parts": [{"type": "step-start"}, *parts]}]
+        bridge = Bridge(folder, mode="stall", messages=messages, minutes=5, stall_minutes=0.03)
+        bridge.run()
+        return bridge.events("step.progressed")[-1]
+
+    failed = run_with([fetch("https://www.reddit.com/r/a/1", "error"), fetch("https://example.org/a", "completed")])
+    assert (failed["sources"], failed["reddit_reached"]) == (1, False)
+    reached = run_with([fetch("https://old.reddit.com/r/a/2", "completed"), fetch("https://example.org/a", "completed"),
+                        fetch("https://example.org/a", "completed")])
+    assert (reached["sources"], reached["reddit_reached"]) == (2, True)
+
+
+def test_a_message_read_that_fails_once_skips_that_progress_read_only(tmp_path, monkeypatch):
+    real = opencode.Client.messages
+    calls = {"n": 0}
+
+    def flaky(self, session):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OpencodeError("unreachable", "a moment's hiccup")
+        return real(self, session)
+
+    monkeypatch.setattr(opencode.Client, "messages", flaky)
+    bridge = Bridge(tmp_path, mode="hang", messages=PROMPT_ONLY, minutes=0.03, stall_minutes=5)
+    done = bridge.run()
+    assert (done.outcome, done.reason) == ("no_result", "time_bound") and bridge.events("step.progressed")

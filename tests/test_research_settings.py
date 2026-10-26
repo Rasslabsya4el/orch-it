@@ -127,3 +127,14 @@ def test_the_source_holds_no(rule):
     hits = [f"{path}: {line}" for path in files
             for line in path.read_text("utf-8", "replace").splitlines() if SOURCE_RULES[rule].search(line)]
     assert hits == []
+
+
+def test_the_task_tool_is_denied_last_so_no_earlier_rule_lets_it_through():
+    """#174 carried: opencode applies the last matching permission; `task` comes last at the top
+    and in the agent, whatever else the config allows."""
+
+    config = settings().opencode_config()
+    assert list(config["permission"])[-1] == "task" and config["permission"]["task"] == "deny"
+    [agent] = config["agent"].values()
+    assert list(agent["permission"])[-1] == "task" and agent["permission"]["task"] == "deny"
+    assert agent["permission"]["webfetch"] == "allow"
