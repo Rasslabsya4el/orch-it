@@ -331,3 +331,16 @@ _Avoid_: queued label, ready label
 **Left mark**:
 The layer's mark on a pull request that it left the merge line, and why; the next ready mark puts it back.
 _Avoid_: dequeued, removed from queue
+
+**Held member**:
+A pull request of the merge line kept from merging on its own while another one is served, until its turn comes.
+_Avoid_: paused PR, blocked PR, frozen
+
+**Follow**:
+What the layer does with a ticket when its pull request ends, is stopped by a person or goes red: closes it, returns
+it, parks it or sends it to the brain.
+_Avoid_: sync, webhook handler, hand-back
+
+**Red-on-main ticket**:
+The ticket of tests that fail on the main line, opened by the layer; a pull request red only on them waits for it.
+_Avoid_: red main list, skip list, known failures
