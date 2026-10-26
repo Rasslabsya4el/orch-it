@@ -32,6 +32,8 @@ PARK_PREFIX = "Parked:"
 READY_LABEL = "ready-for-agent"
 PARKED_LABEL = "parked"
 PRIORITY_LABEL = "priority"
+TRIAGE_LABEL = "needs-triage"
+HANDOFF_LABEL = "brain-handoff"  # the brain's hand-off issue, never a ticket (orchestration-layer#403)
 
 _FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
 _BULLET = re.compile(r"[-*+]\s+")

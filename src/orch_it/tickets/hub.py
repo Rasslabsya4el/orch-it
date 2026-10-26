@@ -85,11 +85,19 @@ class Hub(Protocol):
         """The orch-it version the repo's default branch runs, `X.Y.Z`."""
 
 
+class ListingHub(Hub, Protocol):
+    def listed(self, repo: str, label: str) -> list[Issue]:
+        """The repo's open issues (no pull requests) carrying the label."""
+
+
 VERSION_FILE = ".orch-it/version"  # the version an installed repo runs (part 8 writes it)
 _PROJECT_NAME = re.compile(r'^name\s*=\s*"orch-it"\s*$', re.MULTILINE)
 _PROJECT_VERSION = re.compile(r'^version\s*=\s*"([^"\n]+)"\s*$', re.MULTILINE)
 _PARENT_QUERY = ("query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) "
                  "{ issue(number: $number) { parent { number repository { nameWithOwner } } } } }")
+_PINNED_QUERY = ("query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) "
+                 "{ pinnedIssues(first: 10) { nodes { issue { number } } } } }")
+_PIN_MUTATION = "mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }"
 
 
 class GhHub:
@@ -101,17 +109,42 @@ class GhHub:
 
     def issue(self, repo: str, number: int) -> Issue | None:
         found = self._object(["api", f"repos/{repo}/issues/{number}"], missing_ok=True)
-        if found is None:
-            return None
-        if not isinstance(found.get("number"), int) or not isinstance(found.get("labels", []), list):
-            raise GithubError("gh_bad_output", f"{repo}#{number}: no issue")
-        pull = found.get("pull_request")
-        return Issue(
-            repo=repo, number=number, title=_text(found.get("title")), body=_text(found.get("body")),
-            labels=tuple(label["name"] for label in found.get("labels") or []
-                         if isinstance(label, dict) and isinstance(label.get("name"), str)),
-            open=found.get("state") == "open", state_reason=found.get("state_reason"),
-            is_pr=isinstance(pull, dict), merged=isinstance(pull, dict) and bool(pull.get("merged_at")))
+        return None if found is None else _issue(repo, found)
+
+    def listed(self, repo: str, label: str) -> list[Issue]:
+        """The repo's open issues carrying the label, pull requests left out (the brain's hand-off
+        home and the queues read it)."""
+
+        items = self._list(["api", "--paginate",
+                            f"repos/{repo}/issues?labels={quote(label, safe='')}&state=open&per_page=100"])
+        return [_issue(repo, item) for item in items if "pull_request" not in item]
+
+    def create(self, repo: str, title: str, body: str, labels: list[str]) -> int:
+        made = json_values(self._send(["api", "-X", "POST", f"repos/{repo}/issues"],
+                                      {"title": title, "body": body, "labels": labels}))
+        if len(made) != 1 or not isinstance(made[0], dict) or not isinstance(made[0].get("number"), int):
+            raise GithubError("gh_bad_output", f"{repo}: the new issue has no number")
+        return made[0]["number"]
+
+    def pinned(self, repo: str) -> list[int]:
+        owner, name = repo.split("/", 1)
+        found = self._object(["api", "graphql", "-f", f"query={_PINNED_QUERY}", "-f", f"owner={owner}",
+                              "-f", f"name={name}"])
+        nodes = ((((found.get("data") or {}).get("repository") or {}).get("pinnedIssues") or {}).get("nodes") or [])
+        return [node["issue"]["number"] for node in nodes if isinstance(node, dict)
+                and isinstance(node.get("issue"), dict) and isinstance(node["issue"].get("number"), int)]
+
+    def pin(self, repo: str, number: int) -> None:
+        found = self._object(["api", f"repos/{repo}/issues/{number}"])
+        node = found.get("node_id")
+        if not isinstance(node, str) or not node:
+            raise GithubError("gh_bad_output", f"{repo}#{number}: no node id")
+        self._object(["api", "graphql", "-f", f"query={_PIN_MUTATION}", "-f", f"id={node}"])
+
+    def ensure_label(self, repo: str, name: str) -> bool:
+        from orch_it import labels  # the label module reads its set; imported when a label is wanted
+
+        return labels.ensure(repo, name, gh=self.gh)
 
     def parent(self, repo: str, number: int) -> tuple[str, int] | None:
         owner, name = repo.split("/", 1)
@@ -189,14 +222,15 @@ class GhHub:
         except (ValueError, UnicodeDecodeError):
             raise GithubError("gh_bad_output", f"{repo}:{path}: not text") from None
 
-    def _send(self, args: list[str], payload: dict) -> None:
-        """A write whose JSON goes in a file of its own, so no text is bounded by a command line."""
+    def _send(self, args: list[str], payload: dict) -> str:
+        """A write whose JSON goes in a file of its own, so no text is bounded by a command line;
+        GitHub's answer."""
 
         folder = tempfile.mkdtemp(prefix="orch-it-gh-")
         path = Path(folder) / "input.json"
         try:
             path.write_text(json.dumps(payload, ensure_ascii=False), "utf-8")
-            self.gh([*args, "--input", str(path)])
+            return self.gh([*args, "--input", str(path)])
         finally:
             path.unlink(missing_ok=True)
             os.rmdir(folder)
@@ -219,6 +253,19 @@ class GhHub:
                 raise GithubError("gh_bad_output", f"{' '.join(args[:3])}: expected a list")
             items += [item for item in page if isinstance(item, dict)]
         return items
+
+
+def _issue(repo: str, found: dict) -> Issue:
+    number = found.get("number")
+    if not isinstance(number, int) or not isinstance(found.get("labels", []), list):
+        raise GithubError("gh_bad_output", f"{repo}#{number}: no issue")
+    pull = found.get("pull_request")
+    return Issue(
+        repo=repo, number=number, title=_text(found.get("title")), body=_text(found.get("body")),
+        labels=tuple(label["name"] for label in found.get("labels") or []
+                     if isinstance(label, dict) and isinstance(label.get("name"), str)),
+        open=found.get("state") == "open", state_reason=found.get("state_reason"),
+        is_pr=isinstance(pull, dict), merged=isinstance(pull, dict) and bool(pull.get("merged_at")))
 
 
 def _text(value: object) -> str:
