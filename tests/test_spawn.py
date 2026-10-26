@@ -188,6 +188,19 @@ def test_a_unit_is_one_data_row_of_the_plan(world, plan, unit, code):
     assert refusal("worker", full("worker", world).but(unit=unit), world, gh=fake_gh([], plan=plan)) == (code, "unit")
 
 
+def test_only_a_table_headed_unit_is_a_plan(world):
+    attempts = "| attempt | reason |\n|---|---|\n| u1 | red on windows |\n"  # a newer table that is no plan
+    calls: list = []
+
+    def gh(args):
+        raw = json.loads(fake_gh(calls)(args))
+        raw["comments"].append({"author": {"login": "orch"}, "createdAt": "2026-10-26T06:00:00Z", "body": attempts})
+        return json.dumps(raw)
+
+    done = spawn("worker", full("worker", world), roles=RoleSet.load(), store=world["store"], gh=gh)
+    assert "the parser" in done.prompt and "red on windows" not in done.prompt
+
+
 def test_the_newest_plan_wins_over_an_example_in_the_body(world):
     done = spawn("worker", full("worker", world), roles=RoleSet.load(), store=world["store"],
                  gh=fake_gh([], body=PLAN_HEAD + "| u1 | EXAMPLE | x |\n"))
@@ -227,6 +240,21 @@ def test_a_store_that_cannot_be_written_never_hides_the_refusal(world):
     with pytest.raises(SpawnRefused) as refused:
         spawn("worker", full("worker", world).but(unit="nope"), roles=RoleSet.load(), store=store, gh=fake_gh([]))
     assert refused.value.code == "unit_not_found"
+
+
+@pytest.mark.parametrize("role, lines", [
+    ("reviewer-spec", ["Report cap: 30 lines"]),
+    ("researcher-how", ["Report cap: 60 lines", "Report lines owed: research"]),
+    ("researcher-survey", ["Report cap: 40 lines", "Context line: 100000 tokens, then hand back with `table: <path>`"]),
+])
+def test_the_prompt_names_the_role_s_report_rules_from_the_settings(world, role, lines):
+    done = spawn(role, full(role, world), roles=RoleSet.load(), store=world["store"], gh=fake_gh([]))
+    assert set(lines) <= set(done.prompt.splitlines())
+
+
+def test_a_role_with_no_report_rule_gets_no_report_line(world):
+    done = spawn("worker", full("worker", world), roles=RoleSet.load(), store=world["store"], gh=fake_gh([]))
+    assert not any(line.startswith(("Report cap:", "Context line:")) for line in done.prompt.splitlines())
 
 
 def test_the_brain_is_no_subagent(world):

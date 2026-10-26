@@ -57,7 +57,8 @@ CASES = [
     ("reviewer-spec", "claims code-review with no call", {}, "1 finding\ncode-review: called", ["code-review"]),
     ("reviewer-spec", "over its cap", {}, lines(31), ["report_cap"]),
     ("reviewer-edge", "claims tdd with no call", {}, "0 findings\ntdd: called", ["tdd"]),
-    ("reviewer-edge", "over its cap", {}, lines(31), ["report_cap"]),
+    ("reviewer-edge", "over its cap", {"skills": ["tdd"]}, "tdd: called\n" + lines(30), ["report_cap"]),
+    ("reviewer-edge", "owes its tdd line", {}, "0 findings", ["tdd"]),
     ("researcher-find", "over its cap", {}, lines(41), ["report_cap"]),
     ("researcher-find", "claims research with no call", {}, "research: called, docs/research/a.md", ["research"]),
     ("researcher-how", "owes its research line", {"skills": ["research"]}, "The answer, with file:line.", ["research"]),
@@ -229,7 +230,8 @@ def test_a_store_that_cannot_be_opened_never_stops_a_block_and_errors_are_events
     gone = payload("worker", tmp_path / "gone.jsonl", report)
     assert run_subagent_stop(json.dumps(gone), store=store, repo="o/r") == ("", 0)
     assert run_subagent_stop("[]", store=store, repo="o/r") == ("", 0)
-    assert [e["error_code"] for e in events(store, "error.raised")] == ["transcript_unreadable", "payload_unreadable"]
+    # two writers write microseconds apart: their order in the store is not the order they ran
+    assert sorted(e["error_code"] for e in events(store, "error.raised")) == ["payload_unreadable", "transcript_unreadable"]
     # a string `stop_hook_active` is no proof of a first hold
     out, _ = run_subagent_stop(json.dumps(payload("worker", path, report) | {"stop_hook_active": "false"}),
                                store=store, repo="o/r")
