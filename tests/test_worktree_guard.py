@@ -198,3 +198,22 @@ def test_nested_roots_take_the_deepest_holding_root(tmp_path):
     assert inside_hit(main / "build", roots, main) == "pass"
     # own_root is the deepest root holding cwd
     assert paths.deepest_root(str(guards / "sub"), [paths.resolve(str(r), None, windows=WINDOWS) for r in roots], windows=WINDOWS) == paths.resolve(str(guards), None, windows=WINDOWS)
+
+
+def test_a_rootless_delete_inside_own_worktree_passes_but_inside_another_refuses(tmp_path):
+    # roots_too=False (a filtered find, git clean) aimed at a worktree root: own passes (it is
+    # your own work), another refuses; the own worktree nests inside the main checkout
+    main = tmp_path / "repo"
+    (main / "src").mkdir(parents=True)
+    guards = main / ".claude" / "worktrees" / "guards"
+    tickets = main / ".claude" / "worktrees" / "tickets"
+    guards.mkdir(parents=True)
+    tickets.mkdir(parents=True)
+    roots = [main, guards, tickets]
+    own = guards
+    assert inside_hit(guards, roots, own, roots_too=False) == "pass"
+    assert inside_hit(tickets, roots, own, roots_too=False) == "inside_other_root"
+    # the main checkout is above the worktree roots, so it is refused as their ancestor
+    assert inside_hit(main, roots, own, roots_too=False) == "ancestor_of_root"
+    # deleting the own worktree root itself (roots_too=True) is still refused
+    assert inside_hit(guards, roots, own) == "protected_root"

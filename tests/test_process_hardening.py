@@ -126,3 +126,13 @@ def test_this_agent_pid_walks_up_to_the_top_of_the_session():
         {"pid": 400, "ppid": 1, "start": 10.0, "env": "launcher"},  # outside the session
     ]
     assert processes.this_agent_pid(Tree(rows), SESSION) == 500
+
+
+def test_a_name_target_matches_with_or_without_the_exe_suffix():
+    from orch_it.guards.processes import _name_matches
+    assert _name_matches("explorer.exe", "explorer", exact=False)
+    assert _name_matches("explorer.exe", "explorer.exe", exact=False)
+    assert _name_matches("python.exe", "py*", exact=False)
+    assert _name_matches("node", "node", exact=True)
+    assert _name_matches("explorer.exe", "explorer", exact=True)
+    assert not _name_matches("notepad.exe", "explorer", exact=False)
