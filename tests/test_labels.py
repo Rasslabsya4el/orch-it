@@ -1,4 +1,4 @@
-"""The label set from settings and `labels sync` (#398 decision 6; acceptance row 6): a repo's labels
+"""The label set shipped with orch-it and `labels sync` (#398 decision 6; acceptance row 6): a repo's labels
 match the set of the new layer, a label that is not in the set is listed and kept. `gh` is a fake
 that holds a repo's labels the way GitHub does (names compare without regard to case) and records
 every call, so "changes nothing" is read off the call list."""
@@ -8,13 +8,14 @@ from urllib.parse import quote
 
 import pytest
 
-from orch_it import labels
-from orch_it.cli import main
+from orch_it import cli, labels
+from orch_it.cli import CommandError, main
 from orch_it.labels import LabelError, label_set, sync
 from orch_it.testruns import github
 from orch_it.testruns.github import GithubError
 
 REPO = "Rasslabsya4el/orch-it"
+READ_URL = f"repos/{REPO}/labels?per_page=100"
 NAMES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "parked",
          "priority"]
 DEAD = ["autopilot", "autopilot-stuck", "provisional", "hard-push", "flow-fix"]
@@ -30,6 +31,8 @@ class FakeGh:
         self.fail_create = None  # an exception to raise on a POST (of `fail_name` only, if set)
         self.fail_name = None
         self.create_first = None  # a label another sync creates just before our POST
+        self.patch_failures = []  # exceptions to raise on the next PATCHes, one each
+        self.before_write = None  # run once before the next write: another actor changes the repo
 
     def writes(self):
         return [c for c in self.calls if "-X" in c]
@@ -38,7 +41,7 @@ class FakeGh:
         self.calls.append(list(args))
         if args[:2] == ["api", "-X"]:
             return self.write(args)
-        assert args == ["api", f"repos/{REPO}/labels", "--paginate"], args
+        assert args == ["api", READ_URL, "--paginate"], args
         size = self.page_size or max(len(self.labels), 1)
         pages = [self.labels[i:i + size] for i in range(0, len(self.labels), size)] or [[]]
         return "".join(json.dumps(page) for page in pages)  # concatenated, as --paginate prints them
@@ -48,6 +51,9 @@ class FakeGh:
 
     def write(self, args):
         method, url = args[2], args[3]
+        if self.before_write:
+            change, self.before_write = self.before_write, None
+            change(self)
         fields = dict(part.split("=", 1) for part in args[4:] if part != "-f")
         assert args[4::2] == ["-f"] * len(args[4::2])
         if method == "POST":
@@ -63,7 +69,12 @@ class FakeGh:
                                 "description": fields["description"]})
             return "{}"
         assert method == "PATCH", method
-        label = next(l for l in self.labels if url == f"repos/{REPO}/labels/{quote(l['name'], safe='')}")
+        if self.patch_failures:
+            raise self.patch_failures.pop(0)
+        label = next((held for held in self.labels
+                      if url == f"repos/{REPO}/labels/{quote(held['name'], safe='')}"), None)
+        if label is None:
+            raise GithubError("gh_failed", "404")
         label["name"] = fields["new_name"]
         label["color"] = fields["color"]
         label["description"] = fields["description"]
@@ -109,7 +120,8 @@ def test_a_first_sync_on_an_empty_repo_creates_all_seven():
     gh = FakeGh()
     done = sync(REPO, gh=gh)
     assert done == [(name, "created") for name in NAMES]
-    assert state(gh) == {name: (l["color"], l["description"]) for name, l in label_set().items()}
+    assert state(gh) == {name: (want["color"], want["description"])
+                          for name, want in label_set().items()}
     assert [c[3] for c in gh.writes()] == [f"repos/{REPO}/labels"] * 7
     assert all(c[2] == "POST" for c in gh.writes())
 
@@ -181,6 +193,14 @@ def test_a_set_label_in_another_letter_case_is_renamed_not_created():
     assert not any(c[2] == "POST" and "name=priority" in c for c in gh.writes())
 
 
+def test_a_persons_own_label_in_another_case_and_colour_is_reported_updated():
+    gh = FakeGh([{"name": "Priority", "color": "000000", "description": "mine"}])
+    done = sync(REPO, gh=gh)
+    assert done[list(label_set()).index("priority")] == ("priority", "updated")
+    assert state(gh)["priority"] == (label_set()["priority"]["color"], label_set()["priority"]["description"])
+    assert "Priority" not in state(gh) and ("Priority", "foreign") not in done
+
+
 def test_a_colour_with_a_hash_or_capitals_equals_the_set_colour():
     want = label_set()["needs-info"]
     gh = FakeGh([{"name": "needs-info", "color": "#" + want["color"].upper(),
@@ -208,8 +228,8 @@ def test_an_empty_label_list_creates_everything_and_lists_nothing_foreign():
 
 def test_concatenated_pages_are_all_read():
     existing = [{"name": f"extra-{i}", "color": "ededed", "description": ""} for i in range(5)]
-    set_labels = [{"name": n, "color": l["color"], "description": l["description"]}
-                  for n, l in label_set().items()]
+    set_labels = [{"name": name, "color": want["color"], "description": want["description"]}
+                  for name, want in label_set().items()]
     gh = FakeGh(existing + set_labels, page_size=2)
     done = sync(REPO, gh=gh)
     assert [a for _, a in done[:7]] == ["kept"] * 7
@@ -243,6 +263,49 @@ def test_a_create_that_failed_and_left_no_label_raises_the_original_error():
     assert error.value is gh.fail_create
 
 
+def test_a_patch_that_failed_because_the_label_was_renamed_creates_it_from_what_is_there_now():
+    gh = FakeGh([{"name": "parked", "color": "000000", "description": "mine"}])
+
+    def rename(fake):
+        fake.labels[0]["name"] = "parked-old"
+
+    gh.before_write = rename
+    gh.patch_failures = [GithubError("gh_failed", "404")]
+    done = sync(REPO, gh=gh)
+    assert rows(done)["parked"] == "created" and "parked-old" in state(gh)  # nothing is deleted
+    assert state(gh)["parked"] == (label_set()["parked"]["color"], label_set()["parked"]["description"])
+
+
+def test_a_patch_that_failed_because_another_sync_made_the_label_right_keeps_it():
+    want = label_set()["parked"]
+    gh = FakeGh([{"name": "parked", "color": "000000", "description": "mine"}])
+
+    def fix(fake):
+        fake.labels[0].update(color=want["color"], description=want["description"])
+
+    gh.before_write = fix
+    gh.patch_failures = [GithubError("gh_failed", "422")]
+    assert rows(sync(REPO, gh=gh))["parked"] == "kept"
+    assert len([c for c in gh.writes() if c[2] == "PATCH"]) == 1  # the failed one; no second
+
+
+def test_a_patch_that_failed_on_a_label_still_wrong_is_tried_once_more():
+    gh = FakeGh([{"name": "parked", "color": "000000", "description": "mine"}])
+    gh.patch_failures = [GithubError("gh_failed", "502")]
+    assert rows(sync(REPO, gh=gh))["parked"] == "updated"
+    assert len([c for c in gh.calls if c[:3] == ["api", "-X", "PATCH"]]) == 2
+
+
+def test_a_second_patch_failure_raises():
+    gh = FakeGh([{"name": "parked", "color": "000000", "description": "mine"}])
+    second = GithubError("gh_failed", "second")
+    gh.patch_failures = [GithubError("gh_failed", "first"), second]
+    with pytest.raises(GithubError) as error:
+        sync(REPO, gh=gh)
+    assert error.value is second
+    assert len([c for c in gh.calls if c[:3] == ["api", "-X", "PATCH"]]) == 2
+
+
 def test_a_gh_failure_while_reading_gives_its_code():
     def broken(args):
         raise GithubError("gh_failed", "no network")
@@ -252,7 +315,7 @@ def test_a_gh_failure_while_reading_gives_its_code():
     assert error.value.code == "gh_failed"
 
 
-@pytest.mark.parametrize("text", ["not json", '{"a": 1}', '[1, 2]', '[{"color": "ffffff"}]'])
+@pytest.mark.parametrize("text", ["", " \n", "not json", '{"a": 1}', '[1, 2]', '[{"color": "ffffff"}]'])
 def test_an_answer_that_is_no_list_of_labels_gives_gh_bad_output(text):
     with pytest.raises(GithubError) as error:
         sync(REPO, gh=lambda args: text)
@@ -290,6 +353,14 @@ GOOD = {"a": {"color": "ffffff", "description": "x"}}
     json.dumps({"a": {"color": "ffffff", "description": "x", "extra": 1}}),
     json.dumps({"": {"color": "ffffff", "description": "x"}}),
     json.dumps({"a": GOOD["a"], "A": GOOD["a"]}),
+    json.dumps({"n" * 51: GOOD["a"]}),
+    json.dumps({"a,b": GOOD["a"]}),
+    json.dumps({" a": GOOD["a"]}),
+    json.dumps({"a ": GOOD["a"]}),
+    json.dumps({"a": {"color": "ffffff", "description": "two\nlines"}}),
+    json.dumps({"a": {"color": "ffffff", "description": "two\rlines"}}),
+    '{"a": {"color": "ffffff", "description": "x"}, "a": {"color": "000000", "description": "y"}}',
+    '{"a": {"color": "ffffff", "color": "000000", "description": "x"}}',
 ])
 def test_a_bad_label_file_gives_labels_unreadable(tmp_path, monkeypatch, text):
     bad = tmp_path / "labels.json"
@@ -298,6 +369,13 @@ def test_a_bad_label_file_gives_labels_unreadable(tmp_path, monkeypatch, text):
     with pytest.raises(LabelError) as error:
         label_set()
     assert error.value.code == "labels_unreadable"
+
+
+def test_a_name_of_fifty_characters_and_a_description_of_a_hundred_are_accepted(tmp_path, monkeypatch):
+    edge = tmp_path / "labels.json"
+    edge.write_text(json.dumps({"n" * 50: {"color": "ffffff", "description": "d" * 100}}), encoding="utf-8")
+    monkeypatch.setattr(labels, "LABELS_FILE", edge)
+    assert list(label_set()) == ["n" * 50]
 
 
 def test_a_missing_label_file_gives_labels_unreadable(tmp_path, monkeypatch):
@@ -336,18 +414,14 @@ def test_the_command_prints_the_table(monkeypatch, capsys):
 
 
 def test_the_command_defaults_to_the_origin_of_the_work_tree(monkeypatch, capsys):
-    from orch_it import cli
     gh = FakeGh()
     monkeypatch.setattr(github, "run_gh", gh)
     monkeypatch.setattr(cli, "_repo_of", lambda work_tree: REPO if work_tree == "." else "x/y")
     assert main(["labels", "sync"]) == 0
-    assert gh.calls[0] == ["api", f"repos/{REPO}/labels", "--paginate"]
+    assert gh.calls[0] == ["api", READ_URL, "--paginate"]
 
 
 def test_the_command_without_a_repo_and_origin_says_repo_unknown(monkeypatch, capsys):
-    from orch_it import cli
-    from orch_it.cli import CommandError
-
     def none(work_tree):
         raise CommandError("repo_unknown", work_tree)
 
