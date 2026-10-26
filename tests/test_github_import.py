@@ -979,3 +979,9 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
             compared += 1
     assert compared, "no pull request job with a report to count"
     assert import_github(store, REPO, since=since).written == 0
+
+
+def test_json_values_is_public_and_reads_pages_printed_one_after_the_other():
+    assert github.json_values('[1] [2]\n{"a": 3}') == [[1], [2], {"a": 3}]
+    assert github.json_values("") == []
+    assert not hasattr(github, "_json_values")

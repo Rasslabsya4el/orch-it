@@ -1,6 +1,7 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
-7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9), and `python -m orch_it guards scan` (#395
-decision 4: it prints one line per private value found and exits 1 when there is any).
+7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9);
+`python -m orch_it labels sync` (#398 decision 6); `python -m orch_it guards scan` (#395 decision 4:
+it prints one line per private value found and exits 1 when there is any).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -14,7 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-from orch_it import settings
+from orch_it import labels, settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.guards import scanner
@@ -146,6 +147,12 @@ def _parser() -> argparse.ArgumentParser:
                    help="allow the public email of this GitHub account")
     p.add_argument("--words-file", metavar="PATH",
                    help="the private words (default: the setting `private_words_file`)")
+
+    label_commands = commands.add_parser("labels", help="the layer's labels").add_subparsers(
+        dest="command", required=True)
+    p = label_commands.add_parser("sync", parents=[common],
+                                  help="make a repo's labels match the layer's set")
+    p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
     return root
 
 
@@ -235,6 +242,11 @@ def _one_line(path: str | None) -> str:
     return "-" if path is None else path.replace("\n", "\\n").replace("\r", "\\r")
 
 
+def _labels_sync(args) -> str:
+    done = labels.sync(args.repo or _repo_of("."))
+    return render(QueryResult(["label", "action"], done))
+
+
 def _run(args) -> str:
     command = args.command
     if command == "query":
@@ -291,10 +303,13 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _tests_run(args)
         elif args.group == "guards":
             text, code = _guards_scan(args)
+        elif args.group == "labels":
+            text, code = _labels_sync(args), 0
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, CommandError, RunError, scanner.ScanError) as e:
+            queries.QueryError, github.GithubError, labels.LabelError, CommandError, RunError,
+            scanner.ScanError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
