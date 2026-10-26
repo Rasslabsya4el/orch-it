@@ -3,13 +3,14 @@ skill names with the user's personal skills folder and writes one `skill.shadowe
 it never blocks the session."""
 
 import json
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 from orch_it.events.store import Store
 from orch_it.skills import shadow
-
-NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from orch_it.skills.copies import NO_WINDOW
 REPO = "Rasslabsya4el/orch-it"
 
 
@@ -84,7 +85,7 @@ def test_the_personal_folder_follows_the_claude_config_dir(tmp_path, monkeypatch
 
 
 def run_hook(tmp_path, stdin: bytes, cwd, env_extra=None):
-    env = {k: v for k, v in __import__("os").environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CONFIG_DIR", "CLAUDE_PROJECT_DIR")}
     env |= {"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg"), "ORCH_IT_STORE": str(tmp_path / "store"),
             "ORCH_IT_SETTINGS": str(tmp_path / "settings.json")} | (env_extra or {})
     return subprocess.run([sys.executable, "-m", "orch_it", "skills", "shadowed"], input=stdin, cwd=cwd,
@@ -92,7 +93,7 @@ def run_hook(tmp_path, stdin: bytes, cwd, env_extra=None):
 
 
 def git_repo(repo):
-    run = {"cwd": repo, "capture_output": True, "check": True, "creationflags": NO_WINDOW}
+    run = {"cwd": repo, "capture_output": True, "check": True, "timeout": 60, "creationflags": NO_WINDOW}
     subprocess.run(["git", "init", "-q"], **run)
     subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{REPO}.git"], **run)
 
@@ -127,7 +128,37 @@ def test_the_hook_never_blocks_on_bad_input(tmp_path):
 
 
 def test_the_repo_runs_the_hook_at_every_session_start():
-    from pathlib import Path
     settings = json.loads((Path(__file__).resolve().parents[1] / ".claude" / "settings.json").read_text("utf-8"))
     commands = [hook["command"] for entry in settings["hooks"]["SessionStart"] for hook in entry["hooks"]]
     assert "python -m orch_it skills shadowed" in commands
+
+
+def test_a_resumed_or_compacted_session_writes_no_new_event(tmp_path):
+    repo = repo_with_skills(tmp_path, "tdd")
+    git_repo(repo)
+    skill_folder(tmp_path / "cfg" / "skills", "tdd")
+    for source in ("startup", "resume", "compact", "clear"):
+        run_hook(tmp_path, json.dumps({"session_id": "abc", "cwd": str(repo), "source": source}).encode(), cwd=repo)
+    assert len(shadowed(Store.open(tmp_path / "store"))) == 2  # startup and clear
+
+
+def test_a_session_standing_in_a_subfolder_reads_its_project(tmp_path):
+    repo = repo_with_skills(tmp_path, "tdd")
+    git_repo(repo)
+    (repo / "src" / "deep").mkdir(parents=True)
+    skill_folder(tmp_path / "cfg" / "skills", "tdd")
+    done = run_hook(tmp_path, json.dumps({"session_id": "abc", "cwd": str(repo / "src" / "deep")}).encode(), cwd=repo)
+    assert done.returncode == 0
+    assert shadowed(Store.open(tmp_path / "store")) == [(REPO, "hook", "abc", "tdd", 1, 0)]
+
+
+def test_letter_case_aside_and_an_unreadable_manifest_leave_copy_unknown(tmp_path):
+    repo = repo_with_skills(tmp_path, "tdd")
+    (repo / ".claude" / "skills" / "pocock.json").write_text("{half", "utf-8")
+    personal = tmp_path / "personal"
+    skill_folder(personal, "TDD")
+    [clash] = shadow.clashes(repo, personal)
+    assert (clash.skill, clash.copy, clash.same_text) == ("tdd", None, False)
+    store = Store.open(tmp_path / "store")
+    shadow.write_shadowed(store, repo=repo, personal=personal, repo_name=REPO, session=None)
+    assert shadowed(store) == [(REPO, "hook", None, "tdd", None, 0)]

@@ -1,5 +1,6 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
-7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9); `python -m orch_it labels sync` (#398 decision 6).
+7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9); `python -m orch_it labels sync` (#398 decision 6); `python -m orch_it skills shadowed` (#397 decision 3), a
+session-start hook that exits 0 whatever happens.
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -9,15 +10,14 @@ field or detail) to stderr and the exit code is 2.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
 
 from orch_it import labels, settings
 from orch_it.events import queries, schema, transcripts
-from orch_it.skills import shadow
 from orch_it.events.store import QueryResult, Store, StoreError
+from orch_it.skills import shadow
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
@@ -229,26 +229,21 @@ def _run(args) -> str:
     raise AssertionError(command)
 
 
+def _repo_or_none(work_tree: Path) -> str | None:
+    try:
+        return _repo_of(str(work_tree))
+    except CommandError:
+        return None
+
+
 def _skills_shadowed(args) -> int:
-    """The SessionStart hook (#397 decision 3): reads the hook's JSON from stdin, writes the
-    events, prints nothing, and exits 0 whatever happens, so it never blocks a session."""
+    """The SessionStart hook (#397 decision 3): prints nothing and exits 0 whatever happens, so it
+    never blocks a session; an error goes to stderr."""
 
     try:
-        hook = json.loads(sys.stdin.buffer.read().decode("utf-8"))
-        if not isinstance(hook, dict):
-            return 0
-        cwd = hook.get("cwd") if isinstance(hook.get("cwd"), str) else "."
-        session = hook.get("session_id") if isinstance(hook.get("session_id"), str) else None
-        try:
-            repo_name = _repo_of(cwd)
-        except CommandError:
-            return 0
-        shadow.write_shadowed(_store(args), repo=Path(cwd), personal=shadow.personal_folder(),
-                              repo_name=repo_name, session=session)
-    except (ValueError, UnicodeDecodeError):
-        return 0
+        shadow.run_hook(sys.stdin.buffer.read(), open_store=lambda: _store(args), repo_of=_repo_or_none)
     except Exception as e:  # fail open: a broken hook must never stop a session
-        print(f"error: {getattr(e, 'code', type(e).__name__)}: {e}", file=sys.stderr)
+        print(f"error: {e}", file=sys.stderr)
     return 0
 
 
