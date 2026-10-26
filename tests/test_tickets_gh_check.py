@@ -5,6 +5,7 @@ violations the label comes off and a comment lists them; the body is never edite
 import json
 import re
 import shlex
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -67,8 +68,7 @@ def test_an_edit_of_a_ready_ticket_is_judged_and_any_other_event_is_not():
 def test_the_ticket_is_judged_as_it_stands_now_not_as_the_event_held_it():
     hub = FakeHub()
     stale = ready(hub, "good_basic")
-    hub.issues[(REPO, 1)] = type(hub.issues[(REPO, 1)])(**{**hub.issues[(REPO, 1)].__dict__,
-                                                             "body": fixture("bad_weight_missing")[1]})
+    hub.issues[(REPO, 1)] = replace(hub.issues[(REPO, 1)], body=fixture("bad_weight_missing")[1])
     assert gh_check.check_event(stale, hub).codes == ["weight_missing"]
     hub.add(3, fixture("bad_weight_missing")[1], [])  # its label was already taken off
     assert gh_check.check_event(event("labeled", 3, ["ready-for-agent"], "ready-for-agent"), hub).outcome == "skipped"
@@ -85,6 +85,36 @@ def test_the_hook_and_the_github_check_give_the_same_violations(name, tmp_path):
     in_session = hook.judge({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path),
                              "transcript_path": str(TRANSCRIPT)}, hub=FakeHub(), repo_of=lambda folder: REPO)
     assert on_github.codes == [code for code in in_session.codes if code in tickets.RULES] == EXPECTED[name]
+
+
+@pytest.mark.parametrize("bad", [
+    {"action": "labeled", "issue": {"number": 1}, "repository": ["x"]},
+    {"action": "edited", "issue": {"number": 1, "labels": 5}, "repository": {"full_name": REPO}},
+    {"action": "labeled", "issue": {"number": True}, "repository": {"full_name": REPO}},
+    {"action": "labeled", "issue": [], "repository": {"full_name": REPO}},
+])
+def test_a_payload_of_another_shape_is_skipped(bad):
+    assert gh_check.check_event(bad, FakeHub()).outcome == "skipped"
+
+
+def test_a_name_in_the_body_is_never_notified_by_the_comment():
+    hub = FakeHub()
+    title, body = fixture("good_basic")
+    hub.add(1, body.replace("Weight: 3", "Weight: @someone"), ["ready-for-agent"], title=title)
+    gh_check.check_event(event("labeled", 1, ["ready-for-agent"], "ready-for-agent"), hub)
+    assert "@someone" not in hub.notes[(REPO, 1)][0].body
+
+
+class CommentFails(FakeHub):
+    def comment(self, repo, number, body):
+        raise RuntimeError("HTTP 403")
+
+
+def test_the_label_comes_off_before_the_comment_so_no_comment_says_what_did_not_happen():
+    hub = CommentFails()
+    with pytest.raises(RuntimeError):
+        gh_check.check_event(ready(hub, "bad_weight_missing"), hub)
+    assert "ready-for-agent" not in hub.issues[(REPO, 1)].labels
 
 
 def test_check_github_reads_the_event_file_and_prints_what_it_did(tmp_path, monkeypatch, capsys):
