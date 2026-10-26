@@ -1,8 +1,9 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
-7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9);
+7 and 9 for `import-github` and `test-places`), `python -m orch_it tests run` (#394 decision 9);
 `python -m orch_it labels sync` (#398 decision 6); `python -m orch_it guards scan` (#395 decision 4:
 it prints one line per private value found and exits 1 when there is any); `python -m orch_it skills
-shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m
+shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m orch_it
+research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m
 orch_it skills check` and `skills update` (#397 decision 4).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
@@ -21,6 +22,9 @@ from orch_it import labels, settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.guards import scanner
+from orch_it.research import mcp as research_mcp
+from orch_it.research import run as research_run
+from orch_it.research.settings import ResearchRefused, ResearchSettings
 from orch_it.skills import shadow, update
 from orch_it.skills.copies import SkillsError
 from orch_it.skills.forge import GithubForge
@@ -35,6 +39,8 @@ EXIT_INTERRUPTED = 130
 # stopped): a script tells "red" from "no answer" without reading the line
 TESTS_EXIT = {"passed": 0, "failed": 1}
 TESTS_EXIT_OTHER = 3
+# `research` exits the same way: 0 passed, 1 failed (a reply that is no report), 3 no result
+RESEARCH_EXIT = TESTS_EXIT
 
 
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
@@ -174,7 +180,31 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
     p.add_argument("--dispatch-tests", action="store_true",
                    help="start the tests workflow on the branch (a workflow token's pull request starts none)")
+
+    p = commands.add_parser("research", parents=[common], help="run a brief through the research bridge")
+    p.add_argument("brief", help="the brief file (Markdown); the report goes to the path it names")
+    p.add_argument("--model", help=f"a model alias of the setting research.models: {_aliases()} "
+                                   "(default: by brief size)")
+    p.add_argument("--no-reddit", action="store_true", help="primary sources: no Reddit link required")
+    p.add_argument("--report", metavar="PATH", help="write the report here instead of the brief's path")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+    p.add_argument("--ticket", type=int)
+    p.add_argument("--done-file", metavar="PATH", help=argparse.SUPPRESS)  # the MCP front's job answer
+    p.add_argument("--job", help=argparse.SUPPRESS)  # the MCP front's job id, carried by the started event
+
+    commands.add_parser("research-mcp", help="the research bridge's MCP server on stdin and stdout")
     return root
+
+
+def _aliases() -> str:
+    """The aliases the settings name, for the help text; a settings file that cannot be read
+    leaves the help plain (the command then says what is wrong)."""
+
+    try:
+        return ", ".join(ResearchSettings.from_settings(settings.load()).models) or "none set"
+    except settings.SettingsError:
+        return "see the settings"
 
 
 def render(result: QueryResult) -> str:
@@ -266,6 +296,21 @@ def _one_line(path: str | None) -> str:
 def _labels_sync(args) -> str:
     done = labels.sync(args.repo or _repo_of("."))
     return render(QueryResult(["label", "action"], done))
+
+
+def _research(args) -> tuple[str, int]:
+    try:
+        brief = Path(args.brief).read_text("utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        raise ResearchRefused("brief_unreadable", f"{args.brief}: {e}") from None
+    repo = args.repo or research_run.repo_of(Path(args.work_tree))
+    done = research_run.research(
+        brief, settings=ResearchSettings.from_settings(settings.load()), store=_store(args), repo=repo,
+        work_tree=Path(args.work_tree), brief_name=Path(args.brief).stem, model=args.model,
+        no_reddit=args.no_reddit, report_to=args.report, ticket=args.ticket, job=args.job)
+    if args.done_file:
+        research_run.write_done(Path(args.done_file), done)
+    return done.line(), RESEARCH_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
 
 
 def _run(args) -> str:
@@ -364,11 +409,15 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _labels_sync(args), 0
         elif args.group == "skills":
             text, code = _skills(args), 0
+        elif args.group == "research":
+            text, code = _research(args)
+        elif args.group == "research-mcp":
+            return research_mcp.serve()
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, SkillsError, CommandError,
-            RunError, scanner.ScanError) as e:
+            RunError, scanner.ScanError, ResearchRefused) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
