@@ -17,7 +17,10 @@ It is the tickets' `GhHub` (issues, comments, runs, all through `gh api`) plus t
   cache repo under the data folder (`merge-cache/<owner>__<name>.git`) that fetches the base and
   `refs/pull/<n>/head` over https with `gh` as the credential helper; git runs through an
   injectable callable (`orch_it.merge.git.run` by default), as `gh` does;
-- issues of red main: by label, create, close; and whether Actions is on for the repo.
+- issues of red main: by label, create, close; and whether Actions is on for the repo;
+- the events artifacts of the workflows (`orch-it-events-*`): the newest `EVENT_ARTIFACT_PAGES`
+  pages of the repo's artifacts (a sweep before this one brought the older ones), each unpacked
+  with `gh run download`.
 
 The error rule is the `Hub`'s: a call that fails or answers badly raises
 `orch_it.testruns.github.GithubError` (`gh_failed`, `gh_timeout`, `gh_bad_output`), a thing that
@@ -54,6 +57,8 @@ from orch_it.testruns.github import (
 from orch_it.tickets.hub import Comment, GhHub, _moment, _text
 
 CACHE_FOLDER = "merge-cache"
+EVENTS_ARTIFACT_PREFIX = "orch-it-events-"
+EVENT_ARTIFACT_PAGES = 3  # of 100 artifacts each, newest first
 BASE_REF, PULL_REF = "refs/orch/base", "refs/orch/pr"
 BRANCH_RUN_EVENTS = ("push", "schedule", "workflow_dispatch")
 METHODS = ("merge", "squash", "rebase")
@@ -347,6 +352,22 @@ class GhPullHub(GhHub):
         if not isinstance(found.get("enabled"), bool):
             raise GithubError("gh_bad_output", f"{repo}: actions/permissions with no `enabled`")
         return found["enabled"]
+
+    def event_artifacts(self, repo: str) -> list[tuple[str, str]]:
+        found = []
+        for page in range(1, EVENT_ARTIFACT_PAGES + 1):
+            items = self._pages(["api", f"repos/{repo}/actions/artifacts?per_page=100&page={page}"], "artifacts")
+            for item in items:
+                run = item.get("workflow_run") if isinstance(item.get("workflow_run"), dict) else {}
+                if (_text(item.get("name")).startswith(EVENTS_ARTIFACT_PREFIX) and not item.get("expired")
+                        and type(run.get("id")) is int):
+                    found.append((str(run["id"]), item["name"]))
+            if len(items) < 100:
+                break
+        return found
+
+    def download_artifact(self, repo: str, run_id: str, name: str, folder: Path) -> None:
+        self.gh(["run", "download", str(run_id), "--repo", repo, "-n", name, "-D", str(folder)])
 
     # --- helpers ----------------------------------------------------------------------------
 

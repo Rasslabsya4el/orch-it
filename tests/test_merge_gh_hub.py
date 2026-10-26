@@ -104,6 +104,22 @@ def test_a_pull_request_that_merged_between_the_list_and_its_read_is_not_listed_
     assert [p.number for p in GhPullHub(gh).open_pulls(REPO, "main")] == [5]
 
 
+def test_the_events_artifacts_are_the_layer_s_own_unexpired_ones_from_the_newest_pages():
+    page = [{"name": "orch-it-events-follow-7-1", "expired": False, "workflow_run": {"id": 7}},
+            {"name": "junit-linux-1", "expired": False, "workflow_run": {"id": 7}},
+            {"name": "orch-it-events-follow-6-1", "expired": True, "workflow_run": {"id": 6}},
+            {"name": "orch-it-events-main-5-1", "expired": False, "workflow_run": None}]
+    gh = Gh(([f"repos/{REPO}/actions/artifacts?per_page=100&page=1"], {"artifacts": page}))
+    assert GhPullHub(gh).event_artifacts(REPO) == [("7", "orch-it-events-follow-7-1")]
+    assert len(gh.calls) == 1  # a short page is the last
+
+
+def test_an_artifact_is_unpacked_with_gh_run_download(tmp_path):
+    gh = Gh((["run", "download"], ""))
+    GhPullHub(gh).download_artifact(REPO, "7", "orch-it-events-follow-7-1", tmp_path)
+    assert gh.calls == [["run", "download", "7", "--repo", REPO, "-n", "orch-it-events-follow-7-1", "-D", str(tmp_path)]]
+
+
 def test_a_pull_request_is_closed_by_its_state():
     gh = Gh(([f"repos/{REPO}/pulls/5", "PATCH"], {}))
     GhPullHub(gh).close_pull(REPO, 5)

@@ -60,6 +60,7 @@ class FakeGitHub(FakeHub):
         self.on_merge = []  # callables run after each merge, given the pull request number
         self.merge_refusals = 0  # the next merges GitHub refuses for a reason of its own
         self.next_number = 100
+        self.event_files: dict[str, dict[str, str]] = {}  # artifact name -> {relative path: text}
         self._shas = 0
 
     # building the world
@@ -242,6 +243,15 @@ class FakeGitHub(FakeHub):
 
     def actions_enabled(self, repo):
         return self.actions
+
+    def event_artifacts(self, repo):
+        return [("0", name) for name in sorted(self.event_files)]
+
+    def download_artifact(self, repo, run_id, name, folder):
+        for relative, text in self.event_files[name].items():
+            path = folder / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, "utf-8")
 
     def later(self, **delta):
         super().later(**delta)
