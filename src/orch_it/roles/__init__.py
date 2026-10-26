@@ -31,7 +31,9 @@ from orch_it.events import pricing
 ROLES_FILE = Path(__file__).with_name("roles.json")
 AGENTS_FOLDER = Path(".claude") / "agents"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-ROLE_KEYS = ("model", "effort", "fallback")
+ROLE_KEYS = ("model", "effort", "fallback", "inputs")
+# what a spawn fills for a role's subagent (#399 decision 3); a role with none is a session, never spawned
+INPUTS = ("issue", "unit", "diff", "worktree", "scratchpad")
 ERROR_CODES = ("settings_unreadable", "bad_setting", "frontmatter_missing", "agent_unreadable", "agent_unwritable",
                "work_tree_missing")
 _ROLE = re.compile(r"[a-z][a-z0-9-]{0,63}")
@@ -58,6 +60,7 @@ class Role:
     model: str
     effort: str | None
     fallback: str
+    inputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -121,7 +124,11 @@ def _role(name: object, value: object) -> Role:
         raise RolesError("bad_setting", f"{where}.effort")
     if not isinstance(fallback, str) or not _MODEL.fullmatch(fallback) or fallback == model:
         raise RolesError("bad_setting", f"{where}.fallback")
-    return Role(name, model, effort, fallback)
+    inputs = value.get("inputs", [])
+    if (not isinstance(inputs, list) or any(item not in INPUTS for item in inputs)
+            or len(set(inputs)) != len(inputs)):
+        raise RolesError("bad_setting", f"{where}.inputs")
+    return Role(name, model, effort, fallback, tuple(inputs))
 
 
 def _split(text: str) -> tuple[list[str], list[str]] | None:
