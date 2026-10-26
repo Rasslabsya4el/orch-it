@@ -157,7 +157,9 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
             for sha in _new_commits(work_tree, local, remote, remote_name)))
         if not commits or _is_private(visibility or visibility_of, remote_url):
             return "", 0
-        hits = scanner.scan_commits(work_tree, commits, patterns or scanner.Patterns.of_machine())
+        if patterns is None:
+            patterns = scanner.Patterns.of_machine(allowed_emails=_profile_emails(repo))
+        hits = scanner.scan_commits(work_tree, commits, patterns)
     except Exception as exc:  # a guard that crashes lets the push through, and says so
         _write_crash(store, exc, repo)
         return "", 0
@@ -171,6 +173,26 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
         _say(_refusal(hits))
         return "", EXIT_REFUSED
     return "", 0
+
+
+def _profile_emails(repo: str) -> tuple[str, ...]:
+    """The public profile emails that are NOT private data (decision 4): the authenticated
+    account's and the repo owner's, read from GitHub now; a reader that fails adds nothing, so
+    at worst that address is treated as private. The scanner already exempts noreply addresses."""
+
+    logins = ["user"]  # `gh api user` is the authenticated account
+    owner = repo.split("/", 1)[0] if "/" in repo else ""
+    if owner:
+        logins.append(f"users/{owner}")
+    found: list[str] = []
+    for endpoint in logins:
+        try:
+            email = github.run_gh(["api", endpoint, "--jq", ".email"]).strip()
+        except github.GithubError:
+            continue
+        if email and email != "null" and "@" in email:
+            found.append(email)
+    return tuple(found)
 
 
 def _write_crash(store, exc: BaseException, repo: str) -> None:
