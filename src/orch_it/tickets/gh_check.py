@@ -56,31 +56,39 @@ def read_event(path: str | Path) -> dict:
 def check_event(event: object, hub: Hub) -> CheckResult:
     """Judge the ticket of an `issues` event; take `ready-for-agent` off a ticket with violations."""
 
-    if not isinstance(event, dict) or not isinstance(event.get("issue"), dict):
+    issue_part = event.get("issue") if isinstance(event, dict) else None
+    repository = event.get("repository") if isinstance(event, dict) else None
+    if not isinstance(issue_part, dict) or not isinstance(repository, dict):
         return CheckResult(None, "skipped")
-    number = event["issue"].get("number")
-    repo = (event.get("repository") or {}).get("full_name")
-    if not isinstance(number, int) or not isinstance(repo, str):
+    number, repo = issue_part.get("number"), repository.get("full_name")
+    if type(number) is not int or not isinstance(repo, str):
         return CheckResult(None, "skipped")
-    held = {_name(label) for label in event["issue"].get("labels") or []}
+    labels = issue_part.get("labels") if isinstance(issue_part.get("labels"), list) else []
     action = event.get("action")
     if action == "labeled":
         if _name(event.get("label")) != READY_LABEL:
             return CheckResult(number, "skipped")
-    elif action != "edited" or READY_LABEL not in held:
+    elif action != "edited" or READY_LABEL not in {_name(label) for label in labels}:
         return CheckResult(number, "skipped")
     issue = hub.issue(repo, number)
-    if issue is None or issue.is_pr or READY_LABEL not in {label.lower() for label in issue.labels}:
+    ready = [label for label in issue.labels if label.lower() == READY_LABEL] if issue else []
+    if issue is None or issue.is_pr or not ready:
         return CheckResult(number, "skipped")  # its label already came off, or it is gone
     found = violations(parse(issue.body, title=issue.title, labels=issue.labels))
     if not found:
         return CheckResult(number, "kept")
-    listed = "\n".join(f"- `{v.code}`: {v.rule}" for v in found)
+    # the label first: a comment never says it came off when it did not; a failed comment fails the run
+    hub.remove_label(repo, number, ready[0])
+    listed = "\n".join(f"- `{v.code}`: {_quiet(v.rule)}" for v in found)
     hub.comment(repo, number, f"{LAYER_MARK}\nThe shape check took `{READY_LABEL}` off this ticket. Write it again "
                               f"with the `write-ticket` skill, then set the label again:\n\n{listed}\n")
-    held_name = next(label for label in issue.labels if label.lower() == READY_LABEL)
-    hub.remove_label(repo, number, held_name)
     return CheckResult(number, "removed", list(dict.fromkeys(v.code for v in found)))
+
+
+def _quiet(text: str) -> str:
+    """A detail copied from the body, with no `@name` that would notify someone."""
+
+    return text.replace("@", "@" + chr(0x200B))
 
 
 def _name(label: object) -> str:
