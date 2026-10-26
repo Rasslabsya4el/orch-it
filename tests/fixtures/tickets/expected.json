@@ -1,0 +1,86 @@
+{
+  "_about": "Each fixture body of the shape rules (#398 decision 2, acceptance row 1) with every violation code it holds, written by hand from the rules, never from the code. The real_* bodies are #393, #394 and #395 adapted to the new form (a Weight line; this PC's paths taken out).",
+  "good_basic": [],
+  "good_class_none": [],
+  "good_parked": [],
+  "good_adds_events": [],
+  "real_393": [],
+  "real_394": [],
+  "real_395": [],
+  "bad_title_too_long": [
+    "title_too_long"
+  ],
+  "bad_title_parked": [
+    "title_parked"
+  ],
+  "bad_title_issue_number": [
+    "title_issue_number"
+  ],
+  "bad_human_block_missing": [
+    "human_block_missing"
+  ],
+  "bad_human_block_not_first": [
+    "human_block_not_first"
+  ],
+  "bad_human_field_missing": [
+    "human_field_missing"
+  ],
+  "bad_human_field_empty": [
+    "human_field_missing"
+  ],
+  "bad_human_field_order": [
+    "human_field_order"
+  ],
+  "bad_human_field_not_russian": [
+    "human_field_not_russian"
+  ],
+  "bad_human_field_path": [
+    "human_field_path"
+  ],
+  "bad_human_field_line_ref": [
+    "human_field_path"
+  ],
+  "bad_agent_block_missing": [
+    "agent_block_missing"
+  ],
+  "bad_acceptance_missing": [
+    "acceptance_missing"
+  ],
+  "bad_acceptance_no_check_column": [
+    "acceptance_missing"
+  ],
+  "bad_outside_case_missing": [
+    "outside_case_missing"
+  ],
+  "bad_outside_case_no_row": [
+    "outside_case_no_row"
+  ],
+  "bad_class_none_without_why": [
+    "outside_case_missing"
+  ],
+  "bad_same_object_missing": [
+    "same_object_missing"
+  ],
+  "bad_events_row_missing": [
+    "events_row_missing"
+  ],
+  "bad_weight_missing": [
+    "weight_missing"
+  ],
+  "bad_weight_outside_range": [
+    "weight_bad"
+  ],
+  "bad_weight_not_a_number": [
+    "weight_bad"
+  ],
+  "bad_fenced_lines_do_not_count": [
+    "outside_case_missing"
+  ],
+  "bad_empty_body": [
+    "title_too_long",
+    "title_parked",
+    "title_issue_number",
+    "human_block_missing",
+    "agent_block_missing"
+  ]
+}
