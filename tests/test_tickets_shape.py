@@ -83,7 +83,8 @@ def test_a_field_written_twice_is_out_of_order():
 
 def test_a_pipe_escaped_in_a_cell_stays_in_the_cell():
     title, body = fixture("good_basic")
-    ticket = tickets.parse(body.replace("| 1 | cart shipping cost for 10115 |", r"| 1 | cart cost for 10115 \| 10117 |"))
+    escaped = body.replace("| 1 | cart shipping cost for 10115 |", r"| 1 | cart cost for 10115 \| 10117 |")
+    ticket = tickets.parse(escaped)
     assert ticket.acceptance[0].check == r"cart cost for 10115 \| 10117"
     assert ticket.acceptance[0].passes == "equals the payment page cost for 10115"
 
@@ -117,6 +118,44 @@ def test_the_outside_case_names_its_row(line, codes):
 def test_an_events_row_is_any_row_whose_check_names_the_events():
     title, body = fixture("good_adds_events")
     assert codes_of(title, body.replace("| 5 | events: the", "| 5 | the events of the")) == []
+
+
+@pytest.mark.parametrize("field, text", [
+    ("What", "-" * 60_000), ("What", "../" * 8_000), ("What", "a.a/" * 8_000)], ids=["dashes", "dots", "folders"])
+def test_a_long_run_of_path_marks_is_judged_in_time(field, text):
+    title, body = fixture("good_basic")
+    written = body.replace(f"- **{field}:**", f"- **{field}:** {text} ")
+    started = time.monotonic()
+    tickets.violations(tickets.parse(written, title=title))
+    assert time.monotonic() - started < 2
+
+
+def test_a_long_heading_or_row_cell_is_read_in_time():
+    title, body = fixture("good_basic")
+    written = (body.replace("Not in this ticket:", "## Not in this ticket" + " " * 100_000 + "x\nNot in:")
+               .replace("| 1 |", "| 1" + " " * 100_000 + "x |"))
+    started = time.monotonic()
+    tickets.violations(tickets.parse(written, title=title))
+    assert time.monotonic() - started < 2
+
+
+def test_a_row_without_its_check_or_pass_is_half_written():
+    title, body = fixture("good_basic")
+    written = body.replace("| 2 | cart shipping cost for 20095 | equals the payment page cost for 20095 |",
+                           "| 2 | | |")
+    assert [(v.code, v.detail) for v in tickets.violations(tickets.parse(written, title=title))] == [
+        ("acceptance_missing", "no check or pass in row 2")]
+
+
+def test_a_row_named_before_a_bracket_and_a_title_github_trims_are_read_as_written():
+    title, body = fixture("good_basic")
+    assert codes_of(title, body.replace("(row 3).", "(row 3.)")) == []
+    assert codes_of("x" * 80 + "  ", body) == []
+
+
+def test_an_adds_line_that_adds_nothing_needs_no_events_row():
+    title, body = fixture("good_basic")
+    assert codes_of(title, body.replace("Weight: 3", "Weight: 3\nAdds: nothing, no step")) == []
 
 
 @pytest.mark.parametrize("weight", ["7abc", "5-6", "-3"])

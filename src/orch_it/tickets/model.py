@@ -33,14 +33,14 @@ READY_LABEL = "ready-for-agent"
 PARKED_LABEL = "parked"
 PRIORITY_LABEL = "priority"
 
-_FENCE = re.compile(r"\s{0,3}(```|~~~)")
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
 _BULLET = re.compile(r"[-*+]\s+")
 _BOLD_NAME = re.compile(r"\*\*([^*\n]+?)(?::\*\*|\*\*:)\s*")  # `**Name:**` or `**Name**:`
-_AFTER_MERGE = re.compile(r"(.*?)[\s,;]*\(?after merge\)?", re.IGNORECASE)
-_NOT_IN_HEADING = re.compile(r"#{2,6}\s*Not in this ticket\s*:?\s*#*", re.IGNORECASE)
+_AFTER_MERGE = "after merge"
+_NOT_IN_HEADING = "not in this ticket"
 _NONE = re.compile(r"none\b\s*(?:\((?P<paren>.*)\)\s*\.?|[-–—:,;]\s*(?P<after>.*)|\.?)",
                    re.IGNORECASE | re.DOTALL)
-_WEIGHT = re.compile(r"(\d{1,3})(?:\s.*)?", re.DOTALL)
+_WEIGHT = re.compile(r"([0-9]{1,3})(?:\s.*)?", re.DOTALL)  # ASCII digits only
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ class Ticket:
     weight_text: str | None  # what follows `Weight:`
     adds: tuple[str, ...]  # the items of `Adds:`, e.g. `step claim`, `role launcher`
     park_lines: tuple[str, ...]  # every `Parked:` line outside fenced code, wherever it stands
-    labels: frozenset[str]
+    labels: frozenset[str]  # lower case, as GitHub compares label names
 
     @property
     def human(self) -> dict[str, str]:
@@ -134,8 +134,25 @@ def parse(body: str | None, *, title: str | None = None, labels: Iterable[str] =
         weight_text=singles.get("weight"),
         adds=tuple(item.strip() for item in re.split(r"[,;]", singles.get("adds") or "") if item.strip()),
         park_lines=tuple(line.strip() for _, line in plain if line.strip().startswith(PARK_PREFIX)),
-        labels=frozenset(label for label in labels if isinstance(label, str)),
+        labels=_label_names(labels),
     )
+
+
+def _label_names(labels: object) -> frozenset[str]:
+    """Label names as GitHub's own rule compares them, lower case: from names, or from the
+    objects `gh --json labels` gives (`{"name": ...}`); anything else is no label."""
+
+    if labels is None or isinstance(labels, (str, bytes)):
+        labels = [labels] if isinstance(labels, str) else []
+    names = set()
+    try:
+        for label in labels:
+            name = label.get("name") if isinstance(label, dict) else label
+            if isinstance(name, str) and name.strip():
+                names.add(name.strip().lower())
+    except TypeError:  # not iterable
+        pass
+    return frozenset(names)
 
 
 def none_reason(text: str | None) -> str | None:
@@ -149,24 +166,31 @@ def none_reason(text: str | None) -> str | None:
 
 
 def _outside_fences(lines: list[str]) -> list[tuple[int, str]]:
-    """Every line outside fenced code with its index; an unclosed fence runs to the end."""
+    """Every line outside fenced code with its index, by CommonMark's fence rules: a fence of
+    three or more backticks (no backtick after it) or tildes, indented at most three spaces,
+    closed by a bare fence of the same mark at least as long; an unclosed fence runs to the end."""
 
     kept, fence = [], None
     for i, line in enumerate(lines):
         found = _FENCE.match(line)
-        if found and (fence is None or found.group(1) == fence):
-            fence = found.group(1) if fence is None else None
-        elif fence is None:
-            kept.append((i, line))
+        if fence is None:
+            if found and not (found.group(1)[0] == "`" and "`" in found.group(2)):
+                fence = found.group(1)
+            else:
+                kept.append((i, line))
+        elif (found and found.group(1)[0] == fence[0] and len(found.group(1)) >= len(fence)
+              and not found.group(2).strip()):
+            fence = None
     return kept
 
 
 def _heading_at(plain: list[tuple[int, str]], heading: str, start: int) -> int | None:
-    """The index of the first line from `start` that is the heading: any letter case, closing
-    `#`s or a colon allowed."""
+    """The index of the first line from `start` that is the heading: any letter case, any
+    spaces after the `##`, closing `#`s or a colon allowed."""
 
+    wanted = _heading_text(heading)
     for i, line in plain:
-        if i >= start and line.strip().rstrip("#").rstrip().rstrip(":").rstrip().lower() == heading.lower():
+        if i >= start and line.lstrip().startswith("##") and _heading_text(line) == wanted:
             return i
     return None
 
@@ -229,11 +253,11 @@ def _line_fields(lines: list[str]) -> dict[str, str]:
     return found
 
 
-def _section(lines: list[str], heading: re.Pattern) -> str | None:
+def _section(lines: list[str], heading: str) -> str | None:
     """The text under a heading up to the next heading, joined; None without the heading."""
 
     for i, line in enumerate(lines):
-        if heading.fullmatch(line.strip()):
+        if _heading_text(line) == heading:
             body = []
             for rest in lines[i + 1:]:
                 if rest.lstrip().startswith("#"):
@@ -241,6 +265,27 @@ def _section(lines: list[str], heading: re.Pattern) -> str | None:
                 body.append(rest.strip())
             return " ".join(part for part in body if part) or None
     return None
+
+
+def _heading_text(line: str) -> str | None:
+    """`## Not in this ticket:` -> `not in this ticket`: a heading's words in lower case, its
+    marks and a closing colon left out; None for a line that is no heading."""
+
+    stripped = line.strip()
+    if not stripped.startswith("#"):
+        return None
+    return stripped.strip("#").strip().rstrip(":").strip().lower()
+
+
+def _after_merge(cell: str) -> tuple[str, bool]:
+    """(row id, marked) of a row's first cell: `4 after merge`, `4, after merge` or
+    `4 (after merge)` is row `4` checked only after the merge."""
+
+    words = cell.strip()
+    for mark in (f"({_AFTER_MERGE})", _AFTER_MERGE):
+        if words.lower().endswith(mark):
+            return words[:-len(mark)].rstrip(" ,;\t"), True
+    return words, False
 
 
 def _cells(line: str) -> list[str]:
@@ -271,8 +316,7 @@ def _acceptance(lines: list[str]) -> tuple[AcceptanceRow, ...] | None:
         rows = []
         for cells in table[2:]:
             cells += [""] * (len(header) - len(cells))
-            marked = _AFTER_MERGE.fullmatch(cells[0])
-            row_id = marked.group(1).strip() if marked else cells[0]
-            rows.append(AcceptanceRow(row_id, cells[check], cells[passes], bool(marked)))
+            row_id, marked = _after_merge(cells[0])
+            rows.append(AcceptanceRow(row_id, cells[check], cells[passes], marked))
         return tuple(rows)
     return None

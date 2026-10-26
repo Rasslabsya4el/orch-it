@@ -29,7 +29,7 @@ RULES: dict[str, str] = {
     "human_field_not_russian": "the text of each human field is Russian",
     "human_field_path": "a human field holds no file path and no file:line",
     "agent_block_missing": "the body has the heading `## For the agent` after the human block",
-    "acceptance_missing": "the agent block has an acceptance table with `check` and `pass` columns",
+    "acceptance_missing": "the agent block has an acceptance table with `check` and `pass` filled in",
     "outside_case_missing": "the agent block has `Outside case: <case> (row <id>)` or `Class: none (<why>)`",
     "outside_case_no_row": "the `Outside case:` line names its acceptance row as `row <id>`",
     "same_object_missing": "the agent block has `Same object: <what else acts on it>` or `none (<why>)`",
@@ -64,7 +64,7 @@ _SEGMENT = r"[A-Za-z0-9_.-]"  # ASCII only: a Russian `и/или` is no path
 _PATH = re.compile(
     # a file with a known extension, maybe in folders, maybe with `:line`: `docs/events.md:62`
     rf"(?<![\w.])(?:[A-Za-z]:[\\/]|\.{{0,2}}[\\/])?(?:{_SEGMENT}+[\\/])*[A-Za-z0-9_-]{_SEGMENT}*"
-    rf"\.(?:{_EXTENSIONS})(?![\w-])(?::\d+(?:-\d+)?)?"
+    rf"\.(?i:{_EXTENSIONS})(?![\w-])(?::\d+(?:-\d+)?)?"
     # any name with `:line`, like `Makefile:12` or `src/x:40`
     rf"|(?<![\w.:])(?:{_SEGMENT}+[\\/])*[A-Za-z_]{_SEGMENT}*:\d+(?:-\d+)?(?![\w:])"
     # folders of the code without an extension: `src/orch_it`, `.claude/skills`
@@ -73,9 +73,11 @@ _PATH = re.compile(
     r"|#L\d+")
 # a product named like a file, `Node.js`, is a name, not a path
 _PRODUCT = re.compile(r"[A-Z][a-z]*\.js")
-_ROW = re.compile(r"\brows?\s+#?([\w.-]+?)(?=[\s,;:)\]]|\.(?:\s|$)|$)", re.IGNORECASE)
+_ROW = re.compile(r"\brows?\s+#?([\w.-]+?)(?=[\s,;:)\]]|\.(?:[\s)\]]|$)|$)", re.IGNORECASE)
 _EVENTS_CHECK = re.compile(r"\bevents\b", re.IGNORECASE)
 _ADDS_ROLE_OR_STEP = re.compile(r"\b(?:role|step)s?\b", re.IGNORECASE)
+_ADDS_NOTHING = re.compile(r"(?:none|nothing|no)\b", re.IGNORECASE)
+TOKEN_MAX = 300  # a word longer than any path is read by its head: no regex runs long
 
 
 def violations(ticket: Ticket) -> list[Violation]:
@@ -95,6 +97,7 @@ def _title(title: str | None) -> list[Violation]:
     if title is None:
         return []
     found = []
+    title = title.strip()  # GitHub trims a title
     if len(title) > TITLE_MAX:
         found.append(Violation("title_too_long", f"{len(title)} characters"))
     if _PARKED.search(title):
@@ -129,7 +132,8 @@ def _human(ticket: Ticket) -> list[Violation]:
 
 
 def _paths(text: str) -> list[str]:
-    found = (m.group(0).rstrip(".") for m in _PATH.finditer(_URL.sub(" ", text)))  # a sentence's dot
+    words = (word[:TOKEN_MAX] for word in _URL.sub(" ", text).split())
+    found = (m.group(0).rstrip(".") for word in words for m in _PATH.finditer(word))  # a sentence's dot
     return list(dict.fromkeys(path for path in found if not _PRODUCT.fullmatch(path)))
 
 
@@ -147,6 +151,9 @@ def _agent(ticket: Ticket) -> list[Violation]:
     rows = ticket.acceptance or ()
     if not rows:
         found.append(Violation("acceptance_missing"))
+    half = [row.id or "?" for row in rows if not row.check or not row.passes]
+    if half:
+        found.append(Violation("acceptance_missing", f"no check or pass in row {', '.join(half)}"))
     if ticket.outside_case:
         named = {m.group(1).lower() for m in _ROW.finditer(ticket.outside_case)}
         if rows and not named & {row.id.lower() for row in rows}:
@@ -156,7 +163,8 @@ def _agent(ticket: Ticket) -> list[Violation]:
     same = (ticket.same_object or "").strip()
     if not same or none_reason(same) == "":
         found.append(Violation("same_object_missing"))
-    adds = [item for item in ticket.adds if _ADDS_ROLE_OR_STEP.search(item)]
+    adds = [item for item in ticket.adds
+            if _ADDS_ROLE_OR_STEP.search(item) and not _ADDS_NOTHING.match(item)]
     if adds and not any(_EVENTS_CHECK.search(row.check) for row in rows):
         found.append(Violation("events_row_missing", ", ".join(adds)))
     if ticket.weight_text is None:

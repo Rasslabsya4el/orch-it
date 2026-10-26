@@ -63,3 +63,33 @@ def test_an_unclosed_fence_hides_the_rest_and_another_fence_mark_does_not_close_
     _, body = fixture("good_basic")
     ticket = tickets.parse(body.replace("Weight: 3", "~~~\n```\nWeight: 3"))
     assert ticket.weight_text is None and ticket.outside_case is None
+
+
+def test_labels_are_read_as_github_names_them_whatever_form_they_come_in():
+    _, body = fixture("good_basic")
+    for labels in (["Ready-For-Agent"], [{"name": "ready-for-agent", "color": "0e8a16"}], "ready-for-agent"):
+        assert tickets.parse(body, labels=labels).ready
+    for labels in (None, 5, [None, 3, {"id": 1}], ""):
+        assert tickets.parse(body, labels=labels).labels == frozenset()
+
+
+def test_a_body_or_title_that_is_no_text_reads_as_none():
+    for body in (b"## For the human", 12, ["x"]):
+        assert tickets.parse(body).has_human_block is False
+    assert tickets.parse("", title=123).title is None
+    assert tickets.violations(tickets.parse(b"x", title=b"t"))
+
+
+def test_fences_follow_commonmark():
+    _, body = fixture("good_basic")
+    tilde_holding_backticks = body.replace("Weight: 3", "~~~\n```\n~~~\nWeight: 3")
+    assert tickets.parse(tilde_holding_backticks).weight == 3
+    inline = body.replace("Weight: 3", "```x``` is inline code\nWeight: 3")
+    assert tickets.parse(inline).weight == 3
+    indented = body.replace("Weight: 3", "    ```\nWeight: 3")
+    assert tickets.parse(indented).weight == 3
+
+
+def test_a_weight_in_other_digits_is_no_weight():
+    _, body = fixture("good_basic")
+    assert tickets.parse(body.replace("Weight: 3", "Weight: ٣")).weight is None
