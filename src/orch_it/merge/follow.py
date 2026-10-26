@@ -147,23 +147,6 @@ def ticket_of(hub: PullHub, repo: str, pull: Pull) -> Issue | None:
     return None
 
 
-def follow_conflict(hub: PullHub, store: Store, repo: str, number: int, files: list[str], *,
-                    settings: MergeSettings, now: datetime, role: str = ROLE, owner: str | None = None,
-                    other_pr: int | None = None) -> FollowReport:
-    """The conflict rule for a pull request the merge line could not bring up to date: out of the
-    line, its ticket back to ready with the files, not counted."""
-
-    pull = hub.pull(repo, number)
-    if pull is None:
-        raise FollowError("pr_missing", f"{repo}#{number} is no pull request")
-    referred = refers_to(pull.body)
-    issue = hub.issue(repo, referred) if referred else None
-    one = _Follow(hub, store, repo, pull, issue if issue is not None and not issue.is_pr else None, settings, now, role,
-                  (owner or repo.split("/")[0]).lower(), tuple(DEFAULT_REQUIRED_JOBS))
-    return_conflict(one, files, other_pr)
-    return one.report("conflict", ", ".join(files))
-
-
 def pr_of_event(event: dict, hub: PullHub, repo: str) -> tuple[int | None, str]:
     """The pull request a GitHub event of the `follow` workflow is about, and why when none: a
     pull request, review or review comment event names it; a comment on a pull request is about
