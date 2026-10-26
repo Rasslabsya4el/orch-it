@@ -13,6 +13,8 @@ import re
 import sys
 from dataclasses import dataclass, field
 
+from orch_it.events.schema import EventError
+from orch_it.events.store import StoreError
 from orch_it.guards import paths, processes, triggers
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
@@ -64,6 +66,7 @@ def decide(command: str, *, tool: str, cwd: str, env, windows: bool, session_id:
 
     fired: list[Fired] = []
     deny_reason: str | None = None
+    error: tuple[str, str, bool] | None = None
     cwd_roots = None
     own = None
     for action in actions:
@@ -81,14 +84,17 @@ def decide(command: str, *, tool: str, cwd: str, env, windows: bool, session_id:
             elif isinstance(action, triggers.Stop):
                 refusal = world.judge_stop(action)
                 verdict = "deny" if refusal else "pass"
-                fired.append(Fired(STOP_GUARD, verdict, action.rule_id, action.segment,
+                fired.append(Fired(STOP_GUARD, verdict, refusal.reason if refusal else action.rule_id,
+                                   action.segment,
                                    str(refusal.pid) if refusal and refusal.pid is not None else None))
                 if refusal and deny_reason is None:
                     deny_reason = f"{STOP_GUARD}: {refusal.reason}; {REFUSAL_WAY}"
-        except Exception as exc:  # a guard crashed: let this command through, record the crash
+        except Exception as exc:  # a guard crashed on THIS action: fail open for it, record the
+            # crash, but keep any deny already found and judge the rest (a crash never hides a deny)
             guard = DELETE_GUARD if isinstance(action, (triggers.Delete, triggers.Move)) else STOP_GUARD
-            return Decision(False, None, fired, (guard, type(exc).__name__, True))
-    return Decision(deny_reason is not None, deny_reason, fired, None)
+            if error is None:
+                error = (guard, getattr(exc, "code", type(exc).__name__), True)
+    return Decision(deny_reason is not None, deny_reason, fired, error)
 
 
 def _judge_delete(action, world, cwd_roots, own):
@@ -104,17 +110,37 @@ def _judge_delete(action, world, cwd_roots, own):
     sources = action.targets if is_delete else action.sources
     roots_too = action.roots_too if is_delete else True
     walk_links = action.walk_links if is_delete else False
+    # a command whose own cwd we could not locate (a Windows drive `cd` under Git Bash, say) has
+    # lost the ground its relative targets stand on: those are unresolved, never guessed
+    if action.cwd is not None and not world.cwd_exists(action.cwd):
+        if any(s is not None and world.resolve(s, None) is None for s in sources):
+            return Finding("unresolved_cwd", "")
     for spelled in sources:
         if spelled is None:
             return Finding("unresolved_target", "")
         real = world.resolve(spelled, action.cwd)
         if real is None:
             return Finding("unresolved_target", "")
+        if not world.exists(real):
+            # a glob (`<other>/*`) or a not-yet-existing target: judge the nearest existing
+            # folder it would delete within; a glob over one's own worktree contents is allowed
+            ancestor = world.nearest_dir(real)
+            if ancestor is None:
+                return Finding("unresolved_target", "")
+            if own is not None and _same_path(ancestor, own):
+                continue
+            real = ancestor
         roots = tuple(dict.fromkeys(tuple(cwd_roots) + tuple(world.roots_around(real))))
         finding = world.judge_delete(real, roots, own, roots_too=roots_too, walk_links=walk_links)
         if finding is not None:
             return finding
     return None
+
+
+def _same_path(a: str, b: str) -> bool:
+    import os
+
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 # --- the real world the hook judges against --------------------------------------------------
@@ -128,6 +154,7 @@ class World:
         self.session_id = session_id
         self._facts = processes.PsutilFacts(session_env_var)
         self._agent = processes.this_agent_pid(self._facts, session_id)
+        self._roots_cache: dict = {}
         # fact (c), a store record of (pid, start), is filled when available; the env id and the
         # parent chain prove a session's own processes without it
         self.recorded: set = set()
@@ -137,10 +164,29 @@ class World:
 
     def roots_around(self, real_target):
         """The worktrees of the repo the target itself sits in, read at its nearest existing
-        folder, so a delete aimed into another repo from a cwd outside it is still judged."""
+        folder, so a delete aimed into another repo from a cwd outside it is still judged.
+        Cached per folder: a command with many targets does not re-run git each time."""
 
         here = paths.nearest_existing_dir(real_target)
-        return paths.protected_roots(here, windows=self.windows) if here else ()
+        if here is None:
+            return ()
+        if here not in self._roots_cache:
+            self._roots_cache[here] = paths.protected_roots(here, windows=self.windows)
+        return self._roots_cache[here]
+
+    def exists(self, path):
+        import os
+
+        return path is not None and os.path.lexists(path)
+
+    def nearest_dir(self, path):
+        return paths.nearest_existing_dir(path)
+
+    def cwd_exists(self, cwd):
+        import os
+
+        real = paths.resolve(cwd, None, windows=self.windows)
+        return bool(real) and os.path.isdir(real)
 
     def own_root(self, cwd, roots):
         return paths.deepest_root(paths.resolve(cwd, None, windows=self.windows), roots,
@@ -169,14 +215,27 @@ def run_pre_tool_use(raw_stdin: str, store, *, platform: str = sys.platform) -> 
     prints nothing. Never raises: anything unexpected lets the call through (fail open)."""
 
     try:
+        return _run_pre_tool_use(raw_stdin, store, platform)
+    except Exception:  # the hook must never block a tool call by raising; fail open
+        return "", 0
+
+
+def _run_pre_tool_use(raw_stdin: str, store, platform: str) -> tuple[str, int]:
+    import os
+
+    try:
         payload = json.loads(raw_stdin) if raw_stdin.strip() else {}
-    except ValueError:
+    except (ValueError, RecursionError):
         return "", 0  # input we cannot read: do not block the tool
-    tool_name = payload.get("tool_name") or ""
-    tool_input = payload.get("tool_input") or {}
-    command = tool_input.get("command")
-    cwd = payload.get("cwd") or "."
+    if not isinstance(payload, dict):
+        return "", 0
+    tool_name = payload.get("tool_name") if isinstance(payload.get("tool_name"), str) else ""
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and cwd else "."
     session_id = payload.get("session_id")
+    session_id = session_id if isinstance(session_id, str) else None
     if not isinstance(command, str) or not command.strip():
         return "", 0  # not a shell tool call this guard reads
     tool = "PowerShell" if tool_name in POWERSHELL_TOOLS else "Bash"
@@ -185,21 +244,16 @@ def run_pre_tool_use(raw_stdin: str, store, *, platform: str = sys.platform) -> 
     try:
         world = World(windows=windows, session_id=session_id,
                       session_env_var=processes.DEFAULT_SESSION_ENV_VAR)
-        decision = decide(command, tool=tool, cwd=cwd, env=dict(_os_environ()), windows=windows,
+        decision = decide(command, tool=tool, cwd=cwd, env=dict(os.environ), windows=windows,
                           session_id=session_id, world=world)
     except Exception as exc:  # building the world or judging crashed: fail open, record it
-        _safe_write_error(store, "hook", type(exc).__name__, repo=repo, session=session_id)
+        _safe_write_error(store, "hook", getattr(exc, "code", type(exc).__name__),
+                          repo=repo, session=session_id)
         return "", 0
     _write_events(store, decision, repo=repo, session=session_id)
     if decision.deny:
         return _deny_json(decision.reason), 0
     return "", 0
-
-
-def _os_environ():
-    import os
-
-    return os.environ
 
 
 def _repo_of(cwd: str) -> str:
@@ -213,7 +267,7 @@ def _repo_of(cwd: str) -> str:
         found = _ORIGIN.search(done.stdout.strip()) if done.returncode == 0 else None
         if found:
             return found.group(1)
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return DEFAULT_REPO
 
@@ -231,8 +285,10 @@ def _write_events(store, decision: Decision, *, repo: str, session: str | None) 
                 writer.write(_fired_event(f, repo, session))
             if decision.error is not None:
                 writer.write(_error_event(decision.error, repo, session))
-    except Exception:
-        pass  # the store must never block a tool call; a lost event beats a stuck agent
+    except (OSError, StoreError, EventError) as e:
+        # the store must never block a tool call; a lost event beats a stuck agent, but it is
+        # said once on stderr so a validation slip does not vanish silently
+        print(f"orch-it guard: event not written: {e}", file=sys.stderr)
 
 
 def _envelope(kind: str, repo: str, session: str | None, detail: dict) -> dict:
@@ -260,13 +316,13 @@ def _safe_write_error(store, component, code, *, repo, session) -> None:
     try:
         with store.writer() as writer:
             writer.write(_error_event((component, code, True), repo, session))
-    except Exception:
+    except (OSError, StoreError, EventError):
         pass
 
 
 # --- a false fire, and the counts ------------------------------------------------------------
 
-REVERSE_ERRORS = ("no_such_fire", "not_a_deny")
+REVERSE_ERRORS = ("no_such_fire", "not_a_deny", "already_reversed")
 
 
 class ReverseError(Exception):
@@ -282,23 +338,30 @@ class ReverseError(Exception):
 def reverse(store, fired_event_id: str, *, by: str) -> dict:
     """Mark a `guard.fired` deny as a false fire (decision 7): write a `guard.reversed` naming
     the fired event and who reversed it, so false fires are counted from the store, never from
-    memory. Raises `ReverseError` when the id names no `guard.fired` deny of this store."""
+    memory. Raises `ReverseError` when the id names no `guard.fired` deny, or one already
+    reversed. The reversal keeps the fired event's own repo, so the count stays with it."""
 
     found = store.query(
-        "SELECT guard, verdict FROM events WHERE id = :id AND kind = 'guard.fired'",
+        "SELECT guard, verdict, repo FROM events WHERE id = :id AND kind = 'guard.fired'",
         {"id": fired_event_id})
     if not found.rows:
         raise ReverseError("no_such_fire", fired_event_id)
-    guard, verdict = found.rows[0]
+    guard, verdict, repo = found.rows[0]
     if verdict != "deny":
         raise ReverseError("not_a_deny", fired_event_id)
+    already = store.query(
+        "SELECT 1 FROM events WHERE kind = 'guard.reversed' AND fired_event = :id", {"id": fired_event_id})
+    if already.rows:
+        raise ReverseError("already_reversed", fired_event_id)
     with store.writer() as writer:
-        return writer.write(_envelope("guard.reversed", DEFAULT_REPO, None,
+        return writer.write(_envelope("guard.reversed", repo, None,
                                       {"guard": guard, "fired_event": fired_event_id, "by": by}))
 
 
+# `error.raised` carries no guard code (its component names the part), so it is counted under
+# its component; the other kinds under their guard
 _GUARD_FIRES_SQL = """
-SELECT guard,
+SELECT COALESCE(guard, component) AS guard,
        strftime('%Y-W%W', at) AS week,
        SUM(CASE WHEN kind = 'guard.fired' AND verdict = 'deny' THEN 1 ELSE 0 END) AS denies,
        SUM(CASE WHEN kind = 'guard.fired' AND verdict = 'pass' THEN 1 ELSE 0 END) AS passes,
@@ -306,7 +369,7 @@ SELECT guard,
        SUM(CASE WHEN kind = 'error.raised' AND failed_open THEN 1 ELSE 0 END) AS failed_open
 FROM events
 WHERE kind IN ('guard.fired', 'guard.reversed', 'error.raised')
-GROUP BY guard, week
+GROUP BY COALESCE(guard, component), week
 ORDER BY week, guard
 """
 

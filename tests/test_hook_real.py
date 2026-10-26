@@ -116,3 +116,18 @@ def test_a_false_fire_is_reversed_and_counted(repo, store):
 def test_reverse_refuses_an_id_that_is_no_deny(store):
     with pytest.raises(hook.ReverseError):
         hook.reverse(store, "nope", by="owner")
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "not json", "[]", "5", "null",
+                                 '{"tool_input": "x"}', '{"cwd": 5, "tool_input": {"command": 1}}'])
+def test_the_hook_never_raises_or_blocks_on_bad_input(raw, store):
+    text, code = hook.run_pre_tool_use(raw, store)
+    assert code == 0 and text == ""
+
+
+def test_a_deny_is_reversed_only_once(repo, store):
+    run(f"rm -rf {fwd(repo['other'])}", repo["own"], store)
+    deny_id = store.query("SELECT id FROM events WHERE verdict = 'deny'").rows[0][0]
+    hook.reverse(store, deny_id, by="owner")
+    with pytest.raises(hook.ReverseError):
+        hook.reverse(store, deny_id, by="owner")

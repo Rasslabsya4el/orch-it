@@ -14,6 +14,13 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "command": "python -m orch_it skills shadowed", "timeout": 60}
+        ]
+      }
     ]
   }
 }
