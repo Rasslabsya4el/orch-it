@@ -122,3 +122,24 @@ _Avoid_: model name, model id
 **Job**:
 A research run started by the MCP front and read back later by its id.
 _Avoid_: task, ticket, request
+## Guards
+
+**Guard**:
+A check that reads what a command would act on — the real path, the real process tree, the real visibility of a remote — and refuses the real damage, deciding on the object, not on the words of the command.
+_Avoid_: permission, filter, policy, rule
+
+**Protected root**:
+A folder a guard will not let a command delete or move or reach through a link: a worktree of the repo, the main checkout among them, or the repo's common `.git`.
+_Avoid_: safe path, protected directory, allowlist
+
+**Own process**:
+A process this session started, proven by its session id in its environment, its parent chain to the session's agent, or the store's record of it; any other is foreign and a session may not stop it.
+_Avoid_: child, owned pid, our process
+
+**Private data**:
+What must not reach a public repo, measured on the machine: the home folder in every spelling, the host name, a secret by its published shape, a non-public email, or a word of the per-machine private list.
+_Avoid_: secret, PII, sensitive data
+
+**False fire**:
+A guard refusal a human or the brain marks as wrong; counted from the store through `guard.reversed`, never from memory.
+_Avoid_: false positive, misfire, bad block
