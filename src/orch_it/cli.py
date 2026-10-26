@@ -242,6 +242,13 @@ def _parser() -> argparse.ArgumentParser:
     return root
 
 
+def parser() -> argparse.ArgumentParser:
+    """The command line's parser: the role-text check reads every `python -m orch_it` command a
+    text names against it (#399 decision 4)."""
+
+    return _parser()
+
+
 def _aliases() -> str:
     """The aliases the settings name, for the help text; a settings file that cannot be read
     leaves the help plain (the command then says what is wrong)."""
