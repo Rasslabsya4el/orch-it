@@ -46,6 +46,10 @@ class Change:
     new_path: str | None
     why: list[str] = field(default_factory=list)
 
+    def __post_init__(self):
+        if self.cls not in CLASSES:
+            raise ValueError(f"not a class: {self.cls}")
+
     @property
     def old_name(self) -> str | None:
         return skill_name(self.old_path) if self.old_path else None
