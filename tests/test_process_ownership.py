@@ -111,6 +111,10 @@ class Tree:
     def live_pids(self):
         return list(self._p)
 
+    def ppid(self, pid):
+        r = self._p.get(pid)
+        return r.get("ppid") if r else None
+
     def name(self, pid):
         r = self._p.get(pid)
         return r.get("name") if r else None
