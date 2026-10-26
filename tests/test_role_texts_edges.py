@@ -33,6 +33,8 @@ RIGHT = {
     "a role of another kind": {"docs/y.md": "Send a `system` role message.\n"},
     "a big task called high effort": {"docs/y.md": "A high effort ticket takes days.\n"},
     "a haiku": {"docs/y.md": "A Haiku 5 7 5 is short.\n"},
+    "one step label in two files": {"docs/a.md": "1. **Records.** Write the notes of the day.\n",
+                                    "docs/b.md": "2. **Records.** Keep the run's numbers.\n"},
     "an ADR saying a rule again": {"docs/adr/0001-x.md": "A ticket closes only when its pull request merges green.\n",
                                    "docs/y.md": "A ticket closes only when its pull request merges green.\n"},
 }
