@@ -313,3 +313,17 @@ def test_the_new_rule_ids_are_in_the_closed_set():
                  "perl-e", "ruby-e", "dotnet-delete", "dotnet-kill", "rimraf", "deno-remove", "shred",
                  "truncate", "dd", "redirect-overwrite"):
         assert rule in triggers.RULE_IDS, rule
+
+
+@pytest.mark.parametrize("command", [
+    "cat <<", "cat <<EOF", "cat <<EOF | bash", "bash <<'EOF'\nrm -rf", "python - <<EOF\nos.system(",
+    "python -c \"import os; os.system('\"", "python -c \"subprocess.run([\"", "node -e \"exec(\"",
+    "node -e \"child_process.spawn(\"", "perl -e 'unlink'", "ruby -e 'FileUtils.rm_rf'",
+    "powershell -enc", "powershell -EncodedCommand", "git -C", "git clean -", "git checkout --",
+    "shred", "truncate -s", "dd of=", "echo >", "echo > >(cat)", "> ", ">>", "$(", "[IO.Directory]::Delete(",
+    "$p.Kill(", "case x in (", "function f() {", "cat <<-\x00H0\x00",
+])
+def test_the_new_readers_never_raise_on_malformed_input(command):
+    act(command)
+    act(command, tool="PowerShell", windows=True)
+    act(command, windows=True)

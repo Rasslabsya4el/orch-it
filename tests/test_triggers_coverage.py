@@ -305,3 +305,12 @@ def test_a_non_literal_shell_command_is_opaque():
 ])
 def test_a_delete_word_in_a_plain_string_without_a_shell_call_does_not_fire(command):
     assert not any(isinstance(a, (Delete, Stop)) for a in act(command)), act(command)
+
+
+# --- a substitution in an assignment runs too -------------------------------------------------
+
+def test_a_command_substitution_in_an_assignment_is_read():
+    assert deletes(f"x=$(rm -rf {OTHER})")[0].targets == (OTHER,)
+    assert deletes(f"FOO=$(rm -rf {OTHER}) env")[0].targets == (OTHER,)
+    out = deletes(f"x=$(cat <<EOF\n$(rm -rf {OTHER})\nEOF\n)")
+    assert out and out[0].targets == (OTHER,)

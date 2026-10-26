@@ -144,7 +144,9 @@ class _PosixSplit:
                 if int(k) < len(self.heredocs)]
         assignments, rest = _leading_assignments(tokens)
         for name, raw in assignments:
-            self.env[name] = self._expand_word(raw)[0] or ""
+            value, assigned_subs = self._expand_word(raw)
+            self.env[name] = value or ""
+            self.walker.out.extend(assigned_subs)  # `x=$(rm -rf y)` runs the substitution
         if not rest:
             return
         words, subs = self._expand_all(rest)
