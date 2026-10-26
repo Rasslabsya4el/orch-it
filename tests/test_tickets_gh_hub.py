@@ -85,6 +85,17 @@ def test_comments_are_read_with_who_wrote_them_and_written_from_a_file():
     assert gh.inputs[-1] == {"body": "a long text " * 5000}
 
 
+def test_one_label_comes_off_by_its_url_encoded_name_and_one_already_gone_is_no_error():
+    gh = Gh((["-X", "DELETE", f"repos/{REPO}/issues/10/labels/ready%20for%3Aagent"], [{"name": "priority"}]),
+            (["-X", "DELETE", f"repos/{REPO}/issues/11/labels/parked"], NOT_FOUND),
+            (["-X", "DELETE", f"repos/{REPO}/issues/12/labels/parked"], GithubError("gh_failed", "HTTP 403")))
+    hub = GhHub(gh)
+    hub.remove_label(REPO, 10, "ready for:agent")
+    hub.remove_label(REPO, 11, "parked")
+    with pytest.raises(GithubError):
+        hub.remove_label(REPO, 12, "parked")
+
+
 def test_the_last_time_the_parked_label_went_on_is_read_from_the_issue_events():
     gh = Gh(([f"repos/{REPO}/issues/10/events?per_page=100"], [
         {"event": "labeled", "label": {"name": "parked"}, "created_at": "2026-11-01T08:00:00Z"},

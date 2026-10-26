@@ -242,3 +242,5 @@ passed, 1 on failed, 3 on any other outcome; a run the settings cannot serve is 
 `orch-it-research`; its tools `research_start` and `research_job` run a brief as a background job: `research_job` answers `running` (with
 the run's latest progress), `ended` (the run's end as the command line's `--done-file` writes it, plus the report text
 and its path) or `gone` (`worker_died`, `worker_lost`: the job's process ended with no answer).
+
+`python -m orch_it tickets check-github --event <file>`: the shape check of the workflow `ticket-shape` on an `issues` event: a ticket that got `ready-for-agent`, or a ready ticket that was edited, is read again and judged by the shape rules; with violations the label comes off, then a comment lists them (the body is never edited); prints `#<n> kept`, `#<n> removed: <codes>` or `skipped`; an event file that is no JSON object is `error: event_unreadable`.
