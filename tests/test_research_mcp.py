@@ -1,0 +1,218 @@
+"""The MCP front of the research bridge (#396 decisions 1 and 5, rows 3, 5 and 6): the server
+`python -m orch_it research-mcp` that `.mcp.json` registers as `orch-it-research`, started here
+as Claude Code starts it (the environment `.mcp.json`'s `env` expands, nothing else of ours),
+speaking newline-delimited JSON-RPC on stdin and stdout."""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from orch_it import cli
+from research_bridge import BRIEF, KEY_ENV, PROMPT_ONLY, Bridge, report_messages
+
+REPO = Path(__file__).parents[1]
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+ENTRY = json.loads((REPO / ".mcp.json").read_text("utf-8"))["mcpServers"]["orch-it-research"]
+# the provider key's variable `.mcp.json` hands the server (the settings' `research.key_env` names it)
+KEY_ENV_IN_MCP = next(name for name in ENTRY["env"] if not name.startswith("ORCH_IT_"))
+
+
+def expanded_env(base: dict) -> dict:
+    """The server's environment as Claude Code makes it from `.mcp.json`: its `env` with each
+    `${VAR}` / `${VAR:-default}` filled from `base`, over the few variables any process needs."""
+
+    def fill(text):
+        def one(match):
+            name, _, default = match.group(1).partition(":-")
+            return base.get(name) or default
+        return re.sub(r"\$\{([^}]+)\}", one, text)
+
+    keep = {name: value for name, value in base.items()
+            if name.upper() in ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE",
+                                "LOCALAPPDATA", "APPDATA", "OPENCODE_STUB_SCENARIO", "PYTHONPATH")}
+    return keep | {name: fill(value) for name, value in ENTRY.get("env", {}).items()}
+
+
+class McpServer:
+    """The server process and a JSON-RPC conversation with it, every read bounded."""
+
+    def __init__(self, env: dict, cwd: Path):
+        assert ENTRY["command"] == "python" and ENTRY["args"] == ["-m", "orch_it", "research-mcp"]
+        self.process = subprocess.Popen([sys.executable, *ENTRY["args"]], cwd=cwd, env=env,
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                        creationflags=NO_WINDOW)
+        self.lines: list[str] = []
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+        self.next_id = 0
+
+    def _read(self):
+        for line in self.process.stdout:
+            self.lines.append(line.decode("utf-8"))
+
+    def call(self, method: str, params: dict | None = None, seconds: float = 30) -> dict:
+        self.next_id += 1
+        message = {"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params or {}}
+        self.process.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+        self.process.stdin.flush()
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            for line in list(self.lines):
+                reply = json.loads(line)
+                if reply.get("id") == self.next_id:
+                    return reply
+            time.sleep(0.02)
+        raise AssertionError(f"no reply to {method} in {seconds} s")
+
+    def tool(self, name: str, arguments: dict, seconds: float = 30) -> dict:
+        reply = self.call("tools/call", {"name": name, "arguments": arguments}, seconds)["result"]
+        text = reply["content"][0]["text"]
+        return {"error": text} if reply.get("isError") else json.loads(text)
+
+    def close(self):
+        self.process.stdin.close()
+        try:
+            self.process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=15)
+
+
+@pytest.fixture
+def mcp(tmp_path):
+    servers = []
+
+    def start(bridge: Bridge, *, with_key=True) -> McpServer:
+        base = dict(bridge.env) | {"ORCH_IT_SETTINGS": str(bridge.settings_file),
+                                   "ORCH_IT_STORE": str(bridge.store.root)}
+        base[KEY_ENV_IN_MCP] = base.pop(KEY_ENV) if with_key else ""
+        if not with_key:
+            base.pop(KEY_ENV_IN_MCP)
+        server = McpServer(expanded_env(base), bridge.work_tree)
+        servers.append(server)
+        server.call("initialize", {"protocolVersion": "2024-11-05"})
+        return server
+
+    yield start
+    for server in servers:
+        server.close()
+
+
+def bench(tmp_path, **scenario) -> Bridge:
+    """The bench with the key under the name `.mcp.json` passes, the settings naming it."""
+
+    made = Bridge(tmp_path, key_env=KEY_ENV_IN_MCP, **scenario)
+    subprocess.run(["git", "init", "-q", str(made.work_tree)], check=True, creationflags=NO_WINDOW)
+    subprocess.run(["git", "-C", str(made.work_tree), "remote", "add", "origin",
+                    "https://github.com/owner/repo.git"], check=True, creationflags=NO_WINDOW)
+    return made
+
+
+def wait_done(server: McpServer, job: str, seconds: float = 90) -> dict:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        status = server.tool("research_status", {"job": job, "wait_s": 2})
+        if status["state"] != "running":
+            return status
+    raise AssertionError("the job did not end")
+
+
+def test_the_tools_list_offers_the_aliases_of_the_settings(tmp_path, mcp):
+    server = mcp(bench(tmp_path))
+    tools = {tool["name"]: tool for tool in server.call("tools/list")["result"]["tools"]}
+    assert set(tools) == {"research_start", "research_status"}
+    assert tools["research_start"]["inputSchema"]["properties"]["model"]["enum"] == ["tiny", "other"]
+
+
+def test_a_brief_through_the_mcp_returns_the_report_text_and_its_path(tmp_path, mcp):
+    bridge = bench(tmp_path, messages=report_messages("lost-report-380"))
+    server = mcp(bridge)
+    started = server.tool("research_start", {"brief": BRIEF, "model": "tiny"})
+    assert started["state"] == "running"
+    done = wait_done(server, started["job"])
+    target = bridge.work_tree / "docs" / "research" / "2026-10-26-test.md"
+    assert (done["state"], done["outcome"], done["report_from"]) == ("done", "passed", "earlier")
+    assert done["report_path"] == str(target) and done["report"] == target.read_text("utf-8")
+    assert len(done["report"]) == 38973
+    assert bridge.seen()["prompts"][0]["model"]["modelID"] == "model-x-9"
+    assert bridge.seen()["key_present"] is True
+
+
+def test_the_cli_and_the_mcp_end_with_the_same_shape_and_the_same_events(tmp_path, mcp, monkeypatch):
+    for name in ("mcp", "cli"):
+        (tmp_path / name).mkdir()
+    by_mcp = bench(tmp_path / "mcp")
+    server = mcp(by_mcp)
+    done = wait_done(server, server.tool("research_start", {"brief": BRIEF, "model": "tiny"})["job"])
+
+    by_cli = bench(tmp_path / "cli")
+    for name, value in by_cli.env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv(KEY_ENV_IN_MCP, "not-a-real-key")
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(by_cli.settings_file))
+    (by_cli.tmp / "brief.md").write_text(BRIEF, "utf-8")
+    shape_file = by_cli.tmp / "done.json"
+    assert cli.main(["--store", str(by_cli.store.root), "research", str(by_cli.tmp / "brief.md"), "--model", "tiny",
+                     "--work-tree", str(by_cli.work_tree), "--repo", "owner/repo",
+                     "--done-file", str(shape_file)]) == 0
+    shape = json.loads(shape_file.read_text("utf-8"))
+
+    assert set(shape) <= set(done)
+    varying = {"run", "minutes", "report_path", "partial_path", "opencode_session"}
+    assert {k: v for k, v in shape.items() if k not in varying} == {
+        k: done[k] for k in shape if k not in varying}
+
+    def events(bridge):
+        out = []
+        for kind, detail in bridge.store.query(
+                "SELECT kind, detail FROM events WHERE step = 'research_run' AND kind != 'step.progressed'"
+                " ORDER BY at").rows:
+            detail = json.loads(detail)
+            out.append((kind, {k: v for k, v in detail.items() if k not in varying and k != "brief"}))
+        return out
+
+    assert events(by_cli) == events(by_mcp)
+
+
+def test_with_the_key_in_the_mcp_env_the_server_finds_it_and_without_it_refuses_naming_it(tmp_path, mcp):
+    bridge = bench(tmp_path)
+    refused = mcp(bridge, with_key=False).tool("research_start", {"brief": BRIEF})
+    assert "key_missing" in refused["error"] and KEY_ENV_IN_MCP in refused["error"]
+    assert not bridge.record.exists()
+
+
+def test_an_alias_not_in_the_settings_is_refused_before_any_server(tmp_path, mcp):
+    bridge = bench(tmp_path)
+    refused = mcp(bridge).tool("research_start", {"brief": BRIEF, "model": "luna"})
+    assert "unknown_model" in refused["error"] and "tiny" in refused["error"]
+    assert not bridge.record.exists()
+
+
+def test_a_bounded_job_ends_no_result_with_the_partial_report(tmp_path, mcp):
+    bridge = bench(tmp_path, mode="hang", messages=PROMPT_ONLY, minutes=0.03)
+    server = mcp(bridge)
+    done = wait_done(server, server.tool("research_start", {"brief": BRIEF})["job"])
+    assert (done["state"], done["outcome"], done["reason"]) == ("done", "no_result", "time_bound")
+    assert done["partial_path"].endswith("2026-10-26-test.partial.md") and "report" not in done
+    bridge.assert_tree_gone()
+
+
+@pytest.mark.parametrize("job", ["../x", "", "a/b", "nope-20260101"])
+def test_an_unknown_or_bad_job_is_an_error_not_a_crash(tmp_path, mcp, job):
+    server = mcp(bench(tmp_path))
+    assert "unknown_job" in server.tool("research_status", {"job": job})["error"]
+    assert server.call("ping")["result"] == {}
+
+
+def test_bad_json_rpc_lines_are_skipped_and_unknown_methods_answered(tmp_path, mcp):
+    server = mcp(bench(tmp_path))
+    server.process.stdin.write(b"not json\n\n[1,2]\n")
+    server.process.stdin.flush()
+    assert server.call("no/such")["error"]["code"] == -32601

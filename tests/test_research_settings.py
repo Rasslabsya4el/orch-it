@@ -58,6 +58,8 @@ def test_no_research_setting_at_all_reads_but_refuses_a_run():
     ("helpers", "yes"), ("minutes", 0), ("minutes", float("nan")), ("minutes", 10**9), ("stall_minutes", True),
     ("key_env", "A-B"), ("key_env", ""), ("provider", {"id": ""}), ("provider", {"id": "p", "options": []}),
     ("provider", "p"), ("opencode", []), ("opencode", ["ok", 3]), ("opencode", "a\x00b"), ("state", ""),
+    ("state", "relative/folder"), ("helper", True), ("stall_minute", 5),
+    ("default_model", [{"up_to_chars": 50, "model": "small"}, {"up_to_chars": 50, "model": "big"}, {"model": "big"}]),
 ])
 def test_a_setting_of_the_wrong_shape_is_refused_naming_it(key, value):
     with pytest.raises(SettingsError) as refused:
@@ -73,7 +75,8 @@ def test_research_that_is_no_object_is_refused():
 def test_the_key_is_read_from_the_variable_the_setting_names():
     chosen = settings()
     assert chosen.key({"ORCH_IT_TEST_KEY": "k-1"}) == "k-1"
-    for env in ({}, {"ORCH_IT_TEST_KEY": ""}):
+    assert chosen.key({"ORCH_IT_TEST_KEY": " k-1\n"}) == "k-1"
+    for env in ({}, {"ORCH_IT_TEST_KEY": ""}, {"ORCH_IT_TEST_KEY": "  \n"}):
         with pytest.raises(ResearchRefused) as refused:
             chosen.key(env)
         assert refused.value.code == "key_missing" and "ORCH_IT_TEST_KEY" in str(refused.value)

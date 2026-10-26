@@ -1,6 +1,6 @@
 """`python -m orch_it research <brief>`, the command-line front of the research bridge (#396
 decision 1): one line of the result, exit 0 passed, 1 failed, 3 any other outcome, 2 a refusal;
-`--result-file` writes the result shape as JSON."""
+`--done-file` writes the end of the run as JSON."""
 
 import json
 
@@ -34,10 +34,10 @@ def test_a_passed_run_prints_its_line_and_exits_0(tmp_path, monkeypatch, capsys)
     assert bridge.seen()["prompts"][0]["model"]["modelID"] == "model-x-9"
 
 
-def test_the_result_file_holds_the_result_shape(tmp_path, monkeypatch):
+def test_the_done_file_holds_the_end_of_the_run(tmp_path, monkeypatch):
     bridge = prepared(tmp_path, monkeypatch)
-    result = tmp_path / "result.json"
-    assert main(bridge, "--result-file", str(result)) == 0
+    result = tmp_path / "done.json"
+    assert main(bridge, "--done-file", str(result)) == 0
     shape = json.loads(result.read_text("utf-8"))
     assert shape["outcome"] == "passed" and shape["tokens"]["tokens_in"] > 0
     assert shape["report_path"].endswith("2026-10-26-test.md")

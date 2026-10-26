@@ -17,8 +17,9 @@ installation's settings file:
 - `state`: the folder of runs and jobs, default `research` beside the store in orch-it's data
   folder, never inside a repo.
 
-A value of the wrong shape raises `SettingsError("bad_setting", "research.<key>")`; a run the
-settings cannot serve raises `ResearchRefused` before any server starts.
+A value of the wrong shape, or a key not in this list (a typo would be silently ignored), raises
+`SettingsError("bad_setting", "research.<key>")`; a run the settings cannot serve raises
+`ResearchRefused` before any server starts.
 """
 
 from __future__ import annotations
@@ -32,7 +33,9 @@ from orch_it import settings as installation
 from orch_it.settings import SettingsError
 
 REFUSAL_CODES = ("research_not_set", "unknown_model", "key_missing", "brief_unreadable",
-                 "report_path_outside", "repo_unknown", "opencode_missing")
+                 "report_path_outside", "repo_unknown", "opencode_missing", "state_in_git_tree")
+KEYS = ("models", "default_model", "provider", "key_env", "opencode", "helpers", "minutes",
+        "stall_minutes", "state")
 AGENT = "orch-it-research"
 MAX_MINUTES = 7 * 24 * 60
 _ALIAS = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
@@ -66,6 +69,9 @@ class ResearchSettings:
         research = raw.get("research", {})
         if not isinstance(research, dict):
             raise SettingsError("bad_setting", "research")
+        for key in research:
+            if key not in KEYS:
+                raise SettingsError("bad_setting", f"research.{key}")
         values: dict = {}
         if research.get("models") is not None:
             values["models"] = _models(research["models"])
@@ -88,9 +94,10 @@ class ResearchSettings:
             if research.get(key) is not None:
                 values[key] = _minutes(key, research[key])
         if research.get("state") is not None:
-            if not isinstance(research["state"], str) or not research["state"].strip():
-                raise SettingsError("bad_setting", "research.state")
-            values["state"] = Path(research["state"]).expanduser()
+            state = research["state"]
+            if not isinstance(state, str) or not state.strip() or not Path(state).expanduser().is_absolute():
+                raise SettingsError("bad_setting", "research.state")  # relative would land wherever it runs
+            values["state"] = Path(state).expanduser()
         return cls(**values)
 
     def _require_set(self) -> None:
@@ -121,7 +128,7 @@ class ResearchSettings:
         naming the variable."""
 
         self._require_set()
-        value = env.get(self.key_env) or ""
+        value = (env.get(self.key_env) or "").strip()
         if not value:
             raise ResearchRefused("key_missing", f"the environment variable {self.key_env} is not set")
         return value
@@ -173,6 +180,8 @@ def _default_model(value, aliases: dict) -> tuple[tuple[int | None, str], ...]:
             raise SettingsError("bad_setting", "research.default_model")
         up_to = step.get("up_to_chars")
         if last != (up_to is None) or (up_to is not None and (type(up_to) is not int or up_to < 0)):
+            raise SettingsError("bad_setting", "research.default_model")
+        if up_to is not None and out and up_to <= out[-1][0]:  # the steps rise
             raise SettingsError("bad_setting", "research.default_model")
         out.append((up_to, step["model"]))
     return tuple(out)

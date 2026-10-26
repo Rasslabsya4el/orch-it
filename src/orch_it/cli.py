@@ -17,6 +17,7 @@ from pathlib import Path
 from orch_it import settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
+from orch_it.research import mcp as research_mcp
 from orch_it.research import run as research_run
 from orch_it.research.settings import ResearchRefused, ResearchSettings
 from orch_it.testruns import github
@@ -132,14 +133,27 @@ def _parser() -> argparse.ArgumentParser:
 
     p = commands.add_parser("research", parents=[common], help="run a brief through the research bridge")
     p.add_argument("brief", help="the brief file (Markdown); the report goes to the path it names")
-    p.add_argument("--model", help="a model alias of the setting research.models (default: by brief size)")
+    p.add_argument("--model", help=f"a model alias of the setting research.models: {_aliases()} "
+                                   "(default: by brief size)")
     p.add_argument("--no-reddit", action="store_true", help="primary sources: no Reddit link required")
     p.add_argument("--report", metavar="PATH", help="write the report here instead of the brief's path")
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
     p.add_argument("--ticket", type=int)
-    p.add_argument("--result-file", metavar="PATH", help=argparse.SUPPRESS)  # the MCP front's job file
+    p.add_argument("--done-file", metavar="PATH", help=argparse.SUPPRESS)  # the MCP front's job answer
+
+    commands.add_parser("research-mcp", help="the research bridge's MCP server on stdin and stdout")
     return root
+
+
+def _aliases() -> str:
+    """The aliases the settings name, for the help text; a settings file that cannot be read
+    leaves the help plain (the command then says what is wrong)."""
+
+    try:
+        return ", ".join(ResearchSettings.from_settings(settings.load()).models) or "none set"
+    except settings.SettingsError:
+        return "see the settings"
 
 
 def render(result: QueryResult) -> str:
@@ -185,20 +199,14 @@ def _research(args) -> tuple[str, int]:
         brief = Path(args.brief).read_text("utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
         raise ResearchRefused("brief_unreadable", f"{args.brief}: {e}") from None
-    repo = args.repo or _repo_of(args.work_tree)
+    repo = args.repo or research_run.repo_of(Path(args.work_tree))
     done = research_run.research(
         brief, settings=ResearchSettings.from_settings(settings.load()), store=_store(args), repo=repo,
         work_tree=Path(args.work_tree), brief_name=Path(args.brief).stem, model=args.model,
         no_reddit=args.no_reddit, report_to=args.report, ticket=args.ticket)
-    if args.result_file:
-        research_run.write_result(Path(args.result_file), done)
-    tokens = done.tokens
-    line = (f"run={done.run} outcome={done.outcome} reason={done.reason or '-'} model={done.model_alias}"
-            f" report={done.report_path or done.partial_path or '-'} report_from={done.report_from or '-'}"
-            f" chars={done.report_chars} links={done.links} reddit_urls={done.reddit_urls}"
-            f" compactions={done.compactions} minutes={done.minutes}"
-            f" tokens_in={tokens.get('tokens_in', 0)} helper_tokens_in={tokens.get('helper_tokens_in', 0)}\n")
-    return line, RESEARCH_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
+    if args.done_file:
+        research_run.write_done(Path(args.done_file), done)
+    return done.line(), RESEARCH_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
 
 
 def _run(args) -> str:
@@ -257,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _tests_run(args)
         elif args.group == "research":
             text, code = _research(args)
+        elif args.group == "research-mcp":
+            return research_mcp.serve()
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,

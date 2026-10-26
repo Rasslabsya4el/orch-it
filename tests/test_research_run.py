@@ -3,9 +3,15 @@
 the run `no_result` with the partial report beside the path and no process left, and what the
 settings cannot serve is refused before any server starts."""
 
+import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
+
+from orch_it.research import opencode, run
+from orch_it.research.opencode import OpencodeError
 
 from orch_it.research.settings import ResearchRefused
 from research_bridge import BRIEF, KEY_ENV, PROMPT_ONLY, Bridge, report_messages
@@ -117,14 +123,84 @@ def test_a_server_that_dies_at_start_ends_the_run_no_result(tmp_path):
 
 
 def test_two_runs_at_once_have_their_own_servers_and_files(tmp_path):
-    import threading
-
-    bridges = [Bridge(tmp_path / name) for name in ("a", "b") if (tmp_path / name).mkdir() is None]
-    results = [None, None]
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+    bridges = [Bridge(tmp_path / "a"), Bridge(tmp_path / "b")]
+    results = {}
     threads = [threading.Thread(target=lambda n=n: results.__setitem__(n, bridges[n].run())) for n in (0, 1)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join(timeout=60)
-    assert [r.outcome for r in results] == ["passed", "passed"]
+    assert not any(thread.is_alive() for thread in threads), "a run did not end in 60 s"
+    assert [results[n].outcome for n in (0, 1)] == ["passed", "passed"]
     assert bridges[0].seen()["pid"] != bridges[1].seen()["pid"]
+
+
+def test_a_named_report_path_that_cannot_be_written_keeps_the_report_in_the_run_folder(tmp_path):
+    bridge = Bridge(tmp_path)
+    (bridge.work_tree / "docs" / "research" / "2026-10-26-test.md").mkdir(parents=True)  # a folder in the way
+    done = bridge.run()
+    assert done.outcome == "passed"
+    assert Path(done.report_path) == tmp_path / "state" / "runs" / done.run / "report.md"
+    [ended] = bridge.events("step.ended")
+    assert ended["named_path_error"]
+
+
+def test_a_status_call_that_fails_now_and_then_does_not_end_the_run(tmp_path, monkeypatch):
+    real = opencode.Client.busy
+    calls = {"n": 0}
+
+    def flaky(self, session):
+        calls["n"] += 1
+        if calls["n"] in (2, 3):
+            raise OpencodeError("unreachable", "a moment's hiccup")
+        return real(self, session)
+
+    monkeypatch.setattr(opencode.Client, "busy", flaky)
+    done = Bridge(tmp_path).run()
+    assert done.outcome == "passed"
+
+
+def test_a_wall_clock_jumping_forward_does_not_stall_a_working_run(tmp_path):
+    calls = {"n": 0}
+
+    def wall():  # an hour forward from the 20th reading on, well inside the wait
+        calls["n"] += 1
+        return time.time() + (3600 if calls["n"] >= 20 else 0)
+
+    bridge = Bridge(tmp_path, mode="hang", messages=PROMPT_ONLY, minutes=30, stall_minutes=0.05)
+    done = bridge.run(wall=wall)
+    # the forward jump trips the time bound (a sleeping machine still cuts the run), never the stall
+    assert (done.outcome, done.reason) == ("no_result", "time_bound")
+
+
+def test_an_error_of_the_bridge_itself_still_closes_the_pair(tmp_path, monkeypatch):
+    def broken(messages, *, require_reddit):
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(run.report, "choose", broken)
+    bridge = Bridge(tmp_path)
+    with pytest.raises(RuntimeError):
+        bridge.run()
+    [ended] = bridge.events("step.ended")
+    assert (ended["outcome"], ended["reason"], ended["error"]) == ("no_result", "bridge_error", "RuntimeError")
+    bridge.assert_tree_gone()
+
+
+@pytest.mark.parametrize("brief", ["", "   \n", "x" * (run.MAX_BRIEF_CHARS + 1)], ids=["empty", "blank", "huge"])
+def test_an_empty_or_huge_brief_is_refused_before_any_server(tmp_path, brief):
+    bridge = Bridge(tmp_path)
+    with pytest.raises(ResearchRefused) as refused:
+        bridge.run(brief=brief)
+    assert refused.value.code == "brief_unreadable" and not bridge.record.exists()
+
+
+def test_a_state_folder_inside_a_git_work_tree_is_refused(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    bridge = Bridge(tmp_path, state=str(repo / "state"))
+    with pytest.raises(ResearchRefused) as refused:
+        bridge.run()
+    assert refused.value.code == "state_in_git_tree" and bridge.events() == []

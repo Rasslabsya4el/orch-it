@@ -27,23 +27,27 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
-import urllib.parse
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from orch_it.events.ids import live_id
-from orch_it.events.store import Store
+from orch_it.events.store import Store, _git_work_tree_around
 from orch_it.research import report, usage
 from orch_it.research.opencode import OpencodeError, Server, find_opencode
 from orch_it.research.settings import AGENT, ResearchRefused, ResearchSettings
+from orch_it.testruns.runner import git_output
 
 ROLE = "external-researcher"
 POLL_SECONDS = 2.0
 PROGRESS_SECONDS = 15.0
 GRACE_SECONDS = 10.0  # `prompt_async` answers before the work starts: idle means done only after this
+BUSY_FAILURES = 5  # status calls failing in a row before the server counts as gone
+MAX_BRIEF_CHARS = 200_000
 REPORT_NAME = re.compile(r"`(docs/research/[^`\s]+\.md)`")
+_ORIGIN = re.compile(r"(?:github\.com[:/])([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 
 TAIL = (
     "\n\nUse live web search for every question; open Reddit threads (reddit.com / old.reddit.com), "
@@ -59,7 +63,7 @@ TAIL_NO_REDDIT = TAIL.replace(
 
 
 @dataclass(frozen=True)
-class Result:
+class ResearchDone:
     """What a run ended with: the same shape from both fronts."""
 
     run: str
@@ -81,6 +85,32 @@ class Result:
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+    def line(self) -> str:
+        """The one line the command line prints."""
+
+        return (f"run={self.run} outcome={self.outcome} reason={self.reason or '-'} model={self.model_alias}"
+                f" report={self.report_path or self.partial_path or '-'} report_from={self.report_from or '-'}"
+                f" chars={self.report_chars} links={self.links} reddit_urls={self.reddit_urls}"
+                f" compactions={self.compactions} minutes={self.minutes}"
+                f" tokens_in={self.tokens.get('tokens_in', 0)}"
+                f" helper_tokens_in={self.tokens.get('helper_tokens_in', 0)}\n")
+
+
+def repo_of(work_tree: Path) -> str:
+    """`owner/name` of the work tree's `origin` on GitHub, or `repo_unknown`."""
+
+    origin = git_output(work_tree, "remote", "get-url", "origin")
+    found = _ORIGIN.search(origin) if origin else None
+    if not found:
+        raise ResearchRefused("repo_unknown", f"{work_tree}: no GitHub origin; give the repo")
+    return found.group(1)
+
+
+def brief_sha(brief: str) -> str:
+    """The short hash the started event carries: a job finds its run by it."""
+
+    return hashlib.sha256(brief.encode("utf-8")).hexdigest()[:12]
 
 
 def report_path_of(brief: str, work_tree: Path, given: str | Path | None = None) -> Path | None:
@@ -106,16 +136,20 @@ def research(brief: str, *, settings: ResearchSettings, store: Store, repo: str,
              brief_name: str = "brief", model: str | None = None, no_reddit: bool = False,
              report_to: str | Path | None = None, ticket: int | None = None, env=None,
              poll_seconds: float = POLL_SECONDS, progress_seconds: float = PROGRESS_SECONDS,
-             grace_seconds: float = GRACE_SECONDS, wall=time.time) -> Result:
+             grace_seconds: float = GRACE_SECONDS, wall=time.time) -> ResearchDone:
     env = dict(os.environ if env is None else env)
+    if not brief.strip() or len(brief) > MAX_BRIEF_CHARS:
+        raise ResearchRefused("brief_unreadable", "empty" if not brief.strip() else f"over {MAX_BRIEF_CHARS} characters")
     alias = model or settings.alias_for(len(brief))
     model_id = settings.model_id(alias)
-    settings.key(env)
+    settings.key(env)  # refused here, before any server, when the variable is unset
     try:
         argv = find_opencode(list(settings.opencode) if isinstance(settings.opencode, tuple) else settings.opencode)
     except OpencodeError as e:
         raise ResearchRefused("opencode_missing", str(e)) from None
     target = report_path_of(brief, work_tree, report_to)
+    if _git_work_tree_around(settings.state) is not None:
+        raise ResearchRefused("state_in_git_tree", str(settings.state))
     config = settings.opencode_config()
     provider_id = next(iter(config["provider"]))
 
@@ -123,106 +157,126 @@ def research(brief: str, *, settings: ResearchSettings, store: Store, repo: str,
     folder = settings.state / "runs" / run
     work = folder / "work"
     work.mkdir(parents=True, exist_ok=True)
-    target = target or folder / "report.md"
     envelope = {"repo": repo, "ticket": ticket, "role": ROLE, "session": None, "parent_session": None,
                 "turn": None, "step": "research_run", "run": run, "note": None}
     started_mono, started_wall = time.monotonic(), wall()
     with store.writer() as writer:
         writer.write({"kind": "step.started", **envelope, "detail": {
-            "brief": brief_name, "brief_chars": len(brief),
-            "brief_sha": hashlib.sha256(brief.encode("utf-8")).hexdigest()[:12],
+            "brief": brief_name, "brief_chars": len(brief), "brief_sha": brief_sha(brief),
             "model_alias": alias, "model": model_id, "no_reddit": no_reddit, "helpers": settings.helpers}})
         session = None
-        bounded = None
-        messages: list = []
-        tree = usage.TreeUsage(usage.Usage(), usage.Usage(), 0, 0, 0, 0)
-        server_error = None
         try:
-            with Server(argv, config=config, env=env, state_dir=folder, work_dir=work) as client:
-                session = client.create_session(f"orch-it research {brief_name}")
-                client.prompt(session, agent=AGENT, provider_id=provider_id, model_id=model_id,
-                              text=brief + (TAIL_NO_REDDIT if no_reddit else TAIL))
-                bounded = _wait(client, session, settings, writer, envelope, poll_seconds=poll_seconds,
-                                progress_seconds=progress_seconds, grace_seconds=grace_seconds, wall=wall)
-                if bounded:
-                    try:
-                        client.abort(session)
-                    except OpencodeError:
-                        pass  # the server goes down with its tree on the way out anyway
-                messages = client.messages(session)
-                tree = usage.meter(session, children=client.children, messages=client.messages,
-                                   read_errors=(OpencodeError,))
-        except OpencodeError as e:
-            server_error = e
-        except KeyboardInterrupt:
-            writer.write({"kind": "step.ended", **envelope, "detail": {
-                "outcome": "stopped", "minutes": _minutes(started_mono, started_wall, wall),
-                "opencode_session": session}})
-            raise
+            bounded = abort_failed = None
+            messages: list = []
+            tree = usage.TreeUsage(usage.Usage(), usage.Usage(), 0, 0, 0, 0)
+            server_error = None
+            try:
+                with Server(argv, config=config, env=env, state_dir=folder, work_dir=work) as client:
+                    session = client.create_session(f"orch-it research {brief_name}")
+                    client.prompt(session, agent=AGENT, provider_id=provider_id, model_id=model_id,
+                                  text=brief + (TAIL_NO_REDDIT if no_reddit else TAIL))
+                    bounded = _wait(client, session, settings, writer, envelope, poll_seconds=poll_seconds,
+                                    progress_seconds=progress_seconds, grace_seconds=grace_seconds, wall=wall)
+                    if bounded:
+                        try:
+                            client.abort(session)
+                            abort_failed = False
+                        except OpencodeError:
+                            abort_failed = True  # the server goes down with its tree on the way out anyway
+                    messages = client.messages(session)
+                    tree = usage.meter(session, children=client.children, messages=client.messages,
+                                       read_errors=(OpencodeError,))
+            except OpencodeError as e:
+                server_error = e
 
-        chosen = report.choose(messages, require_reddit=not no_reddit)
-        if server_error is not None and not messages:
-            outcome, reason = "no_result", "server_failed"
-        elif bounded:
-            outcome, reason = "no_result", bounded
-        elif chosen.text is not None:
-            outcome, reason = "passed", None
-        elif chosen.reason in report.CHECK_REASONS:
-            outcome, reason = "failed", chosen.reason
-        else:
-            outcome, reason = "no_result", chosen.reason
-        report_path = partial_path = None
-        if outcome == "passed":
-            _write(target, chosen.text)
-            report_path = str(target)
-        else:
-            written = chosen.text or _all_text(messages)
-            if written.strip():
-                partial = target.with_name(f"{target.stem}.partial.md")
-                _write(partial, written)
-                partial_path = str(partial)
-        result = Result(run, outcome, reason, alias, model_id, report_path, partial_path, chosen.report_from,
-                        chosen.chars, chosen.links, chosen.reddit_urls, chosen.last_chars, chosen.compactions,
-                        _minutes(started_mono, started_wall, wall), session, tree.detail())
-        writer.write({"kind": "step.ended", **envelope, "detail": {
-            "outcome": outcome, "reason": reason, "report_path": report_path, "partial_path": partial_path,
-            "report_from": chosen.report_from, "report_chars": chosen.chars, "links": chosen.links,
-            "reddit_urls": chosen.reddit_urls, "last_chars": chosen.last_chars,
-            "compactions": chosen.compactions, "minutes": result.minutes, "opencode_session": session,
-            "server_error": server_error.code if server_error else None, **tree.detail()}})
-    return result
+            chosen = report.choose(messages, require_reddit=not no_reddit)
+            if server_error is not None and not messages:
+                outcome, reason = "no_result", "server_failed"
+            elif bounded:
+                outcome, reason = "no_result", bounded
+            elif chosen.text is not None:
+                outcome, reason = "passed", None
+            elif chosen.reason in report.CHECK_REASONS:
+                outcome, reason = "failed", chosen.reason
+            else:
+                outcome, reason = "no_result", chosen.reason
+            report_path = partial_path = named_path_error = None
+            if outcome == "passed":
+                report_path, named_path_error = _write_kept(target, folder / "report.md", chosen.text)
+            else:
+                written = chosen.text or _all_text(messages)
+                if written.strip():
+                    stem = target.stem if target else "report"
+                    partial_path, named_path_error = _write_kept(
+                        target.with_name(f"{stem}.partial.md") if target else None,
+                        folder / f"{stem}.partial.md", written)
+            done = ResearchDone(run, outcome, reason, alias, model_id, report_path, partial_path,
+                                chosen.report_from, chosen.chars, chosen.links, chosen.reddit_urls,
+                                chosen.last_chars, chosen.compactions,
+                                _elapsed_minutes(started_mono, started_wall, wall), session, tree.detail())
+            writer.write({"kind": "step.ended", **envelope, "detail": {
+                "outcome": outcome, "reason": reason, "report_path": report_path, "partial_path": partial_path,
+                "report_from": chosen.report_from, "report_chars": chosen.chars, "links": chosen.links,
+                "reddit_urls": chosen.reddit_urls, "last_chars": chosen.last_chars,
+                "compactions": chosen.compactions, "minutes": done.minutes, "opencode_session": session,
+                "server_error": server_error.code if server_error else None, "abort_failed": abort_failed,
+                "named_path_error": named_path_error, **tree.detail()}})
+        except BaseException as e:  # the pair is always closed: a person's stop, or the bridge's own failure
+            stopped = isinstance(e, KeyboardInterrupt)
+            writer.write({"kind": "step.ended", **envelope, "detail": {
+                "outcome": "stopped" if stopped else "no_result", "reason": None if stopped else "bridge_error",
+                "minutes": _elapsed_minutes(started_mono, started_wall, wall), "opencode_session": session,
+                "error": None if stopped else type(e).__name__}})
+            raise
+    return done
 
 
 def _wait(client, session: str, settings: ResearchSettings, writer, envelope: dict, *, poll_seconds: float,
           progress_seconds: float, grace_seconds: float, wall) -> str | None:
-    """None when the session went idle; `time_bound` or `stalled` when a bound ended it."""
+    """None when the session went idle; `time_bound` or `stalled` when a bound ended it.
 
-    started_mono = time.monotonic()
-    started_wall = quiet_from = wall()
+    The time bound passes when the monotonic or the wall clock says so (a machine that sleeps
+    through it still cuts the run). The stall is judged on the monotonic clock alone, from the
+    last time the tree's step count grew, so a wall clock jumping forward never stalls a working
+    run. A status call that fails is retried; `BUSY_FAILURES` in a row mean the server is gone."""
+
+    started_mono, started_wall = time.monotonic(), wall()
     bound = settings.minutes * 60
     stall = settings.stall_minutes * 60
     seen_busy = False
+    failures = 0
+    steps = -1
+    last_step_mono = started_mono
     last_read = None
     while True:
-        now_mono = time.monotonic()
-        if now_mono - started_mono >= bound or wall() - started_wall >= bound:
+        now = time.monotonic()
+        if now - started_mono >= bound or wall() - started_wall >= bound:
             return "time_bound"
-        busy = client.busy(session)
+        try:
+            busy = client.busy(session)
+            failures = 0
+        except OpencodeError:
+            failures += 1
+            if failures >= BUSY_FAILURES:
+                raise
+            busy = True  # unknown this time: neither done nor failed
         seen_busy = seen_busy or busy
-        if not busy and (seen_busy or now_mono - started_mono >= grace_seconds):
+        if not busy and (seen_busy or now - started_mono >= grace_seconds):
             return None
-        if last_read is None or now_mono - last_read >= progress_seconds or wall() - quiet_from >= stall:
-            last_read = now_mono
+        quiet = now - last_step_mono
+        if last_read is None or now - last_read >= progress_seconds or quiet >= stall:
+            last_read = now
             progress = _progress(client, session)
             if progress is not None:
-                if progress["newest_ms"] is not None:
-                    quiet_from = max(quiet_from, progress["newest_ms"] / 1000)
+                if progress["steps"] > steps:
+                    steps, last_step_mono = progress["steps"], time.monotonic()
                 writer.write({"kind": "step.progressed", **envelope, "detail": {
-                    "steps": progress["steps"], "sources": progress["sources"], "reddit_reached": progress["reddit"],
-                    "helper_sessions": progress["helpers"], "quiet_seconds": round(max(wall() - quiet_from, 0), 1)}})
-        if wall() - quiet_from >= stall:
+                    "steps": progress["steps"], "sources": progress["sources"],
+                    "reddit_reached": progress["reddit"], "helper_sessions": progress["helpers"],
+                    "quiet_seconds": round(time.monotonic() - last_step_mono, 1)}})
+        if time.monotonic() - last_step_mono >= stall:
             return "stalled"
-        left = min(bound - (time.monotonic() - started_mono), quiet_from + stall - wall())
+        left = min(bound - (time.monotonic() - started_mono), last_step_mono + stall - time.monotonic())
         time.sleep(max(0.05, min(poll_seconds, left)))
 
 
@@ -277,20 +331,37 @@ def _all_text(messages: list) -> str:
     return "\n".join(texts)
 
 
-def write_result(path: Path, result: Result) -> None:
-    """The result shape as JSON, written whole (the MCP front reads it as the job's answer)."""
+def write_done(path: Path, done: ResearchDone) -> None:
+    """The run's end as JSON, written whole (the MCP front reads it as the job's answer)."""
 
-    _write(Path(path), json.dumps(result.as_dict(), ensure_ascii=False, indent=1) + "\n")
+    _write(Path(path), json.dumps(done.as_dict(), ensure_ascii=False, indent=1) + "\n")
+
+
+def _write_kept(named: Path | None, fallback: Path, text: str) -> tuple[str, str | None]:
+    """Write `text` to `named`, else (no path named, or it cannot be written: a folder there, no
+    rights) to `fallback` in the run's folder, so a report is never lost. Returns the path written
+    and why the named one was not."""
+
+    if named is not None:
+        try:
+            _write(named, text)
+            return str(named), None
+        except OSError as e:
+            why = f"{type(e).__name__}: {e}"
+    else:
+        why = None
+    _write(fallback, text)
+    return str(fallback), why
 
 
 def _write(path: Path, text: str) -> None:
     """The file written whole: a reader never sees half of it."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     temporary.write_text(text, "utf-8", newline="\n")
     os.replace(temporary, path)
 
 
-def _minutes(started_mono: float, started_wall: float, wall) -> float:
+def _elapsed_minutes(started_mono: float, started_wall: float, wall) -> float:
     return round(max(time.monotonic() - started_mono, wall() - started_wall, 0.0) / 60, 2)
