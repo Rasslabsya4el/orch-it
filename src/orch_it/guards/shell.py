@@ -577,6 +577,10 @@ def _skip_paren(text: str, i: int) -> int:
     return n
 
 
+# `$IFS` / `${IFS}` is the field separator; unset it defaults to whitespace, so it splits words
+_IFS_SPLIT = re.compile(r"\$\{IFS\}|\$IFS(?![A-Za-z0-9_])")
+
+
 def _posix_tokens(segment: str, redirects: list | None = None) -> list[str]:
     """A simple command split into word tokens on unquoted whitespace, each token keeping its
     quotes and expansions for later reading. A trailing heredoc redirection is dropped (its body
@@ -604,6 +608,14 @@ def _posix_tokens(segment: str, redirects: list | None = None) -> list[str]:
             buf.append(segment[i + 1])
             i += 2
             continue
+        if ch == "$":
+            ifs = _IFS_SPLIT.match(segment, i)
+            if ifs:  # `$IFS` / `${IFS}` is word-splitting whitespace (`rm${IFS}-rf${IFS}x`)
+                if buf:
+                    tokens.append("".join(buf))
+                    buf = []
+                i = ifs.end()
+                continue
         if ch == "$" and segment[i:i + 2] == "$(":
             end = _skip_paren(segment, i + 1)
             buf.append(segment[i:end])
