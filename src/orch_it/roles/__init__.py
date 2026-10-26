@@ -33,8 +33,11 @@ AGENTS_FOLDER = Path(".claude") / "agents"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ROLE_KEYS = ("model", "effort", "fallback", "inputs", "report")
 REPORT_KEYS = ("cap_lines", "owes", "context_line")
-# the report lines a role may owe, each the skill it claims (#399 decision 6)
-OWED_LINES = ("tdd", "diagnosis", "code-review", "research", "writing-for-agents", "domain-modeling", "codebase-design")
+# each report line a role may owe, and the skill a line of it claims (#399 decision 6)
+SKILL_OF_LINE = {"tdd": "tdd", "diagnosis": "diagnosing-bugs", "code-review": "code-review", "research": "research",
+                 "writing-for-agents": "writing-for-agents", "domain-modeling": "domain-modeling",
+                 "codebase-design": "codebase-design"}
+OWED_LINES = tuple(SKILL_OF_LINE)
 # what a spawn fills for a role's subagent (#399 decision 3); a role with none is a session, never spawned
 INPUTS = ("issue", "unit", "diff", "worktree", "scratchpad")
 ERROR_CODES = ("settings_unreadable", "bad_setting", "frontmatter_missing", "agent_unreadable", "agent_unwritable",

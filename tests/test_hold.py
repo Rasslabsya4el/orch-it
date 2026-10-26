@@ -169,6 +169,73 @@ def test_the_hook_command_blocks_through_a_real_process(tmp_path):
     assert json.loads(done.stdout)["decision"] == "block"
 
 
+@pytest.mark.parametrize("report, keywords, held", [
+    ("Done.\n**tdd**: called", {}, ["tdd"]),  # a claim in bold is a claim
+    ("Done.\n| tdd | called |", {}, ["tdd"]),  # and in a table row
+    ("Done.\n`tdd`: called", {"skills": ["tdd"], "edits": ["src/a.py"]}, []),
+    ("Docs only.\ntdd: no (no code)", {"edits": ["src/a.py"]}, []),  # a no-claim form is no claim
+    ("```inline``` text\ntdd: called", {"skills": ["tdd"], "edits": ["src/a.py"]}, []),  # inline backticks are no fence
+    ("Done.\ntdd: called", {"skills": ["/TDD"]}, []),
+    ("Done.\ntdd: called", {"skills": ["mattpocock-skills:tdd"]}, []),
+    ("Done.\ntdd: called", {"skills": ["other-plugin:tdd"]}, ["tdd"]),  # another plugin's skill of the name is not his
+])
+def test_the_forms_a_report_line_and_a_skill_call_take(tmp_path, report, keywords, held):
+    path = transcript(tmp_path, report=report, **keywords)
+    assert [label for label, _ in judge(payload("worker", path, report), ROLES, work_tree=tmp_path).problems] == held
+
+
+def test_an_edit_outside_the_worktree_or_that_failed_is_no_edit_of_the_unit(tmp_path):
+    outside = str(tmp_path.parent / "spawn" / "spawn-0001" / "probe.py")
+    path = transcript(tmp_path, edits=[outside], report="Probed.")
+    assert judge(payload("worker", path, "Probed."), ROLES, work_tree=tmp_path).problems == []
+    records = [json.loads(line) for line in path.read_text("utf-8").splitlines()]
+    records.insert(1, {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "x1", "name": "Edit", "input": {"file_path": "src/a.py"}}]}})
+    records.insert(2, {"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "x1", "is_error": True, "content": "old_string not found"}]}})
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), "utf-8")
+    assert judge(payload("worker", path, "Probed."), ROLES, work_tree=tmp_path).problems == []
+
+
+def test_a_table_path_is_read_as_written_and_lines_split_only_at_breaks(tmp_path):
+    (tmp_path / ".notes").mkdir()
+    (tmp_path / ".notes" / "table.md").write_text("| item |\n", "utf-8")
+    report = "Stopped at item 3.\ntable: `.notes/table.md` (3 rows)"
+    path = transcript(tmp_path, context=150_000, report=report)
+    assert judge(payload("researcher-survey", path, report), ROLES, work_tree=tmp_path).problems == []
+    report = " ".join(f"row {i}" for i in range(45))  # one line with separators inside it
+    path = transcript(tmp_path, report=report)
+    assert judge(payload("researcher-find", path, report), ROLES, work_tree=tmp_path).problems == []
+
+
+def test_a_deeply_nested_line_is_skipped_not_a_failed_open_hook(tmp_path):
+    report = "Done.\ntdd: called"
+    path = transcript(tmp_path, report=report)
+    with path.open("a", encoding="utf-8") as out:
+        out.write("[" * 100_000 + "\n")
+    assert [label for label, _ in judge(payload("worker", path, report), ROLES, work_tree=tmp_path).problems] == ["tdd"]
+
+
+def test_a_store_that_cannot_be_opened_never_stops_a_block_and_errors_are_events(tmp_path):
+    report = "Done.\ntdd: called"
+    path = transcript(tmp_path, report=report)
+
+    def broken():
+        raise OSError("no store here")
+
+    out, code = run_subagent_stop(json.dumps(payload("worker", path, report)), open_store=broken, repo="o/r")
+    assert code == 0 and json.loads(out)["decision"] == "block"
+    store = Store.open(tmp_path / "store")
+    gone = payload("worker", tmp_path / "gone.jsonl", report)
+    assert run_subagent_stop(json.dumps(gone), store=store, repo="o/r") == ("", 0)
+    assert run_subagent_stop("[]", store=store, repo="o/r") == ("", 0)
+    assert [e["error_code"] for e in events(store, "error.raised")] == ["transcript_unreadable", "payload_unreadable"]
+    # a string `stop_hook_active` is no proof of a first hold
+    out, _ = run_subagent_stop(json.dumps(payload("worker", path, report) | {"stop_hook_active": "false"}),
+                               store=store, repo="o/r")
+    assert json.loads(out)["decision"] == "block"
+
+
 @pytest.mark.parametrize("raw", ["", "{", "[]", json.dumps({"agent_type": "worker"}),
                                  json.dumps({"agent_type": "worker", "agent_transcript_path": "/no/such.jsonl",
                                              "last_assistant_message": "tdd: called"}),
