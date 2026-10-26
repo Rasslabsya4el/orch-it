@@ -434,9 +434,13 @@ def _spawned_roles() -> list[str] | None:
 def _spawn(args) -> str:
     from orch_it.roles import spawn
 
+    if args.worktree is not None and not args.worktree.strip():  # Path("") would be the folder it runs in
+        raise SpawnRefused("worktree_not_git", "worktree", "an empty path")
+    if args.scratchpad is not None and not args.scratchpad.strip():
+        raise SpawnRefused("scratchpad_unusable", "scratchpad", "an empty path")
     request = spawn.SpawnRequest(issue=args.issue, repo=args.repo, unit=args.unit, diff=args.diff,
-                                 worktree=Path(args.worktree) if args.worktree else None,
-                                 scratchpad=Path(args.scratchpad) if args.scratchpad else None)
+                                 worktree=Path(args.worktree) if args.worktree is not None else None,
+                                 scratchpad=Path(args.scratchpad) if args.scratchpad is not None else None)
     return spawn.spawn(args.role, request, roles=roles.RoleSet.load(), store=_store(args)).prompt
 
 

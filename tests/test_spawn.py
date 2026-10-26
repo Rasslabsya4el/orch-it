@@ -108,6 +108,7 @@ def test_each_required_input_missing_in_turn_is_refused_naming_it(role, name, wo
     assert name not in step["prompt_has"]
     ended = world["store"].query("select outcome, detail from events where kind = 'step.ended' and step = 'subagent'").rows
     assert [(outcome, json.loads(detail)["refused_input"]) for outcome, detail in ended] == [("refused", name)]
+    assert json.loads(ended[0][1])["refused"] == refused.value.code
 
 
 def test_every_role_but_the_brain_is_spawned_and_the_table_covers_them():
@@ -125,7 +126,9 @@ def refusal(role: str, request: SpawnRequest, world, gh=None) -> tuple[str, str]
 
 def test_an_input_that_cannot_be_used_is_refused_naming_it(world):
     def broken_gh(args):
-        raise RuntimeError("gh: Could not resolve to an issue")
+        from orch_it.testruns.github import GithubError
+
+        raise GithubError("gh_failed", "issue view 7: Could not resolve to an issue")
 
     empty = world["plain"] / "empty.diff"
     empty.write_text("\n", "utf-8")
@@ -169,6 +172,61 @@ def test_spawn_on_the_command_line_prints_the_prompt_or_the_refusal(world, monke
     assert main([*common, "reviewer-spec", *where]) == 2
     assert capsys.readouterr().err.startswith("error: input_missing: diff")
     assert main([*common, "unblocker", *where]) == 2  # the roles settings name the roles spawn takes
+
+
+PLAN_HEAD = "| unit | what | its test |\n|---|---|---|\n"
+
+
+@pytest.mark.parametrize("plan, unit, code", [
+    (PLAN, "unit", "unit_not_found"),  # the header row is no unit
+    (PLAN, "---", "unit_not_found"),  # nor the separator
+    (PLAN + "| u1 | another thing | t2 |\n", "u1", "unit_ambiguous"),
+    ("```\n" + PLAN + "```\n", "u1", "unit_not_found"),  # a fenced example is no plan
+    (PLAN_HEAD + "| | blank id | x |\n", " ", "input_missing"),
+])
+def test_a_unit_is_one_data_row_of_the_plan(world, plan, unit, code):
+    assert refusal("worker", full("worker", world).but(unit=unit), world, gh=fake_gh([], plan=plan)) == (code, "unit")
+
+
+def test_the_newest_plan_wins_over_an_example_in_the_body(world):
+    done = spawn("worker", full("worker", world), roles=RoleSet.load(), store=world["store"],
+                 gh=fake_gh([], body=PLAN_HEAD + "| u1 | EXAMPLE | x |\n"))
+    assert "EXAMPLE" not in done.prompt and "the parser" in done.prompt
+
+
+def test_bad_values_are_refused_before_gh_runs_or_a_file_is_written(world):
+    calls: list = []
+    for request, code in [(full("worker", world).but(repo="o/r/extra"), "repo_unknown"),
+                          (full("worker", world).but(repo="--web/x"), "repo_unknown"),
+                          (full("worker", world).but(issue=0), "issue_unreadable"),
+                          (full("worker", world).but(issue=2**70), "issue_unreadable")]:
+        with pytest.raises(SpawnRefused) as refused:
+            spawn("worker", request, roles=RoleSet.load(), store=world["store"], gh=fake_gh(calls))
+        assert refused.value.code == code
+    assert calls == [] and not world["scratch"].exists()
+
+
+def test_paths_in_the_prompt_are_absolute_and_a_file_is_no_scratchpad(world, monkeypatch):
+    monkeypatch.chdir(world["plain"])
+    done = spawn("worker", full("worker", world).but(scratchpad=Path("rel")), roles=RoleSet.load(),
+                 store=world["store"], gh=fake_gh([]))
+    paths = [line.split(": ", 1)[1] for line in done.prompt.splitlines() if line.startswith(("Issue file", "Scratchpad",
+                                                                                             "Worktree"))]
+    assert paths and all(Path(p).is_absolute() for p in paths)
+    (world["plain"] / "a-file").write_text("x", "utf-8")
+    assert refusal("worker", full("worker", world).but(scratchpad=world["plain"] / "a-file"), world) == (
+        "scratchpad_unusable", "scratchpad")
+
+
+def test_a_store_that_cannot_be_written_never_hides_the_refusal(world):
+    store = Store.open(world["plain"] / "s2")
+    for file in store.root.iterdir():
+        file.unlink()
+    store.root.rmdir()
+    store.root.write_text("now a file", "utf-8")
+    with pytest.raises(SpawnRefused) as refused:
+        spawn("worker", full("worker", world).but(unit="nope"), roles=RoleSet.load(), store=store, gh=fake_gh([]))
+    assert refused.value.code == "unit_not_found"
 
 
 def test_the_brain_is_no_subagent(world):
