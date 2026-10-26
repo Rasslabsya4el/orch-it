@@ -7,8 +7,8 @@ one, compared file by file, each skill given one class.
   files, or by a rename git reports between the two commits (`renames`, old path -> new path).
   A move to another group is a new path too.
 - `removed`: a folder gone with nothing to match it.
-- `contract_changed`: what the skill takes or returns changed: its frontmatter `name`,
-  `description`, `disable-model-invocation` or `argument-hint`; a section whose heading names what
+- `contract_changed`: what the skill takes or returns changed: any field of its frontmatter
+  (`name`, `description`, `disable-model-invocation`, `allowed-tools`, ...); a section whose heading names what
   it takes or returns (inputs, outputs, invocation, arguments, files, formats, templates...), or the
   whole body of a skill with no section below its title; a `<...-template>` block; the skills it
   calls through the Skill tool; a file of the folder added or removed, or a file of it that shapes
@@ -23,22 +23,22 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
 
 from orch_it.skills.copies import SKILL_FILE, Tree, blob_hash, skill_name
 from orch_it.skills.references import skill_calls
 
 CLASSES = ("same", "added", "renamed", "removed", "text_changed", "contract_changed")
-CONTRACT_FIELDS = ("name", "description", "disable-model-invocation", "argument-hint")
 _CONTRACT_HEADING = re.compile(
     r"\b(inputs?|outputs?|returns?|arguments?|parameters?|invocation|usage|preconditions?|templates?"
-    r"|formats?|files?|deliverables?|definition of done|acceptance criteria|reads?|writes?|produces?)\b")
+    r"|formats?|files?|deliverables?|definition of done|acceptance criteria|reads?|writes?|produces?|results?"
+    r"|options?|interface|args?|requirements?)\b")
 # support files that shape what the skill writes: his formats, templates, report and brief shapes, the files his
 # setup writes (tracker, labels, domain) and configs it installs
 _CONTRACT_FILE = re.compile(r"format|template|report|brief|scope|label|tracker|domain|config", re.IGNORECASE)
-_HEADING = re.compile(r"(#{1,6})[ \t]+(.+?)[ \t#]*$")
-_FENCE = re.compile(r"[ \t]{0,3}(```|~~~)")
-_TEMPLATE = re.compile(r"<([a-z0-9-]+-template)>.*?</\1>", re.DOTALL)
+_HEADING = re.compile(r" {0,3}(#{1,6})[ \t]+(\S.*)")
+_SETEXT = re.compile(r" {0,3}(=+|-+)[ \t]*")
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+_TEMPLATE_OPEN = re.compile(r"<([A-Za-z0-9_-]+[-_]template)\b[^>]*>", re.IGNORECASE)
 _KEY = re.compile(r"([A-Za-z0-9_-]+):(.*)$")
 
 
@@ -95,7 +95,7 @@ def _compare(name: str, old_path: str, new_path: str, old: dict[str, bytes], new
     for rel in changed:
         if rel == SKILL_FILE:
             contract += _skill_contract(old[rel], new[rel])
-        elif _CONTRACT_FILE.search(PurePosixPath(rel).name):
+        elif _CONTRACT_FILE.search(rel):
             contract.append(rel)
     if contract:
         return Change(name, "contract_changed", old_path, new_path, contract)
@@ -112,7 +112,8 @@ def _skill_contract(old: bytes, new: bytes) -> list[str]:
     new_front, new_body = _split(new_text)
     if old_front is None or new_front is None:
         return ["frontmatter"]
-    why = [key for key in CONTRACT_FIELDS if old_front.get(key) != new_front.get(key)]
+    why = [key for key in [*new_front, *(k for k in old_front if k not in new_front)]
+           if old_front.get(key) != new_front.get(key)]
     old_sections, new_sections = _contract_sections(old_body), _contract_sections(new_body)
     for heading in [*new_sections, *(h for h in old_sections if h not in new_sections)]:
         if old_sections.get(heading) != new_sections.get(heading):
@@ -127,8 +128,9 @@ def _skill_contract(old: bytes, new: bytes) -> list[str]:
     return why
 
 
-def _split(text: str) -> tuple[dict[str, str] | None, str]:
-    """The frontmatter's fields and the body, or (None, text) when there is no closed frontmatter."""
+def _split(text: str) -> tuple[dict[str, list[str]] | None, str]:
+    """The frontmatter's fields (each key with every value it is given, in order) and the body, or
+    (None, text) when there is no closed frontmatter."""
 
     if not text.startswith("---\n"):
         return None, text
@@ -137,16 +139,16 @@ def _split(text: str) -> tuple[dict[str, str] | None, str]:
         if not text.endswith("\n---"):
             return None, text
         end = len(text) - 4
-    fields: dict[str, list[str]] = {}
+    fields: dict[str, list[list[str]]] = {}
     current = None
     for line in text[4:end].split("\n"):
         found = _KEY.match(line)
         if found and not line[:1].isspace():
-            current = found.group(1)
-            fields[current] = [found.group(2)]
+            current = [found.group(2)]
+            fields.setdefault(found.group(1), []).append(current)
         elif current is not None:
-            fields[current].append(line)
-    return {key: _value(parts) for key, parts in fields.items()}, text[end + 5:]
+            current.append(line)
+    return {key: [_value(parts) for parts in values] for key, values in fields.items()}, text[end + 5:]
 
 
 def _value(parts: list[str]) -> str:
@@ -158,21 +160,43 @@ def _value(parts: list[str]) -> str:
     return " ".join(value.split())
 
 
+def _headings(lines: list[str]) -> list[tuple[int, int, str]]:
+    """(first line index, level, title) of each heading outside code fences: ATX (`## x`, up to three
+    spaces in) and setext (a line under `===` or `---`)."""
+
+    found = []
+    fence = None  # (char, length) of the open fence
+    for i, raw in enumerate(lines):
+        line = raw.rstrip()
+        opened = _FENCE.match(line)
+        if fence:
+            if opened and opened.group(1)[0] == fence[0] and len(opened.group(1)) >= fence[1] \
+                    and not opened.group(2).strip():
+                fence = None
+            continue
+        if opened and not (opened.group(1)[0] == "`" and "`" in opened.group(2)):
+            fence = (opened.group(1)[0], len(opened.group(1)))
+            continue
+        atx = _HEADING.match(line)
+        if atx:
+            found.append((i, len(atx.group(1)), atx.group(2).rstrip("#").strip()))
+            continue
+        under = _SETEXT.fullmatch(line)
+        previous = lines[i - 1].strip() if i else ""
+        if under and previous and not _HEADING.match(lines[i - 1].rstrip()) \
+                and not _FENCE.match(lines[i - 1].rstrip()) and not (found and found[-1][0] == i - 1):
+            found.append((i - 1, 1 if under.group(1)[0] == "=" else 2, previous))
+    return found
+
+
 def _contract_sections(body: str) -> dict[str, str]:
     """Each section whose heading names what the skill takes or returns, heading -> its text up to
-    the next heading of its level or higher; headings inside code fences are text."""
+    the next heading of its level or higher; headings inside code fences are text. A body with no
+    heading below its title is one section, all of it."""
 
-    headings = []  # (line index, level, title)
     lines = body.split("\n")
-    fenced = False
-    for i, line in enumerate(lines):
-        if _FENCE.match(line):
-            fenced = not fenced
-            continue
-        found = None if fenced else _HEADING.fullmatch(line)
-        if found:
-            headings.append((i, len(found.group(1)), found.group(2).strip()))
-    if not any(level >= 2 for _, level, _ in headings):  # one section only: the whole body says what it takes
+    headings = _headings(lines)
+    if not any(level >= 2 for _, level, _ in headings):
         return {"body": "\n".join(line.rstrip() for line in lines).strip()}
     sections = {}
     for n, (start, level, title) in enumerate(headings):
@@ -185,7 +209,14 @@ def _contract_sections(body: str) -> dict[str, str]:
 
 
 def _templates(body: str) -> dict[str, str]:
+    """Each `<...-template>` block, any letter case, with attributes or left open to the end."""
+
     found: dict[str, str] = {}
-    for match in _TEMPLATE.finditer(body):
-        found[match.group(1)] = found.get(match.group(1), "") + match.group(0)
+    at = 0
+    while (opened := _TEMPLATE_OPEN.search(body, at)) is not None:
+        tag = opened.group(1).lower()
+        closed = re.compile(rf"</{re.escape(opened.group(1))}\s*>", re.IGNORECASE).search(body, opened.end())
+        end = closed.end() if closed else len(body)
+        found[tag] = found.get(tag, "") + body[opened.start():end]
+        at = end
     return found

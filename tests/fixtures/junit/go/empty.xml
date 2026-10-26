@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
-	<testsuite name="example.com/math" tests="0" failures="0" errors="0" id="0" hostname="WIN-OHK3JQ5AM84" time="0.539" timestamp="2026-10-25T21:19:46+01:00">
+	<testsuite name="example.com/math" tests="0" failures="0" errors="0" id="0" hostname="fixture-host" time="0.539" timestamp="2026-10-25T21:19:46+01:00">
 		<system-out><![CDATA[testing: warning: no tests to run]]></system-out>
 	</testsuite>
 </testsuites>

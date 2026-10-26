@@ -95,3 +95,46 @@ def test_skill_calls_reads_his_forms():
     assert skill_calls("Call the Skill tool with\n`codebase-design` for the vocabulary.") == {"codebase-design"}
     assert skill_calls("Use `git` here. Call the Skill tool with `tdd`. Then run `pytest`.") == {"tdd"}
     assert skill_calls("No tool named here: `tdd`.") == set()
+
+
+def test_only_the_names_a_call_gives_are_read():
+    assert skill_calls("Call the Skill tool with `tdd`, then run `pytest`.") == {"tdd"}
+    assert skill_calls("- Call the Skill tool with `tdd`\n- Run `git`\n- Then `pytest`\n") == {"tdd"}
+    assert skill_calls("| Skill tool | `tdd` |\n| runner | `pytest` |\n") == set()  # no "with" or "for"
+    assert skill_calls("The Skill tool loads the skill and reads `pocock.json` for it.") == set()
+    assert skill_calls('The Skill tool is "not" a shell.') == set()
+
+
+def test_more_ways_a_text_names_a_skill(tmp_path):
+    repo = repo_with(tmp_path, {
+        ".claude/agents/a.md": "---\nname: a\nskills:\n- tdd\n- nope\n---\n",
+        ".claude/agents/b.md": "---\nname: b\nskills: [\n  tdd,\n  nope-two\n]\n---\n",
+        ".claude/agents/c.md": "﻿---\nname: c\nskills: [tdd] # the one it needs\n---\n",
+        "docs/x.md": "Use the `zoom-out` skill here, and the `tdd` skill there. Run /ask-matt.\n",
+        "docs/y.MD": "plain mattpocock-skills: prefix\n",
+        "web/node_modules/pkg/README.md": "mattpocock-skills:tdd\n",
+    })
+    assert check(repo) == [
+        ".claude/agents/a.md:5: preloads `nope`, which the repo holds neither as a copy nor as ours",
+        ".claude/agents/b.md:5: preloads `nope-two`, which the repo holds neither as a copy nor as ours",
+        "docs/x.md:1: names `/ask-matt`, his skill the repo does not copy (no job)",
+        "docs/x.md:1: names `zoom-out`, which the repo holds neither as a copy nor as ours",
+        "docs/y.MD:1: the namespaced form `mattpocock-skills:`; name the copy bare",
+    ]
+
+
+def test_a_broken_manifest_is_a_line_of_the_check_not_a_crash(tmp_path):
+    repo = repo_with(tmp_path, {"docs/a.md": "Call the Skill tool with `tdd`.\n"})
+    (repo / ".claude" / "skills" / "pocock.json").write_text("{half", "utf-8")
+    [line] = check(repo)
+    assert line.startswith("pocock.json: manifest_unreadable")
+
+
+def test_the_manifest_keeps_its_gone_names_and_leaves_the_key_out_when_none(tmp_path):
+    from orch_it.skills.copies import Manifest
+    repo = repo_with(tmp_path, {}, gone={"zoom-out": "removed upstream at 1111111"})
+    manifest = Manifest.load(repo)
+    assert manifest.gone == {"zoom-out": "removed upstream at 1111111"}
+    assert '"gone"' in manifest.text()
+    manifest.gone = {}
+    assert '"gone"' not in manifest.text()

@@ -124,6 +124,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `machine.booted` | none | the gap a boot leaves in every running step |
 | `tool.called` | `tool`, `args_head` (≤120), `outcome` (`tool_outcome`), `refused_by` (`refused_by`), `ms` | what agents actually do; refused calls and retries |
 | `skill.called` | `skill`, `called_at_step`, `before_first_edit` | is each skill called at its step |
+| `skill.shadowed` | `skill`, `copy`, `same_text` | a personal skill of a repo skill's name that replaces it in every session |
 | `report_line.checked` | `label` (`report_label`), `claimed`, `verified`, `accepted`, `first_edit_path` | false report lines; a stop held for a missing call |
 | `rule_file.read` | `path`, `sha`, `lines_read`, `lines_total` | does a role read its rules and the glossary in full |
 | `context.crossed` | `threshold` (`context_threshold`), `tokens`, `action_after` (`context_action`) | sessions running past their context line |
@@ -194,4 +195,11 @@ run the repo's test command once at a test place, write its `test_run` pair and 
 print `run=… place=… outcome=… reason=… collected=… failed=…`; exit 0 on passed, 1 on failed, 3 on any other outcome.
 `--place machine:<id>` forces a run to a machine of the setting `test_machines` (a list of `id`, `host`, `os`, `checkout`, optional `capacity`, `python`, `origin`, `ssh_options`, `on`): one `ssh` connection, the commit checked out in a free slot of the machine (`checkout`, then `checkout-1` ... one per unit of `capacity`; cloned from `origin`, default the work tree's `origin`), the caller's work tree untouched. A refused run's end carries `refused_step` in its detail (`clone`, `fetch`, `commit`, `checkout`, `clean`, `busy`, `not_ours`, `connect`, `start_timeout`).
 
+`python -m orch_it guards scan (--range A..B | --tree [--rev REV] | --all) [--work-tree PATH] [--machine-independent] [--allow-email ADDR ...] [--allow-email-of LOGIN ...] [--words-file PATH]`:
+look for private data (this machine's home folder or host name, any user's home folder, GitHub, Anthropic, OpenAI and AWS keys, private keys, addresses of people, the words of `private_words_file`) in the lines, file paths, messages, authors and committers of the commits of a range (`--all`: everything reachable from HEAD) or in every tracked file of a revision (`--tree`).
+It prints one line per hit, `<sha12> <where> <file or ->:<line or -> <kind>` (the value found is never printed; a value in a file path shows as `<kind>`), then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits, 2 with `error: <code>`.
+`--machine-independent` leaves out what is this machine's own (its home folder, host name and words); `--allow-email-of LOGIN` allows that GitHub account's public email (`gh api users/LOGIN`), else `warning: email_of_unreadable: LOGIN`.
+
 `python -m orch_it labels sync [--repo R]`: make the repo's labels match the layer's set (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `parked`, `priority`, each with a colour and description from `labels/labels.json`; default repo the work tree's GitHub origin): a missing label is created, one with another colour, description or letter case is updated, an equal one is kept, every other label is listed `foreign` and never changed or deleted; prints `label`, `action` rows.
+
+`python -m orch_it [--store PATH] skills shadowed`: the SessionStart hook of `.claude/settings.json`. It reads the hook's JSON from stdin, compares the project's skills (`CLAUDE_PROJECT_DIR`, else the work tree around `cwd`) with the personal ones (`$CLAUDE_CONFIG_DIR/skills`, default `~/.claude/skills`), letter case aside, and writes one `skill.shadowed` per clash: `copy` true for his copy, false for ours, null when the manifest cannot be read; `same_text` when the two `SKILL.md` are byte-equal. A resumed or compacted session writes nothing new. It prints nothing and exits 0 whatever happens, an error on stderr.
