@@ -1,6 +1,6 @@
 """The commands of the merge flow (#400):
 
-- `pr open <ticket> --acceptance <file> [--branch B] [--base main] [--work-tree .] [--repo R]`: ORCH's
+- `pr open <ticket> --acceptance <file> [--notes <file>] [--branch B] [--base main] [--work-tree .] [--repo R]`: ORCH's
   acceptance step (decision 1, `orch_it.merge.pr_open`): the measured rows checked against the
   ticket's, the branch pushed, one pull request per ticket opened with `Refs #N` (or its own reused),
   the acceptance comment, the ready mark, auto-merge on, the ticket parked on the pull request; prints
@@ -61,6 +61,7 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p.add_argument("ticket", type=int)
     p.add_argument("--acceptance", required=True, metavar="FILE",
                    help="the measured rows: a table with the columns row, result, evidence")
+    p.add_argument("--notes", metavar="FILE", help="ORCH's report lines for the body of a new pull request")
     p.add_argument("--branch", help="the ticket's branch (default: the work tree's)")
     p.add_argument("--base", default="main", help="the branch it merges into (default: main)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
@@ -98,13 +99,18 @@ def _pr_open(args, store_of, repo_of, now: datetime) -> str:
         acceptance = Path(args.acceptance).read_text("utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
         raise PrError("acceptance_unreadable", f"{args.acceptance}: {e}") from None
+    try:
+        notes = Path(args.notes).read_text("utf-8-sig") if args.notes else ""
+    except (OSError, UnicodeDecodeError) as e:
+        raise PrError("acceptance_unreadable", f"{args.notes}: {e}") from None
     git = merge_git.work_tree(Path(args.work_tree))
     try:
         branch = args.branch or git(["rev-parse", "--abbrev-ref", "HEAD"]).strip()
     except GitError as e:
         raise PrError("git_failed", str(e)) from None
     done = open_pr(GhPullHub(), store_of(), repo, args.ticket, acceptance=acceptance, branch=branch, base=args.base,
-                   git=git, settings=MergeSettings.from_settings(settings.load(), repo), now=now, role=args.role)
+                   git=git, settings=MergeSettings.from_settings(settings.load(), repo), now=now, role=args.role,
+                   notes=notes)
     return f"pr #{done.pr} {'reused' if done.reused else 'opened'} at {done.head[:12]}: {done.park}\n"
 
 

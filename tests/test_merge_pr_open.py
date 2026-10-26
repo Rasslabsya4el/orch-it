@@ -272,6 +272,20 @@ def test_a_second_pr_open_that_loses_the_park_closes_its_own_new_pull_request(wo
     assert lost.state == "closed" and lost.auto_merge is None
 
 
+def test_orch_s_notes_go_into_the_body_and_are_held_to_the_same_keyword_rule(world):
+    hub, store = world
+    hub.branches["ticket-10"] = [*hub.branches["main"], hub.sha("h")]
+    git = Git()
+    git.hub = hub
+    done = open_pr(hub, store, REPO, 10, acceptance=GOOD, branch="ticket-10", base="main", git=git,
+                   settings=MergeSettings(), now=hub.now, notes="unit 1: code-review: called, 2 findings fixed")
+    assert hub.pull(REPO, done.pr).body.rstrip().endswith("unit 1: code-review: called, 2 findings fixed")
+    with pytest.raises(PrError) as caught:
+        open_pr(hub, store, REPO, 10, acceptance=GOOD, branch="ticket-10", base="main", git=git,
+                settings=MergeSettings(), now=hub.now, notes="this fixes #4")
+    assert caught.value.code == "closing_keyword"
+
+
 def test_the_park_lasts_past_the_pr_s_bound(world):
     done = opened(world, pr_max_hours=72)
     hub, _ = world
