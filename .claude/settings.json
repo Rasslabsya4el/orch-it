@@ -4,14 +4,16 @@
     "mattpocock-skills@mattpocock": false
   },
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {"type": "command", "command": "python -m orch_it skills shadowed", "timeout": 60}
-        ]
-      }
-    ],
     "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m orch_it hook pre-tool-use"
+          }
+        ]
+      },
       {
         "matcher": "Bash|PowerShell",
         "hooks": [
@@ -20,6 +22,13 @@
             "command": "python -m orch_it.tickets.hook",
             "timeout": 90
           }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "command": "python -m orch_it skills shadowed", "timeout": 60}
         ]
       }
     ]

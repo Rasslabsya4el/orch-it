@@ -252,7 +252,13 @@ def test_every_code_the_hook_writes_is_in_the_closed_set():
 
 
 def test_the_repo_s_claude_settings_run_the_hook_before_every_shell_command():
-    settings = json.loads((Path(__file__).parents[1] / ".claude" / "settings.json").read_text("utf-8"))
+    def no_repeats(pairs):  # two `PreToolUse` keys would drop one hook without a word
+        keys = [key for key, _ in pairs]
+        assert len(keys) == len(set(keys)), keys
+        return dict(pairs)
+
+    settings = json.loads((Path(__file__).parents[1] / ".claude" / "settings.json").read_text("utf-8"),
+                          object_pairs_hook=no_repeats)
     entries = [entry for entry in settings["hooks"]["PreToolUse"]
                if any(h.get("command") == "python -m orch_it.tickets.hook" for h in entry["hooks"])]
     assert len(entries) == 1

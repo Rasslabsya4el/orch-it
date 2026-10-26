@@ -66,5 +66,59 @@ What a test run's process sees of its environment: the OS's base variables and t
 _Avoid_: sandbox, isolated environment
 
 **Bound**:
-The longest a test run may take, set per repo; a run that reaches it is cut, which is never a failed run.
+The longest a test run or a research run may take; a run that reaches it is cut, which is never a failed run. A
+research run also has a stall bound: the longest its session tree may go without a new step.
 _Avoid_: timeout, limit, deadline
+
+## Research
+
+**Research bridge**:
+The one way the layer sends a brief to an outside model and gets its research report back.
+_Avoid_: gpt-research, agentops research, GPT tool
+
+**Front**:
+One way into the research bridge: the command line or the MCP server; both run the same research run.
+_Avoid_: entry point, wrapper, interface
+
+**Research run**:
+One brief sent through the research bridge, from its start to its end, on a server of its own.
+_Avoid_: research job, GPT run, query
+
+**Brief**:
+The text a research run sends: its questions, the sources it wants, and where its research report goes.
+_Avoid_: prompt, query, task
+
+**Research report**:
+The text a research run keeps as its answer: the longest text the model wrote, alone or joined across a compaction
+that cut it, that passes the report check.
+_Avoid_: answer, output, last message, result
+
+**Report check**:
+The tests a text passes to be a research report, in order: length, then links, then a Reddit link unless the brief
+asks for primary sources.
+_Avoid_: validation, acceptance, quality gate
+
+**Partial report**:
+What the model wrote in a research run that ended with no research report, kept beside where the report would go.
+_Avoid_: draft, partial result
+
+**Compaction**:
+The outside tool replacing a long session's history with a summary in the middle of a research run and telling the
+model to continue.
+_Avoid_: summarization, context reset
+
+**Helper session**:
+A session the model starts under its own during a research run, or under another helper session, at any depth.
+_Avoid_: subagent, sub-session, child task
+
+**Session tree**:
+A research run's own session and every helper session under it; the run's cost is the whole tree's.
+_Avoid_: session family, call tree
+
+**Model alias**:
+The short name a brief asks for (`luna`, `terra`), which the settings map to the provider's model id.
+_Avoid_: model name, model id
+
+**Job**:
+A research run started by the MCP front and read back later by its id.
+_Avoid_: task, ticket, request
