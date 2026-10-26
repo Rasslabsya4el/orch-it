@@ -28,7 +28,7 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          {"type": "command", "command": "python -m orch_it hook prompt-submit", "timeout": 30}
+          {"type": "command", "command": "python -m orch_it hook brain", "timeout": 30}
         ]
       }
     ],
@@ -43,6 +43,11 @@
       {
         "hooks": [
           {"type": "command", "command": "python -m orch_it skills shadowed", "timeout": 60}
+        ]
+      },
+      {
+        "hooks": [
+          {"type": "command", "command": "python -m orch_it hook brain", "timeout": 30}
         ]
       }
     ]
