@@ -1,7 +1,9 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
 7 and 9 for `import-github` and `test-places`), `python -m orch_it tests run` (#394 decision 9);
 `python -m orch_it labels sync` (#398 decision 6); `python -m orch_it guards scan` (#395 decision 4:
-it prints one line per private value found and exits 1 when there is any); `python -m orch_it skills
+it prints one line per private value found and exits 1 when there is any), `guards install` and
+`guards status` (decisions 5 and 6: the hooks path, and the six facts of the guards), `hook pre-push`
+(the git hook that scans a push to a public repo); `python -m orch_it skills
 shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m orch_it
 research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m orch_it
 tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`).
@@ -21,7 +23,8 @@ from pathlib import Path
 from orch_it import labels, settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
-from orch_it.guards import hook, scanner
+from orch_it.guards import hook, install, prepush, scanner
+from orch_it.guards import status as guards_status
 from orch_it.research import mcp as research_mcp
 from orch_it.research import run as research_run
 from orch_it.research.settings import ResearchRefused, ResearchSettings
@@ -164,10 +167,25 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("fired_event", metavar="EVENT-ID", help="the `guard.fired` deny to reverse")
     p.add_argument("--by", default="owner", help="who marks it (default: owner)")
 
+    p = guards.add_parser("install", parents=[common],
+                          help="point the core.hooksPath setting at the repo's tracked hooks folder")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+
+    p = guards.add_parser("status", parents=[common],
+                          help="read main's branch protection and the hooks: the six facts of decision 5")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+
     hook_commands = commands.add_parser("hook", help="the Claude Code and git hooks").add_subparsers(
         dest="command", required=True)
     hook_commands.add_parser("pre-tool-use", parents=[common],
                              help="the PreToolUse guard; reads the hook's JSON on stdin")
+    p = hook_commands.add_parser("pre-push", parents=[common],
+                                 help="the git pre-push guard; git passes the remote's name and url "
+                                      "and writes the refs on stdin")
+    p.add_argument("remote_name", nargs="?", default="")
+    p.add_argument("remote_url", nargs="?", default="")
 
     label_commands = commands.add_parser("labels", help="the layer's labels").add_subparsers(
         dest="command", required=True)
@@ -268,7 +286,35 @@ def _guards(args) -> tuple[str, int]:
     if args.command == "reverse":
         event = hook.reverse(_store(args), args.fired_event, by=args.by)
         return f"reversed={event['id']} guard={event['detail']['guard']}\n", 0
+    if args.command == "install":
+        return _guards_install(args)
+    if args.command == "status":
+        return _guards_status(args)
     raise AssertionError(args.command)
+
+
+def _guards_status(args) -> tuple[str, int]:
+    """`guards status`: the six facts as a table (fact, ok, detail); exit 0 when all are ok, 1 when
+    any is not (a protection that cannot be read is a failed fact, not an error)."""
+
+    work_tree = Path(args.work_tree)
+    report = guards_status.status(_store(args), args.repo or _repo_or_none(work_tree) or DEFAULT_REPO,
+                                  work_tree)
+    rows = [[fact.name, "yes" if fact.ok else "no", fact.detail] for fact in report.facts]
+    return render(QueryResult(["fact", "ok", "detail"], rows)), 0 if report.ok else 1
+
+
+def _guards_install(args) -> tuple[str, int]:
+    """`guards install`: a short summary and exit 0; another `core.hooksPath` is a coded error
+    (`hooks_path_taken`, exit 2) that leaves it as it was."""
+
+    work_tree = Path(args.work_tree)
+    done = install.install(work_tree, _store(args),
+                           repo=args.repo or _repo_or_none(work_tree) or DEFAULT_REPO)
+    return (f"pre-push hook: {'installed' if done.changed else 'already installed'}"
+            f" (core.hooksPath={done.hooks_path})\n"
+            f"claude code hook: {'present' if done.claude_hook else 'missing'}"
+            " (.claude/settings.json PreToolUse)\n"), 0
 
 
 def _hook(args) -> tuple[str, int]:
@@ -278,6 +324,16 @@ def _hook(args) -> tuple[str, int]:
         try:
             raw = sys.stdin.read()
             return hook.run_pre_tool_use(raw, _store(args))
+        except Exception:
+            return "", 0
+    if args.command == "pre-push":
+        # a pre-push that always blocks would wedge every push: whatever goes wrong before the scan
+        # (a store or settings error, a bad stdin) lets the push through; a scan that finds private
+        # data exits 1 (the guard working) and says so on stderr
+        try:
+            raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+            return prepush.run_pre_push(raw, _store(args), remote_url=args.remote_url,
+                                        remote_name=args.remote_name)
         except Exception:
             return "", 0
     raise AssertionError(args.command)
@@ -427,7 +483,7 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, ParkError, CommandError, RunError,
-            scanner.ScanError, hook.ReverseError, ResearchRefused) as e:
+            scanner.ScanError, install.InstallError, hook.ReverseError, ResearchRefused) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
