@@ -43,7 +43,7 @@ OUTCOMES = ["passed", "failed", "no_result", "refused", "lost", "stopped"]
 CODE_FIELDS = {
     ("envelope", "role"): {
         "owner", "brain", "orch", "worker", "worker-strong", "reviewer-standards",
-        "reviewer-spec", "researcher-find", "researcher-how", "researcher-survey",
+        "reviewer-spec", "reviewer-edge", "researcher-find", "researcher-how", "researcher-survey",
         "external-researcher", "launcher", "github", "hook", "script",
     },
     ("session.started", "launched_by"): {"launcher", "owner", "session", "boot"},

@@ -14,6 +14,22 @@ def _table() -> tuple[dict, str]:
     return json.loads(raw)["models"], "prices-" + hashlib.sha256(raw).hexdigest()[:12]
 
 
+TOKEN_KINDS = ("input", "output", "cache_read", "cache_write", "cache_write_1h")
+
+
+def missing_rates(model: str) -> list[str]:
+    """What the price file lacks to price any turn of `model`: `["model"]` when it has no row,
+    else the token kinds with no rate (in every tier, for a model with tiers); empty when every
+    turn of it can be priced (#399, the brain's answer on prices)."""
+
+    models, _ = _table()
+    entry = models.get(model)
+    if entry is None:
+        return ["model"]
+    tiers = [entry["tiers"]["up_to"], entry["tiers"]["above"]] if "tiers" in entry else [entry]
+    return [kind for kind in TOKEN_KINDS if any(kind not in rates for rates in tiers)]
+
+
 def price_turn(model: str | None, usage: dict) -> tuple[float | None, str]:
     """(usd, price table id) of a turn of `model` with `usage` (`input_tokens`,
     `output_tokens`, `cache_read_tokens`, `cache_write_tokens` (5-minute and 1-hour together),
