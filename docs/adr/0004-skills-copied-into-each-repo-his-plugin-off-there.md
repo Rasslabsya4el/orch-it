@@ -5,9 +5,9 @@ of his upstream, with a manifest of each file's git blob hash, and its own `.cla
 his plugin off, so a session in the repo runs the repo's copies whatever version of his plugin the machine has
 (Rasslabsya4el/orchestration-layer#391; #397 decisions 1 and 2). The pin moves only by pull request: a workflow runs
 `skills update` daily and on demand; the update compares every file of every skill with the manifest and gives each
-skill an update class, and its pull request lists every skill with its class; one with a skill renamed, removed or
+skill an update class, and its pull request lists every skill with its class; one with a copy renamed, removed or
 changed in its contract carries the label `needs-triage` and waits for the brain (the session that writes and judges
-tickets), any other merges when green (decision 4). Copies in the repo because a skill the layer leans on must not
+tickets), any other merges when green (decision 4, as the brain refined it on orch-it #35). Copies in the repo because a skill the layer leans on must not
 change under it on one machine and not another, or on the day his plugin updates itself; the whole text compared
 because the earlier check by names and headings let a one-line change inside a skill through.
 
@@ -39,6 +39,6 @@ same session listed 27 of them).
   the plugin's namespaced names, and turns an update pull request red while a renamed or removed skill is still named
   somewhere (decision 5).
 - **The skills the layer leaves out are not copied** (those the #390 table hides, and those with no job there), but the
-  manifest lists them with why and their hashes, so a new skill upstream is told from one always there, and a rename,
-  removal or contract change of one still waits for the brain.
+  manifest lists them with why and their hashes, so a new skill upstream is told from one always there; a change to
+  one is listed in the update pull request and does not hold it, since nothing the layer runs changes.
 - **An added skill is copied and called by no role** until the brain assigns it.
