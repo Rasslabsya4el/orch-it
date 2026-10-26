@@ -20,7 +20,8 @@ def found(tmp_path: Path, files: dict[str, str | bytes]) -> list[tuple[str, int,
 
 RIGHT = {
     "anchor with an underscore": {"docs/a.md": "## my_var\n\nText.\n", "docs/y.md": "See [it](a.md#my_var).\n"},
-    "anchor of a heading with a link": {"docs/a.md": "## [Foo](https://x.org)\n\nText.\n", "docs/y.md": "See [it](a.md#foo).\n"},
+    "anchor of a heading with a link": {"docs/a.md": "## [Foo](https://x.org)\n\nText.\n",
+                                        "docs/y.md": "See [it](a.md#foo).\n"},
     "setext heading": {"docs/a.md": "Title\n=====\n\nText.\n", "docs/y.md": 'See `docs/a.md` section "Title".\n'},
     "indented heading": {"docs/a.md": "  ## Foo\n\nText.\n", "docs/y.md": "See [it](a.md#foo).\n"},
     "a pointed file with a BOM": {"docs/a.md": b"\xef\xbb\xbf# Foo\n\nText.\n", "docs/y.md": "See [it](a.md#foo).\n"},

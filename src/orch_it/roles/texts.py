@@ -530,7 +530,8 @@ def _names(text: _Text) -> list[Finding]:
         roles: list[str] = []
         if not line.fenced:
             labels += [a or b for a, b in _NAMED_LABEL.findall(line.text)]
-            labels += [name for listed in _LISTED_LABELS.findall(line.text) for name in re.findall(r"`([^`\s]+)`", listed)]
+            labels += [name for listed in _LISTED_LABELS.findall(line.text)
+                       for name in re.findall(r"`([^`\s]+)`", listed)]
             roles += [a or b for a, b in _NAMED_ROLE.findall(line.text)]
         for name in dict.fromkeys(labels):
             if name not in _labels() and not _placeholder(name):
@@ -540,8 +541,8 @@ def _names(text: _Text) -> list[Finding]:
                 found.append(text.finding(line.number, "role_unknown", f"`{name}` is no role of the roles settings"))
         if not records:
             for name in dict.fromkeys(m.lower() for m in _REMOVED.findall(line.text)):
-                found.append(text.finding(line.number, "part_removed",
-                                          f"`{name}`: removed from the layer ({REMOVED[name]}); name what does its job now"))
+                why = f"`{name}`: removed from the layer ({REMOVED[name]}); name what does its job now"
+                found.append(text.finding(line.number, "part_removed", why))
     return found
 
 
