@@ -255,6 +255,27 @@ def test_the_host_name_and_its_first_label_are_found_whole_word_in_any_case():
         assert kinds(other, patterns) == [], other
 
 
+# the default host names an OS gives a machine nobody named (#395 brain answer): found on any
+# machine, so the job's machine-independent scan catches a leaked one. Put together at run time.
+DEFAULT_HOSTS = ["WI" + "N-OHK3JQ5AM84", "DESK" + "TOP-ABC1234", "LAP" + "TOP-AB123456"]
+
+
+@pytest.mark.parametrize("name", DEFAULT_HOSTS)
+def test_a_default_host_name_is_found_on_any_machine(name):
+    for patterns in (Patterns.machine_independent(), Patterns.of_machine(), Patterns()):
+        assert patterns.find(f"hostname={name} ok") == ["host_name"]
+    assert Patterns.machine_independent().redact(f'hostname="{name}"') == 'hostname="<host_name>"'
+
+
+@pytest.mark.parametrize("text", [
+    "WINDOWS", "WIN-abc", "wi" + "n-ohk3jq5am84", "desk" + "top", "DESK" + "TOP-ABC12345", "DESK" + "TOP-ABC123",
+    "MY-WI" + "N-OHK3JQ5AM84", "WI" + "N-OHK3JQ5AM84-X", "WI" + "N-OHK3JQ5AM84_1", "XWI" + "N-OHK3JQ5AM84",
+    "WI" + "N-SHORT", "LAP" + "TOP-AB1234567",
+])
+def test_what_is_no_default_host_name_is_not_found(text):
+    assert Patterns.machine_independent().find(text) == []
+
+
 @pytest.mark.parametrize("host", ["localhost", "LocalHost", "ab", "", None])
 def test_a_host_that_is_localhost_or_too_short_is_not_a_pattern(host):
     assert kinds("localhost ab here", Patterns(host=host)) == []
