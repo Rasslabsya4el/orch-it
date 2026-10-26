@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Callable
 
 from orch_it.events.store import Store
-from orch_it.skills.copies import GIT_TIMEOUT_SECONDS, NO_WINDOW, SKILL_FILE, SKILLS_FOLDER, Manifest, SkillsError
+from orch_it.skills.copies import NO_WINDOW, SKILL_FILE, SKILLS_FOLDER, Manifest, SkillsError
 
 SAME_SESSION_SOURCES = ("resume", "compact")
+HOOK_GIT_TIMEOUT_SECONDS = 5  # a session waits for this hook: a git that hangs must not hold it
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,7 @@ def project_root(cwd: str) -> Path:
         return Path(os.environ["CLAUDE_PROJECT_DIR"])
     try:
         done = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True,
-                              timeout=GIT_TIMEOUT_SECONDS, creationflags=NO_WINDOW)
+                              timeout=HOOK_GIT_TIMEOUT_SECONDS, creationflags=NO_WINDOW)
         if done.returncode == 0 and done.stdout.strip():
             return Path(done.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
