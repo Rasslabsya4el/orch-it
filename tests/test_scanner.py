@@ -152,6 +152,14 @@ def test_the_root_folder_counts_only_at_the_start_of_a_path():
     assert kinds(f"a-{root}") == []
 
 
+def test_a_bare_root_folder_in_a_code_span_is_prose_but_a_path_in_one_is_not():
+    root = "/ro" + "ot"
+    assert kinds(f"the `{root}` folder") == []
+    assert kinds(f"run `cd {root}/x` now") == ["home_path"]
+    assert kinds(f"see `{root}/x`") == ["home_path"]
+    assert kinds(f"see `{SOMEONE_HOME}/x`") == ["home_path"]
+
+
 @pytest.mark.parametrize("text", [
     "app/ho" + "me/index.html",
     "x/Us" + "ers/y",

@@ -53,7 +53,8 @@ _ANY_HOME = re.compile(
     rf"|{_PATH_START}/(?:(?:cygdrive|mnt)/)?[A-Za-z]/(?i:users)/{_NOT_A_PERSON}{_NAME}"
     rf"|{_PATH_START}/home/{_NOT_A_PERSON}{_NAME}"
     rf"|{_PATH_START}/Users/{_NOT_A_PERSON}{_NAME}"
-    rf"|{_PATH_START}/root(?![A-Za-z0-9._-])")
+    # a bare `/root` in a code span is prose about the folder, not a path in use
+    rf"|{_PATH_START}(?:(?<!`)/root(?![A-Za-z0-9._-])|(?<=`)/root(?![A-Za-z0-9._`-]))")
 
 # The secrets by their published shapes, each with a left boundary.
 _SECRET = re.compile(
