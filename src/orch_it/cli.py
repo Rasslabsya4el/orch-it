@@ -1,7 +1,8 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
 7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9);
 `python -m orch_it labels sync` (#398 decision 6); `python -m orch_it guards scan` (#395 decision 4:
-it prints one line per private value found and exits 1 when there is any).
+it prints one line per private value found and exits 1 when there is any); `python -m orch_it skills
+shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens.
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -19,6 +20,7 @@ from orch_it import labels, settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.guards import scanner
+from orch_it.skills import shadow
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
@@ -153,6 +155,11 @@ def _parser() -> argparse.ArgumentParser:
     p = label_commands.add_parser("sync", parents=[common],
                                   help="make a repo's labels match the layer's set")
     p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
+
+    skills = commands.add_parser("skills", help="the repo's skill copies").add_subparsers(
+        dest="command", required=True)
+    skills.add_parser("shadowed", parents=[common],
+                      help="the session-start hook: a skill.shadowed event per personal skill of a repo skill's name")
     return root
 
 
@@ -293,11 +300,31 @@ def _run(args) -> str:
     raise AssertionError(command)
 
 
+def _repo_or_none(work_tree: Path) -> str | None:
+    try:
+        return _repo_of(str(work_tree))
+    except CommandError:
+        return None
+
+
+def _skills_shadowed(args) -> int:
+    """The SessionStart hook (#397 decision 3): prints nothing and exits 0 whatever happens, so it
+    never blocks a session; an error goes to stderr."""
+
+    try:
+        shadow.run_hook(sys.stdin.buffer.read(), open_store=lambda: _store(args), repo_of=_repo_or_none)
+    except Exception as e:  # fail open: a broken hook must never stop a session
+        print(f"error: {e}", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else EXIT_ERROR
+    if args.group == "skills" and args.command == "shadowed":
+        return _skills_shadowed(args)
     try:
         if args.group == "tests":
             text, code = _tests_run(args)
