@@ -104,6 +104,43 @@ def test_a_wrapped_command_is_judged_like_the_plain_one(hub, tmp_path, wrapped):
     assert refused and refused.codes[0] in ("park_by_hand", "command_unreadable"), command
 
 
+@pytest.mark.parametrize("command", [
+    "$url = gh issue edit 10 --add-label parked", "$u = (gh issue edit 10 --add-label parked)",
+    "try { gh issue edit 10 --add-label parked } catch { }", "& { gh issue edit 10 --add-label parked }",
+    "1 | ForEach-Object { gh issue edit 10 --add-label parked }",
+])
+def test_powershell_s_own_forms_are_judged_too(hub, tmp_path, command):
+    refused = judge(hub, command, tmp_path, tool="PowerShell")
+    assert refused and refused.codes[0] == "park_by_hand", command
+
+
+@pytest.mark.parametrize("target", [
+    f"https://github.com/{REPO}/issues/20#issuecomment-5", f"https://github.com/{REPO}/issues/20?x=1",
+    f"http://www.github.com/{REPO}/issues/20", f"HTTPS://GITHUB.COM/{REPO}/issues/20", "#20"])
+def test_an_edit_target_in_any_form_gh_takes_is_read(hub, tmp_path, target):
+    assert judge(hub, f"gh issue edit {target} --add-label ready-for-agent", tmp_path).codes == ["weight_missing"]
+
+
+def test_the_repo_flag_before_the_subcommand_and_a_short_flag_with_equals_are_read(hub, tmp_path):
+    path = shlex.quote(str(body_file(tmp_path, fixture("bad_weight_missing")[1])))
+    assert judge(hub, f"gh issue -R {REPO} create -t T -F={path}", tmp_path).codes == ["weight_missing"]
+    assert judge(hub, f"gh issue --repo={REPO} edit 20 --add-label ready-for-agent", tmp_path).codes == [
+        "weight_missing"]
+
+
+def test_a_transcript_line_of_any_json_shape_is_read_without_failing(hub, tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    lines = ['"write-ticket"', '["write-ticket"]', '{"type": "user", "message": ["write-ticket"]}',
+             '{"type": "assistant", "message": {"content": ["write-ticket", {"type": "tool_use", "name": "Skill", '
+             '"input": "write-ticket"}]}}',
+             '{"type": "user", "message": {"content": "<command-name>/some-plugin:write-ticket</command-name>"}}']
+    transcript.write_text("\n".join(lines), "utf-8")
+    assert not judge(hub, create(body_file(tmp_path, BODY)), tmp_path, transcript=transcript)
+    transcript.write_text("\n".join(lines[:-1]), "utf-8")
+    assert judge(hub, create(body_file(tmp_path, BODY)), tmp_path, transcript=transcript).codes == [
+        "write_ticket_missing"]
+
+
 def test_gh_s_own_alias_new_is_a_create(hub, tmp_path):
     refused = judge(hub, f"gh issue new --title T --body-file {shlex.quote(str(body_file(tmp_path, BODY)))}",
                     tmp_path, transcript=WITHOUT_SKILL)
@@ -174,7 +211,7 @@ def test_the_hook_prints_a_deny_with_every_violation_and_fails_open_on_its_own_e
     store = tmp_path / "events"
     monkeypatch.setenv("ORCH_IT_STORE", str(store))
     title, body = fixture("bad_empty_body")
-    monkeypatch.setattr(hook, "GhHub", lambda: hub)
+    monkeypatch.setattr(hook, "make_hub", lambda: hub)
     monkeypatch.setattr(hook, "repo_of", lambda folder: REPO)
     data = json.dumps(payload(create(body_file(tmp_path, body), title=title), tmp_path))
     assert hook.main(data) == 0
@@ -196,7 +233,7 @@ def test_a_refusal_and_a_pass_are_written_to_the_store(hub, tmp_path, monkeypatc
     from orch_it.events.store import Store
 
     monkeypatch.setenv("ORCH_IT_STORE", str(tmp_path / "events"))
-    monkeypatch.setattr(hook, "GhHub", lambda: hub)
+    monkeypatch.setattr(hook, "make_hub", lambda: hub)
     monkeypatch.setattr(hook, "repo_of", lambda folder: REPO)
     hook.main(json.dumps(payload(create(body_file(tmp_path, BODY)), tmp_path, transcript=WITHOUT_SKILL)))
     hook.main(json.dumps(payload(create(body_file(tmp_path, BODY)), tmp_path)))

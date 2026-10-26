@@ -20,8 +20,9 @@ from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
-from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
+from orch_it.testruns.runner import NEED_OSES, RunError, run_tests
 from orch_it.tickets import commands as ticket_commands
+from orch_it.tickets import hook as ticket_hook
 from orch_it.tickets.park import ParkError
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
@@ -153,17 +154,13 @@ def _store(args) -> Store:
     return Store.open(args.store)
 
 
-_ORIGIN = re.compile(r"(?:github\.com[:/])([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
-
-
 def _repo_of(work_tree: str) -> str:
     """`owner/name` of the work tree's `origin` on GitHub, or `CommandError("repo_unknown")`."""
 
-    origin = git_output(work_tree, "remote", "get-url", "origin")
-    found = _ORIGIN.search(origin) if origin else None
+    found = ticket_hook.repo_of(work_tree)
     if not found:
         raise CommandError("repo_unknown", f"{work_tree}: give --repo")
-    return found.group(1)
+    return found
 
 
 def _tests_run(args) -> tuple[str, int]:
