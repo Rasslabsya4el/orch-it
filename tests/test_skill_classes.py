@@ -147,8 +147,36 @@ def test_a_section_that_says_what_it_takes_or_returns_is_contract():
         assert (change.cls, change.why) == ("contract_changed", [why])
 
 
+def test_a_skill_with_no_sections_has_its_whole_body_as_its_contract():
+    # his `implement`: no heading below the title, its input said in a sentence
+    old = {"skills/engineering/implement": skill("implement", "If the user passes a ticket reference, fetch it.\n"
+                                                              "Commit your work to the current branch.\n")}
+    new = {"skills/engineering/implement": skill("implement", "If the user passes a ticket reference or a URL, fetch it.\n"
+                                                              "Commit your work to the current branch.\n")}
+    [change] = classify(old, new)
+    assert (change.cls, change.why) == ("contract_changed", ["body"])
+
+
+def test_a_support_file_that_shapes_what_the_skill_writes_is_contract():
+    for rel in ("AGENT-BRIEF.md", "OUT-OF-SCOPE.md", "HTML-REPORT.md", "triage-labels.md", "issue-tracker-github.md",
+                "domain.md", "template.sh", "dependency-cruiser.config.cjs"):
+        old = {"skills/x/a": skill("a", "Body.\n\n## Notes\n\nn\n", **{rel: "one\n"})}
+        new = {"skills/x/a": skill("a", "Body.\n\n## Notes\n\nn\n", **{rel: "two\n"})}
+        assert [(c.cls, c.why) for c in classify(old, new)] == [("contract_changed", [rel])], rel
+    for rel in ("DEEPENING.md", "tests.md", "agents/openai.yaml", "CREDITS.md"):
+        old = {"skills/x/a": skill("a", "Body.\n\n## Notes\n\nn\n", **{rel.replace("/", "__"): "one\n"})}
+        new = {"skills/x/a": skill("a", "Body.\n\n## Notes\n\nn\n", **{rel.replace("/", "__"): "two\n"})}
+        assert [c.cls for c in classify(old, new)] == ["text_changed"], rel
+
+
+def test_a_byte_order_mark_before_the_frontmatter_is_read_through():
+    old = {"skills/x/a": skill("a", "Body.\n\n## Notes\n\nn\n")}
+    new = {"skills/x/a": {"SKILL.md": b"\xef\xbb\xbf" + old["skills/x/a"]["SKILL.md"]}}
+    assert [c.cls for c in classify(old, new)] == ["text_changed"]
+
+
 def test_a_heading_inside_a_code_fence_is_no_section():
-    body = "Intro.\n\n```md\n## Output\nexample\n```\n\nMore.\n"
+    body = "Intro.\n\n## Notes\n\n```md\n## Output\nexample\n```\n\nMore.\n"
     old = {"skills/x/a": skill("a", body)}
     new = {"skills/x/a": skill("a", body.replace("example", "another example"))}
     assert [c.cls for c in classify(old, new)] == ["text_changed"]

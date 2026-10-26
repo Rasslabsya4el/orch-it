@@ -9,9 +9,11 @@ one, compared file by file, each skill given one class.
 - `removed`: a folder gone with nothing to match it.
 - `contract_changed`: what the skill takes or returns changed: its frontmatter `name`,
   `description`, `disable-model-invocation` or `argument-hint`; a section whose heading names what
-  it takes or returns (inputs, outputs, invocation, arguments, files, formats, templates...); a
-  `<...-template>` block; the skills it calls through the Skill tool; a file of the folder added or
-  removed, or a template or format file of it changed; a `SKILL.md` with no readable frontmatter.
+  it takes or returns (inputs, outputs, invocation, arguments, files, formats, templates...), or the
+  whole body of a skill with no section below its title; a `<...-template>` block; the skills it
+  calls through the Skill tool; a file of the folder added or removed, or a file of it that shapes
+  what it writes changed (formats, templates, report and brief shapes, the tracker, label and
+  domain files his setup writes, configs); a `SKILL.md` with no readable frontmatter.
 - `text_changed`: any other difference, down to one line inside a paragraph.
 
 `why` names what decided the class: the fields, sections, templates, calls or files.
@@ -31,7 +33,9 @@ CONTRACT_FIELDS = ("name", "description", "disable-model-invocation", "argument-
 _CONTRACT_HEADING = re.compile(
     r"\b(inputs?|outputs?|returns?|arguments?|parameters?|invocation|usage|preconditions?|templates?"
     r"|formats?|files?|deliverables?|definition of done|acceptance criteria|reads?|writes?|produces?)\b")
-_CONTRACT_FILE = re.compile(r"format|template", re.IGNORECASE)
+# support files that shape what the skill writes: his formats, templates, report and brief shapes, the files his
+# setup writes (tracker, labels, domain) and configs it installs
+_CONTRACT_FILE = re.compile(r"format|template|report|brief|scope|label|tracker|domain|config", re.IGNORECASE)
 _HEADING = re.compile(r"(#{1,6})[ \t]+(.+?)[ \t#]*$")
 _FENCE = re.compile(r"[ \t]{0,3}(```|~~~)")
 _TEMPLATE = re.compile(r"<([a-z0-9-]+-template)>.*?</\1>", re.DOTALL)
@@ -100,7 +104,8 @@ def _compare(name: str, old_path: str, new_path: str, old: dict[str, bytes], new
 
 def _skill_contract(old: bytes, new: bytes) -> list[str]:
     try:
-        old_text, new_text = (data.decode("utf-8").replace("\r\n", "\n") for data in (old, new))
+        old_text, new_text = (data.decode("utf-8").removeprefix("﻿").replace("\r\n", "\n")
+                              for data in (old, new))
     except UnicodeDecodeError:
         return [f"{SKILL_FILE} unreadable"]
     old_front, old_body = _split(old_text)
@@ -111,7 +116,7 @@ def _skill_contract(old: bytes, new: bytes) -> list[str]:
     old_sections, new_sections = _contract_sections(old_body), _contract_sections(new_body)
     for heading in [*new_sections, *(h for h in old_sections if h not in new_sections)]:
         if old_sections.get(heading) != new_sections.get(heading):
-            why.append(f"section {heading}")
+            why.append("body" if heading == "body" else f"section {heading}")
     old_templates, new_templates = _templates(old_body), _templates(new_body)
     for tag in sorted(old_templates.keys() | new_templates.keys()):
         if old_templates.get(tag) != new_templates.get(tag):
@@ -167,6 +172,8 @@ def _contract_sections(body: str) -> dict[str, str]:
         found = None if fenced else _HEADING.fullmatch(line)
         if found:
             headings.append((i, len(found.group(1)), found.group(2).strip()))
+    if not any(level >= 2 for _, level, _ in headings):  # one section only: the whole body says what it takes
+        return {"body": "\n".join(line.rstrip() for line in lines).strip()}
     sections = {}
     for n, (start, level, title) in enumerate(headings):
         if not _CONTRACT_HEADING.search(title.lower()):
