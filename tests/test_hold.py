@@ -230,7 +230,8 @@ def test_a_store_that_cannot_be_opened_never_stops_a_block_and_errors_are_events
     gone = payload("worker", tmp_path / "gone.jsonl", report)
     assert run_subagent_stop(json.dumps(gone), store=store, repo="o/r") == ("", 0)
     assert run_subagent_stop("[]", store=store, repo="o/r") == ("", 0)
-    assert [e["error_code"] for e in events(store, "error.raised")] == ["transcript_unreadable", "payload_unreadable"]
+    # two writers write microseconds apart: their order in the store is not the order they ran
+    assert sorted(e["error_code"] for e in events(store, "error.raised")) == ["payload_unreadable", "transcript_unreadable"]
     # a string `stop_hook_active` is no proof of a first hold
     out, _ = run_subagent_stop(json.dumps(payload("worker", path, report) | {"stop_hook_active": "false"}),
                                store=store, repo="o/r")
