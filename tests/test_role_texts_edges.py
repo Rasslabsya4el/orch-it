@@ -35,6 +35,8 @@ RIGHT = {
     "a haiku": {"docs/y.md": "A Haiku 5 7 5 is short.\n"},
     "one step label in two files": {"docs/a.md": "1. **Records.** Write the notes of the day.\n",
                                     "docs/b.md": "2. **Records.** Keep the run's numbers.\n"},
+    "a research record quoting the old layer": {
+        "docs/research/port-table.md": "| `docs/STATE.md` | the autopilot runs on Opus 5.5 at high |\n"},
     "an ADR saying a rule again": {"docs/adr/0001-x.md": "A ticket closes only when its pull request merges green.\n",
                                    "docs/y.md": "A ticket closes only when its pull request merges green.\n"},
 }
@@ -43,6 +45,11 @@ RIGHT = {
 @pytest.mark.parametrize("files", RIGHT.values(), ids=RIGHT.keys())
 def test_right_text_stays_green(tmp_path, files):
     assert found(tmp_path, files) == []
+
+
+def test_a_folder_that_merely_starts_like_research_is_still_read(tmp_path):
+    assert found(tmp_path, {"docs/researchers/x.md": "See `docs/STATE.md`.\n"}) == [
+        ("docs/researchers/x.md", 1, "path_missing")]
 
 
 BROKEN = {
