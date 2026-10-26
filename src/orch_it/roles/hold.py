@@ -3,58 +3,70 @@
 (`agent_transcript_path`; the parent's transcript is never read) and holds its stop once when the
 final report breaks a rule of its role's `report` in the roles settings:
 
-- a line `tdd:`, `diagnosis:`, `code-review:`, `research:`, `writing-for-agents:`,
-  `domain-modeling:` or `codebase-design:` that claims a call (any value but a no-claim form such
-  as `skipped (why)`, `n/a`, `none`, `not a defect`) with no Skill tool use of that skill in the
-  subagent's transcript (with or without a `plugin:` prefix);
-- a unit that edits a code file (Edit, Write, MultiEdit or NotebookEdit of a file that is no
-  Markdown and not under a scratch or temp folder) with no `tdd:` line;
+- a report line (`tdd:`, `diagnosis:`, `code-review:`, `research:`, `writing-for-agents:`,
+  `domain-modeling:`, `codebase-design:`; plain, in bold or code, or a table row `| tdd | called |`)
+  that claims a call (any value but a no-claim form such as `skipped (why)`, `no`, `n/a`, `none`,
+  `not a defect`) with no Skill tool use of that skill in the transcript that did not fail (with or
+  his plugin's `mattpocock-skills:` prefix; a leading `/` aside);
+- a unit that edits a code file in its worktree (an Edit, Write, MultiEdit or NotebookEdit that did
+  not fail, of a file with a code suffix, `CODE_SUFFIXES`, under the payload's `cwd`) with no `tdd:`
+  line; files outside the worktree (the spawn's scratchpad) are no edits of the unit;
 - a line the role `owes` (researcher-how's `research:`) that is missing;
-- a report of more non-empty lines than the role's `cap_lines`;
+- a report of more non-empty lines (split at line breaks) than the role's `cap_lines`;
 - a context past the role's `context_line` (the largest prompt of any of its turns: input, cache
-  read and cache write tokens) with no `table: <path>` line naming a file that exists: survey's
-  100k hand-back, its table written as it goes.
+  read and cache write tokens, as the transcript's usage records them) with no `table: <path>` line
+  naming a file that exists: survey's 100k hand-back, its table written as it goes.
 
 A role with no `report` in the settings (ORCH, the brain, any other agent type) is never read. The
 final report is `last_assistant_message`, else the last assistant text of the transcript; lines in a
-fenced block or a quote are no report lines. A stop already held once (`stop_hook_active`) passes,
-so a subagent is held at most once and never loops. All problems of a stop go into one reason.
+fenced block or a quote are no report lines. A stop already held once (`stop_hook_active` true)
+passes, so a subagent is held at most once and never loops. All problems of a stop go into one
+reason.
 
 Each judged stop writes one `report_line.checked` per line it judged (`claimed`, `verified`,
 `accepted`; `first_edit_path` for `tdd`; for `report_cap` the line count and the cap), a
 `context.crossed` when the context line was passed, and, when the stop is let through and the
 prompt carried `Spawn: <run>`, the end of that spawn's `subagent` step (outcome `passed`, or
-`failed` when a held problem was never fixed). A transcript that cannot be read, a payload that is
-no object, or any error of the hook itself lets the stop through (`error.raised`, `failed_open`):
-a broken hook must not stop a session.
+`failed` when a held problem was never fixed). A payload that is no object or a transcript that
+cannot be read lets the stop through with `error.raised` (`payload_unreadable`,
+`transcript_unreadable`, `failed_open`), as does any error of the hook itself; a store that cannot
+be written never changes the verdict. With no GitHub repo around `cwd` there is no envelope, and no
+event is written.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orch_it.roles import RoleSet
+from orch_it.roles import SKILL_OF_LINE, RoleSet
 
-SKILL_OF_LINE = {"tdd": "tdd", "diagnosis": "diagnosing-bugs", "code-review": "code-review", "research": "research",
-                 "writing-for-agents": "writing-for-agents", "domain-modeling": "domain-modeling",
-                 "codebase-design": "codebase-design"}
 CODE_EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+HIS_PLUGIN = "mattpocock-skills"
+CODE_SUFFIXES = (".py", ".pyi", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".ps1", ".psm1", ".sh", ".bash", ".html",
+                 ".css", ".json", ".sql", ".go", ".rs", ".java", ".kt", ".rb", ".c", ".h", ".cpp", ".hpp", ".cs",
+                 ".ipynb")
 REASON_HEADER = "The stop is held once; fix the final report, then end again:"
-_LINE = re.compile(r"(?im)^\W*(" + "|".join(map(re.escape, [*SKILL_OF_LINE, "table"])) + r")\s*:[ \t]*(.*)$")
-_NO_CLAIM = re.compile(r"^(skipped|n/a|na|none|not a defect|no defect|not applicable|not run|not needed|not called"
-                       r"|not used|not invoked)\b", re.IGNORECASE)
+_LABELS = "|".join(map(re.escape, [*SKILL_OF_LINE, "table"]))
+_LINE = re.compile(r"^\W*?[*_`]{0,2}(" + _LABELS + r")[*_`]{0,2}\s*:[*_`]{0,2}[ \t]*(.*)$", re.IGNORECASE)
+_CELL = re.compile(r"^\s*\|\s*[*_`]{0,2}(" + _LABELS + r")[*_`]{0,2}\s*\|\s*([^|]*)\|", re.IGNORECASE)
+_NO_CLAIM = re.compile(r"^(?:skipped|skip|no|n/a|n\.a\.|na|none|nothing|false|-|not a defect|no defect|not applicable"
+                       r"|not run|not needed|not required|not relevant|not called|not used|not invoked|did not"
+                       r"|didn't)(?:\W|$)",
+                       re.IGNORECASE)
 _SPAWN = re.compile(r"^Spawn:\s*(spawn-[\w-]+)\s*$", re.MULTILINE)
-_FENCES = ("```", "~~~")
+_FENCE = re.compile(r"^\s*(```+|~~~+)")
 
 
 @dataclass
 class Verdict:
     role: str
     run: str | None = None
-    problems: list[tuple[str, str]] = field(default_factory=list)  # (label, the sentence of the reason)
+    problems: list[tuple[str, str]] = field(default_factory=list)  # (label, its sentence in the reason)
     checks: list[dict] = field(default_factory=list)  # the detail of each `report_line.checked`
     owed: list[str] = field(default_factory=list)
     present: list[str] = field(default_factory=list)
@@ -66,24 +78,30 @@ class Verdict:
         return "\n".join([REASON_HEADER] + [f"- {sentence}" for _, sentence in self.problems])
 
 
+class TranscriptUnreadable(Exception):
+    """The subagent's transcript cannot be read at all: the stop goes through with an event."""
+
+
 def _records(path: str) -> list[dict]:
-    """The transcript's JSON objects; a half-written or broken line is skipped. A file that cannot
-    be read raises OSError."""
+    """The transcript's JSON objects; a half-written, broken or too deeply nested line is skipped."""
 
     records = []
-    with open(path, encoding="utf-8", errors="replace") as lines:
-        for line in lines:
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(record, dict):
-                records.append(record)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as lines:
+            for line in lines:
+                try:
+                    record = json.loads(line)
+                except (ValueError, RecursionError):
+                    continue
+                if isinstance(record, dict):
+                    records.append(record)
+    except (OSError, ValueError) as e:
+        raise TranscriptUnreadable(type(e).__name__) from None
     return records
 
 
-def _blocks(record: dict) -> list[dict]:
-    message = record.get("message")
+def _blocks(record: dict | None) -> list[dict]:
+    message = record.get("message") if isinstance(record, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
@@ -91,34 +109,51 @@ def _blocks(record: dict) -> list[dict]:
 
 
 def _tool_uses(records: list[dict]) -> list[dict]:
-    return [b for r in records if r.get("type") == "assistant" for b in _blocks(r) if b.get("type") == "tool_use"]
+    """Every tool use of the subagent that did not come back as an error."""
+
+    failed = {b.get("tool_use_id") for r in records if r.get("type") == "user" for b in _blocks(r)
+              if b.get("type") == "tool_result" and b.get("is_error") is True}
+    return [b for r in records if r.get("type") == "assistant" for b in _blocks(r)
+            if b.get("type") == "tool_use" and b.get("id") not in failed]
 
 
-def _skills(records: list[dict]) -> set[str]:
+def _skills(uses: list[dict]) -> set[str]:
     names = set()
-    for block in _tool_uses(records):
+    for block in uses:
         given = block.get("input")
         skill = given.get("skill") if block.get("name") == "Skill" and isinstance(given, dict) else None
-        if isinstance(skill, str) and skill.strip():
-            names.add(skill.strip().rsplit(":", 1)[-1].strip().lower())
+        if not isinstance(skill, str) or not skill.strip():
+            continue
+        plugin, _, name = skill.strip().lstrip("/").rpartition(":")
+        if plugin in ("", HIS_PLUGIN):  # his copy by its bare name, or his plugin's; another plugin's is not it
+            names.add(name.strip().lower())
     return names
 
 
-def _code_edits(records: list[dict]) -> list[str]:
+def _code_edits(uses: list[dict], worktree: Path | None) -> list[str]:
     paths = []
-    for block in _tool_uses(records):
+    for block in uses:
         given = block.get("input")
-        path = given.get("file_path") or given.get("notebook_path") if isinstance(given, dict) else None
-        if block.get("name") in CODE_EDIT_TOOLS and isinstance(path, str) and _is_code(path):
+        path = (given.get("file_path") or given.get("notebook_path")) if isinstance(given, dict) else None
+        if block.get("name") in CODE_EDIT_TOOLS and isinstance(path, str) and _is_code(path, worktree):
             paths.append(path)
     return paths
 
 
-def _is_code(path: str) -> bool:
-    lowered = path.lower().replace("\\", "/")
-    if lowered.endswith((".md", ".markdown", ".txt")):
+def _is_code(path: str, worktree: Path | None) -> bool:
+    """A file with a code suffix in the unit's worktree (anywhere, when the worktree is unknown)."""
+
+    if not path.lower().endswith(CODE_SUFFIXES):
         return False
-    return not any("scratch" in part or part in ("tmp", "temp") for part in lowered.split("/"))
+    if worktree is None:
+        return True
+    try:
+        target = Path(path.replace("\\", "/"))
+        target = (target if target.is_absolute() else worktree / target).resolve()
+        target.relative_to(worktree.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
 
 
 def _final(payload: dict, records: list[dict]) -> str:
@@ -133,69 +168,90 @@ def _final(payload: dict, records: list[dict]) -> str:
     return last
 
 
+def _lines(text: str) -> list[str]:
+    """The lines of the report: split at line breaks only (a form feed or U+2028 is inside a line)."""
+
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
 def _report_lines(text: str) -> list[str]:
-    """The lines that can be report lines: not inside a fenced block, not a quote."""
+    """The lines that can be report lines: not inside a fenced block, not a quote. A line that
+    opens with a fence and closes it again (inline triple backticks) is a line, not a fence."""
 
     kept, fence = [], None
-    for line in text.splitlines():
-        marker = line.lstrip()[:3]
-        if fence is None and marker in _FENCES:
-            fence = marker
+    for line in _lines(text):
+        opened = _FENCE.match(line)
+        if fence is None and opened and opened.group(1)[0] not in line.strip()[len(opened.group(1)):]:
+            fence = opened.group(1)
         elif fence is not None:
-            fence = None if marker == fence else fence
+            fence = None if opened and opened.group(1)[0] == fence[0] else fence
         elif not line.lstrip().startswith(">"):
             kept.append(line)
     return kept
 
 
 def _context(records: list[dict]) -> int:
-    """The largest prompt of any turn: input, cache read and cache write tokens."""
-
     largest = 0
     for record in records:
         message = record.get("message")
         usage = message.get("usage") if isinstance(message, dict) else None
         if isinstance(usage, dict):
             parts = [usage.get(k) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
-            largest = max(largest, sum(p for p in parts if isinstance(p, int) and p > 0))
+            largest = max(largest, sum(p for p in parts if type(p) is int and p > 0))
     return largest
 
 
 def _spawn_run(records: list[dict]) -> str | None:
     first = next((r for r in records if r.get("type") == "user"), None)
-    text = "\n".join(str(b.get("text", "")) for b in _blocks(first) if b.get("type") == "text") if first else ""
+    text = "\n".join(str(b.get("text", "")) for b in _blocks(first) if b.get("type") == "text")
     found = _SPAWN.search(text)
     return found.group(1) if found else None
 
 
+def _claims(lines: list[str]) -> dict[str, list[str]]:
+    """Every value written for each report line label, in report order."""
+
+    found: dict[str, list[str]] = {}
+    for line in lines:
+        match = _CELL.match(line) or _LINE.match(line)
+        if match:
+            value = match.group(2).strip().strip("*_` ")
+            found.setdefault(match.group(1).lower(), []).append(value)
+    return found
+
+
+def _table_path(value: str) -> str:
+    """The path of a `table:` value, its markup and a trailing remark (`(12 rows)`) aside."""
+
+    value = value.split(" (", 1)[0].strip()
+    return value.strip("*`\"'").strip().removeprefix("<").removesuffix(">").strip()
+
+
 def judge(payload: dict, roles: RoleSet, *, work_tree: str | Path | None = None) -> Verdict | None:
-    """The verdict on a SubagentStop payload, or None when there is nothing to judge (a role with
-    no `report`, a transcript that cannot be read)."""
+    """The verdict on a SubagentStop payload, or None for a role with no `report`. A transcript
+    that cannot be read raises `TranscriptUnreadable`."""
 
     agent = payload.get("agent_type")
     role = agent.rsplit(":", 1)[-1] if isinstance(agent, str) else None
-    settings_of = roles.roles.get(role) if role else None
+    role_settings = roles.roles.get(role) if role else None
+    if role_settings is None or role_settings.report is None:
+        return None
     path = payload.get("agent_transcript_path")
-    if settings_of is None or settings_of.report is None or not isinstance(path, str) or not path:
-        return None
-    try:
-        records = _records(path)
-    except OSError:
-        return None
-    rule = settings_of.report
+    if not isinstance(path, str) or not path:
+        raise TranscriptUnreadable("no transcript path")
+    records = _records(path)
+    rule = role_settings.report
+    cwd = work_tree or payload.get("cwd")
+    worktree = Path(cwd) if isinstance(cwd, (str, Path)) and str(cwd) else None
     final = _final(payload, records)
-    lines = _report_lines(final)
-    called = _skills(records)
-    edits = _code_edits(records)
+    uses = _tool_uses(records)
+    called = _skills(uses)
+    edits = _code_edits(uses, worktree)
     verdict = Verdict(role, _spawn_run(records), context_tokens=_context(records))
-    claimed: dict[str, str] = {}
-    for line in lines:
-        found = _LINE.match(line)
-        if found:
-            claimed.setdefault(found.group(1).lower(), re.sub(r"^\W+", "", found.group(2).strip()))
-    verdict.present = [label for label in claimed if label != "table"]
-    for label, value in claimed.items():
-        if label == "table" or _NO_CLAIM.match(value):
+    claims = _claims(_report_lines(final))
+    verdict.present = [label for label in claims if label != "table"]
+    for label, values in claims.items():
+        if label == "table" or all(_NO_CLAIM.match(value) for value in values):
             continue
         skill = SKILL_OF_LINE[label]
         backed = skill in called
@@ -206,26 +262,26 @@ def judge(payload: dict, roles: RoleSet, *, work_tree: str | Path | None = None)
                                             f" `{label}: skipped (why)`."))
     if edits:
         verdict.owed.append("tdd")
-        if "tdd" not in claimed:
+        if "tdd" not in claims:
             verdict.checks.append({"label": "tdd", "claimed": False, "verified": "tdd" in called, "accepted": False,
                                    "first_edit_path": edits[0]})
             verdict.problems.append(("tdd", f"this unit edits code (`{edits[0]}`) and the report has no `tdd:` line."
                                             " Call the skill `tdd` and report it, or end with `tdd: skipped (why)`."))
     for label in rule.owes:
         verdict.owed.append(label)
-        if label not in claimed:
+        if label not in claims:
             verdict.checks.append({"label": label, "claimed": False, "verified": SKILL_OF_LINE[label] in called,
                                    "accepted": False})
             verdict.problems.append((label, f"your role owes the line `{label}:` and the report has none."))
-    count = sum(1 for line in final.splitlines() if line.strip())
+    count = sum(1 for line in _lines(final) if line.strip())
     if rule.cap_lines is not None and count > rule.cap_lines:
         verdict.checks.append({"label": "report_cap", "claimed": count, "verified": rule.cap_lines, "accepted": False})
         verdict.problems.append(("report_cap", f"the report has {count} lines; your role's cap is {rule.cap_lines}."
                                                " Keep the lines that carry a fact and its source."))
     if rule.context_line is not None and verdict.context_tokens > rule.context_line:
         verdict.crossed = True
-        table = claimed.get("table", "").strip().strip("`")
-        base = Path(work_tree or payload.get("cwd") or ".")
+        table = _table_path(claims.get("table", [""])[-1])
+        base = worktree or Path(".")
         verdict.table_named = bool(table) and (Path(table) if Path(table).is_absolute() else base / table).is_file()
         verdict.checks.append({"label": "table", "claimed": bool(table), "verified": verdict.table_named,
                                "accepted": verdict.table_named})
@@ -235,13 +291,18 @@ def judge(payload: dict, roles: RoleSet, *, work_tree: str | Path | None = None)
     return verdict
 
 
-def record(verdict: Verdict, payload: dict, *, store, repo: str, let_through: bool) -> None:
-    """The events of a judged stop."""
-
+def _envelope(payload: dict | None, repo: str, role: str, run: str | None, step: str | None = None) -> dict:
+    payload = payload if isinstance(payload, dict) else {}
     session = payload.get("agent_id") if isinstance(payload.get("agent_id"), str) else None
     parent = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
-    envelope = {"repo": repo, "ticket": None, "role": verdict.role, "session": session, "parent_session": parent,
-                "turn": None, "step": None, "run": verdict.run, "note": None}
+    return {"repo": repo, "ticket": None, "role": role, "session": session, "parent_session": parent, "turn": None,
+            "step": step, "run": run, "note": None}
+
+
+def record(verdict: Verdict, payload: dict, *, store, repo: str, let_through: bool) -> None:
+    """The events of a judged stop: its checks, a crossed context line, and the spawn's end."""
+
+    envelope = _envelope(payload, repo, verdict.role, verdict.run)
     with store.writer() as writer:
         for check in verdict.checks:
             writer.write(envelope | {"kind": "report_line.checked", "detail": check})
@@ -255,57 +316,64 @@ def record(verdict: Verdict, payload: dict, *, store, repo: str, let_through: bo
                 "report_lines_present": verdict.present}})
 
 
-def run_subagent_stop(raw: str, *, store=None, repo: str | None = None) -> tuple[str, int]:
-    """The hook: (stdout, exit code). Prints a block decision when the stop is held; always exits 0."""
+def run_subagent_stop(raw: str, *, store=None, open_store: Callable | None = None,
+                      repo: str | None = None) -> tuple[str, int]:
+    """The hook: (stdout, exit code). Prints a block decision when the stop is held; always exits
+    0. `store`, or `open_store()` called only when an event is written, is where events go."""
 
     payload = None
     try:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
+            _write(lambda writer, repo_: writer.write(_error_event(None, repo_, "payload_unreadable")),
+                   payload, store, open_store, repo)
             return "", 0
-        verdict = judge(payload, RoleSet.load())
+        try:
+            verdict = judge(payload, RoleSet.load())
+        except TranscriptUnreadable:
+            _write(lambda writer, repo_: writer.write(_error_event(payload, repo_, "transcript_unreadable")),
+                   payload, store, open_store, repo)
+            return "", 0
         if verdict is None:
             return "", 0
-        held = bool(verdict.problems) and not payload.get("stop_hook_active")
-        _record_safely(verdict, payload, store, repo, let_through=not held)
+        held = bool(verdict.problems) and payload.get("stop_hook_active") is not True
+        _write(None, payload, store, open_store, repo, verdict=verdict, let_through=not held)
         if held:
             return json.dumps({"decision": "block", "reason": verdict.reason()}), 0
         return "", 0
     except Exception as e:  # noqa: BLE001 - a broken hook lets the stop through, and says so
-        _error(payload, store, repo, type(e).__name__)
+        _write(lambda writer, repo_: writer.write(_error_event(payload, repo_, type(e).__name__)),
+               payload, store, open_store, repo)
         return "", 0
 
 
-def _repo_and_store(payload: dict | None, store, repo):
-    if repo is None:
-        from orch_it.tickets.hook import repo_of
-
-        cwd = payload.get("cwd") if isinstance(payload, dict) and isinstance(payload.get("cwd"), str) else None
-        repo = repo_of(cwd)
-    if store is None and repo is not None:
-        from orch_it.events.store import Store
-
-        store = Store.open()
-    return store, repo
+def _error_event(payload: dict | None, repo: str, code: str) -> dict:
+    return _envelope(payload, repo, "hook", None) | {
+        "kind": "error.raised", "detail": {"component": "subagent_stop", "error_code": code[:60], "failed_open": True}}
 
 
-def _record_safely(verdict: Verdict, payload: dict, store, repo, *, let_through: bool) -> None:
+def _write(write_one, payload, store, open_store, repo, *, verdict: Verdict | None = None,
+           let_through: bool = True) -> None:
+    """Write the hook's events; a store or repo that cannot be had is said on stderr, never raised."""
+
     try:
-        store, repo = _repo_and_store(payload, store, repo)
-        if store is not None and repo is not None:
-            record(verdict, payload, store=store, repo=repo, let_through=let_through)
-    except Exception:  # noqa: BLE001 - a store that cannot be written is never the stop's problem
-        pass
+        if repo is None:
+            from orch_it.tickets.hook import repo_of
 
-
-def _error(payload: dict | None, store, repo, code: str) -> None:
-    try:
-        store, repo = _repo_and_store(payload, store, repo)
-        if store is None or repo is None:
+            cwd = payload.get("cwd") if isinstance(payload, dict) and isinstance(payload.get("cwd"), str) else None
+            repo = repo_of(cwd)
+        if repo is None:
             return
-        with store.writer() as writer:
-            writer.write({"kind": "error.raised", "repo": repo, "ticket": None, "role": "hook", "session": None,
-                          "parent_session": None, "turn": None, "step": None, "run": None, "note": None,
-                          "detail": {"component": "subagent_stop", "error_code": code[:60], "failed_open": True}})
-    except Exception:  # noqa: BLE001
-        pass
+        if store is None:
+            if open_store is None:
+                from orch_it.events.store import Store
+
+                open_store = Store.open
+            store = open_store()
+        if verdict is not None:
+            record(verdict, payload, store=store, repo=repo, let_through=let_through)
+        else:
+            with store.writer() as writer:
+                write_one(writer, repo)
+    except Exception as e:  # noqa: BLE001 - the verdict stands whatever the store does
+        print(f"subagent-stop hook: events not written: {type(e).__name__}: {e}", file=sys.stderr)

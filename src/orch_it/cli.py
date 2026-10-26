@@ -366,7 +366,7 @@ def _hook(args) -> tuple[str, int]:
             from orch_it.roles.hold import run_subagent_stop
 
             raw = sys.stdin.buffer.read().decode("utf-8", "replace")
-            return run_subagent_stop(raw, store=_store(args) if args.store else None)
+            return run_subagent_stop(raw, open_store=lambda: _store(args))  # a bad store never stops a block
         except Exception:
             return "", 0
     if args.command == "pre-tool-use":
