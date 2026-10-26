@@ -303,7 +303,7 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
             raise TrialError(f"the push run {first.run_id} at {first.sha[:12]} is not red with a report: the "
                              f"trial test {path} must fail on a push (jobs {first.jobs}) - the base stays as it is")
         out["failing_ids"] = sorted(ids)
-        one = check_main(hub, store, run.repo, run.base, settings=run.settings, now=clock())
+        one = check_main(hub, store, run.repo, run.base)
         run.say(f"main check: {one.outcome} opened {one.opened}")
         ours = run.red_tickets_of(ids)
         out["first_check"] = {"outcome": one.outcome, "opened": one.opened, "red_tickets": ours}
@@ -316,7 +316,7 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
         run.say(f"rerun of the run {first.run_id}")
         hub.rerun(run.repo, first.run_id)
         again = run.ended_run(first.sha, attempt=first.attempt + 1)
-        two = check_main(hub, store, run.repo, run.base, settings=run.settings, now=clock())
+        two = check_main(hub, store, run.repo, run.base)
         out["second_check"] = {"outcome": two.outcome, "attempt": again.attempt, "opened": two.opened,
                                "red_tickets": run.red_tickets_of(ids)}
         run.say(f"second main check: {two.outcome} opened {two.opened}")
@@ -324,7 +324,7 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
         fix_merge = run.land(fixed.pr)
         run.follow(fixed.pr)
         green = run.ended_run(fix_merge.merge_sha)
-        three = check_main(hub, store, run.repo, run.base, settings=run.settings, now=clock())
+        three = check_main(hub, store, run.repo, run.base)
         closed = [n for n in ours if not hub.issue(run.repo, n).open
                   and hub.issue(run.repo, n).state_reason == "completed"]
         out["third_check"] = {"outcome": three.outcome, "run_id": green.run_id, "closed_by_this_check": three.closed,

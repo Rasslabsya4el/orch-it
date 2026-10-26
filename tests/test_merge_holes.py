@@ -120,7 +120,7 @@ def test_merge_6(tmp_path):  # red only on tests red on main: parked on that tic
 def test_merge_7(tmp_path):  # no skip list: a red main is its own ticket, whatever a tree holds
     hub, store, _ = world(tmp_path)
     hub.main_run(hub.land(), {"linux": FAILED, "windows": PASSED}, failing=["t::flaky"])
-    done = check_main(hub, store, REPO, "main", settings=MergeSettings(), now=hub.now)
+    done = check_main(hub, store, REPO, "main")
     assert done.outcome == "red" and len(done.opened) == 1
     assert not list(Path(__file__).parents[1].rglob("red_on_main*.txt"))  # no list for a pull request to edit
 
@@ -133,7 +133,7 @@ def test_merge_8(tmp_path):  # main's run is read after every merge
     hub, store, _ = world(tmp_path)
     sha = hub.land(number=57)
     hub.main_run(sha, {"linux": FAILED, "windows": PASSED}, failing=["t::a"])
-    [number] = check_main(hub, store, REPO, "main", settings=MergeSettings(), now=hub.now).opened
+    [number] = check_main(hub, store, REPO, "main").opened
     assert "#57" in hub.issues[(REPO, number)].body
 
 

@@ -266,7 +266,7 @@ def test_row_6_turns_actions_on_again_when_the_sweep_breaks(world):
     def broken(*args, **kwargs):
         raise RuntimeError("the sweep broke")
 
-    world.hub.branch_runs = broken
+    world.hub.actions_enabled = broken  # read first by the sweep, before any guarded step
     with pytest.raises(RuntimeError):
         world.run(merge_trial.row_6)
     assert world.hub.actions is True and not world.trial.off
