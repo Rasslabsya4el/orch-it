@@ -19,8 +19,8 @@ from datetime import UTC, datetime
 
 from orch_it import settings
 from orch_it.events.store import QueryResult, Store
+from orch_it.merge.gh import GhPullHub as GhHub  # the tickets' Hub and the pull requests the reader hands on
 from orch_it.tickets.gh_check import check_event, read_event
-from orch_it.tickets.hub import GhHub
 from orch_it.tickets.park import KINDS, ROLE, park, unpark
 from orch_it.tickets.reader import read_parks
 
@@ -45,6 +45,23 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p.add_argument("--event", required=True, metavar="PATH", help="the event payload ($GITHUB_EVENT_PATH)")
 
 
+def _follower(hub, store: Store, repo: str, raw: dict, now: datetime, role: str):
+    """The follow of #400 for the reader's `pr_ended` parks, when the hub reads pull requests."""
+
+    if not hasattr(hub, "pull_comments"):
+        return None
+    from orch_it.merge import commands as merge_commands
+    from orch_it.merge.follow import follow
+    from orch_it.merge.settings import MergeSettings
+
+    def followed(number: int) -> str:
+        done = follow(hub, store, repo, number, settings=MergeSettings.from_settings(raw, repo), now=now, role=role,
+                      required=merge_commands.required_jobs(raw), owner=merge_commands.owner_login(raw))
+        return f"#{done.pr} {done.outcome} {done.detail}".rstrip()
+
+    return followed
+
+
 def run(args, store_of: Callable[[], Store], repo_of: Callable[[], str], render) -> str:
     """The command's printed result; the store and the repo are opened only by the commands
     that need them."""
@@ -59,8 +76,10 @@ def run(args, store_of: Callable[[], Store], repo_of: Callable[[], str], render)
     if args.command == "unpark":
         taken = unpark(GhHub(), store_of(), repo_of(), args.number, now=now, role=args.role)
         return f"unparked: {taken.line if taken else 'a park that could not be read'}\n"
-    owner = settings.load().get(OWNER_SETTING)
-    reports = read_parks(GhHub(), store_of(), repo_of(), now=now, owner=owner if isinstance(owner, str) else None,
-                         role=args.role)
+    raw = settings.load()
+    owner = raw.get(OWNER_SETTING)
+    hub, store, repo = GhHub(), store_of(), repo_of()
+    reports = read_parks(hub, store, repo, now=now, owner=owner if isinstance(owner, str) else None, role=args.role,
+                         follow=_follower(hub, store, repo, raw, now, args.role))
     return render(QueryResult(["ticket", "outcome", "park", "detail"],
                               [(r.number, r.outcome, r.line, r.detail) for r in reports]))
