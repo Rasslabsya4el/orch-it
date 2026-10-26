@@ -26,21 +26,22 @@ def stops(command, **kw):
 
 # --- 1. an unreadable head is opaque, never silent -------------------------------------------
 
-def test_an_unreadable_head_becomes_an_opaque_delete_over_its_arguments():
+def test_an_unreadable_head_becomes_a_delete_over_its_readable_path_arguments():
+    # the guard judges the object, so an unreadable head is a delete over its readable path
+    # arguments only; it does not refuse the own worktree itself, so roots_too is off and it
+    # does not walk links (that would false-fire a non-delete over a folder holding a link)
     found = deletes(f"$(echo rm) -rf {OTHER}")
-    assert len(found) == 1 and OTHER in found[0].targets
+    assert len(found) == 1 and found[0].targets == (OTHER,)
     assert found[0].rule_id == "unreadable-command"
-    assert found[0].recursive and found[0].walk_links and found[0].roots_too
+    assert found[0].recursive and not found[0].walk_links and not found[0].roots_too
 
 
-def test_an_ifs_spliced_head_is_opaque_and_keeps_the_unsplit_word():
-    found = [a for a in deletes(f"rm${{IFS}}-rf${{IFS}}{OTHER}") if a.rule_id == "unreadable-command"]
-    assert found and None in found[0].targets
-
-
-def test_an_unreadable_head_with_an_unreadable_argument_keeps_it_as_none():
-    found = [a for a in deletes("$(pick) $OTHERDIR") if a.rule_id == "unreadable-command"]
-    assert found and found[0].targets == (None,)
+def test_an_unreadable_head_with_no_readable_path_argument_yields_nothing():
+    # `rm${IFS}...` (one unreadable word) and `$X $Y` (unreadable head and argument) have no
+    # readable path to judge; refusing them would block ordinary variable-driven commands
+    # (`$PY $f`), so they pass — an unreadable head over unreadable arguments is not a guess
+    assert [a for a in deletes(f"rm${{IFS}}-rf${{IFS}}{OTHER}") if a.rule_id == "unreadable-command"] == []
+    assert [a for a in deletes("$(pick) $OTHERDIR") if a.rule_id == "unreadable-command"] == []
 
 
 def test_pure_option_flags_are_not_targets_of_an_unreadable_head():

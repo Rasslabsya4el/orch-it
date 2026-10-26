@@ -141,6 +141,11 @@ _SKIP_WHOLE = {"for", "while", "until", "if", "case", "fi", "done", "esac", "in"
 
 
 def _read_simple(simple: shell.Simple, windows: bool, out: list[Action], depth: int = 0) -> None:
+    if simple.too_deep:
+        # a command nested past the depth bound is pathological and unread; refuse it as opaque
+        out.append(Delete((None,), simple.cwd, recursive=True, walk_links=False, roots_too=True,
+                          rule_id="unreadable-command", segment="<nested too deep>"))
+        return
     if simple.stdin is not None and simple.stdin_to_shell:
         # `cat <<EOF | bash`: the heredoc body is the script the shell runs
         _run_text(simple.stdin, "posix", windows, out, simple.cwd, depth)
@@ -157,7 +162,7 @@ def _read_simple(simple: shell.Simple, windows: bool, out: list[Action], depth: 
         return
     if argv[0] is None:
         if not (simple.dialect == "windows" and _ps_expression(simple)):
-            out.append(_opaque_head(argv, simple))
+            _emit(_opaque_head(argv, simple), out)
         return
     _emit(_match(argv, simple, windows, depth), out)
 
@@ -168,12 +173,17 @@ def _ps_expression(simple: shell.Simple) -> bool:
     unreadable."""
 
     text = simple.text.strip()
+    # an expression starts with a value, not a command name: a variable, an array `@(...)`, a
+    # subexpression `$(...)`/`(...)`, a type/index `[...]`, a splat, or a number
+    if text[:1] in ("@", "(", "[") or re.match(r"[-+]?\d", text):
+        return True
     found = re.match(r"\$[\w:{}?]+", text)
     if not found:
         return False
     tail = text[found.end():]
-    return (not tail.strip() or tail[:1] in (".", "[", "(", ":")
-            or re.match(r"\s*[-+*/%]?=", tail) is not None)
+    # a bare variable, a member/index/call on it, an assignment, or an increment/comma list
+    return (not tail.strip() or tail[:1] in (".", "[", "(", ":", ",")
+            or re.match(r"\s*([-+*/%]?=|\+\+|--)", tail) is not None)
 
 
 _CASE_LABEL = re.compile(r"^\(?[^()\s]*\)(.*)$", re.S)
@@ -213,15 +223,21 @@ def _emit(found, out: list[Action]) -> None:
         out.append(found)
 
 
-def _opaque_head(argv, simple: shell.Simple) -> Delete:
-    """A command whose head word cannot be read (`$(echo rm) -rf x`, `rm${IFS}-rf${IFS}x`, or
-    nesting past `shell.MAX_DEPTH`) is one opaque delete over every argument that is not a pure
-    option flag, so the guard refuses it only when one of them is a protected path. With no
-    argument left the word itself may hold the path, so the target is unreadable (None)."""
+def _opaque_head(argv, simple: shell.Simple) -> Delete | None:
+    """A command whose head word cannot be read (`$(echo rm) -rf x`, nesting past
+    `shell.MAX_DEPTH`) might be a delete, so its readable path arguments are judged: the guard
+    refuses only when one of them is a protected root other than the own worktree, an ancestor
+    of a root, or inside another (so `$VENV/bin/python -m pytest .` in one's own worktree passes
+    while `$(echo rm) -rf ../tickets` is refused). It does not refuse the own worktree itself
+    (`roots_too` False) and does not walk links; with no readable path argument there is nothing
+    to judge, so no action — an unreadable head over unreadable arguments is not a guessed
+    delete, which would block ordinary variable-driven commands (`$PY $f`)."""
 
-    targets = tuple(w for w in argv[1:] if w is None or (w != "--" and not _is_flag(w)))
-    return Delete(targets or (None,), simple.cwd, True, True, True, "unreadable-command",
-                  _segment(argv))
+    targets = tuple(w for w in argv[1:] if w is not None and w != "--" and not _is_flag(w))
+    if not targets:
+        return None
+    return Delete(targets, simple.cwd, recursive=True, walk_links=False, roots_too=False,
+                  rule_id="unreadable-command", segment=_segment(argv))
 
 
 def _is_flag(word: str) -> bool:

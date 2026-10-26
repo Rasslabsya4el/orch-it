@@ -35,6 +35,7 @@ class Simple:
     stdin_to_shell: bool = False    # its heredoc line pipes into a shell, which runs the body
     text: str = ""                  # the segment as written (heredoc markers removed)
     redirects: list = field(default_factory=list)  # `>` targets that overwrite (None: unreadable)
+    too_deep: bool = False          # a command nested past MAX_DEPTH: unread, refused as opaque
 
 
 # a command nested deeper than this (substitutions or `-c` wrappers inside one another) is read
@@ -46,7 +47,7 @@ def _too_deep(cwd: str | None, dialect: str) -> Simple:
     """What stands for a command nested past `MAX_DEPTH`: an unreadable head with an unreadable
     argument."""
 
-    return Simple([None, None], cwd, dialect)
+    return Simple([None, None], cwd, dialect, too_deep=True)
 
 
 def simple_commands(command, *, tool: str, cwd: str | None, env, windows: bool,
@@ -263,8 +264,12 @@ class _PosixSplit:
         sink = _Walker(self.env, self.walker.windows, self.walker.depth + 1)
         inner = _PosixSplit(sink)
         inner.env = dict(self.env)
-        if not fresh:
-            inner.heredocs = self.heredocs  # the body came from the already-stripped text
+        # a `$( )` body that came from already-stripped text carries markers into the shared
+        # list; but a heredoc the outer strip missed inside a quote (`"$(cat <<'EOF' ... EOF)"`,
+        # the `git commit -m "$(...)"` pattern) is still raw here, so its body must be stripped
+        # fresh rather than read as commands
+        if not fresh and not _has_raw_heredoc(body):
+            inner.heredocs = self.heredocs
         inner.walk(body, self.cwd)
         return sink.out
 
@@ -368,6 +373,16 @@ class Heredoc:
 _HD_FIND = re.compile("\x00H(\\d+)\x00")
 _PIPE_TO_SHELL = re.compile(
     r"\|\s*(?:(?:sudo|env)\s+(?:-\S+\s+)*)?(?:\S*/)?(?:bash|sh|zsh|dash|ksh)\b(?!\s+-\w*c)")
+
+
+_RAW_HEREDOC = re.compile(r"<<(?!<)(?!\x00H)")
+
+
+def _has_raw_heredoc(body: str) -> bool:
+    """Whether `body` holds a heredoc opener that was not already turned into a marker (one the
+    outer strip missed because it sat inside a quoted `$( )`)."""
+
+    return _RAW_HEREDOC.search(body) is not None
 
 
 def _strip_heredocs(command: str) -> tuple[str, list[Heredoc]]:
