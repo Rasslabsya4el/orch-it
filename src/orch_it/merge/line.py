@@ -99,9 +99,11 @@ class _Line:
     run_id: str
     held: dict[int, str] = field(default_factory=dict)  # pr -> the auto-merge method it had
     for_next_run: set[int] = field(default_factory=set)  # members this run leaves for the next one
+    turns: list[Served] = field(default_factory=list)
+    ready_at: dict[int, datetime] = field(default_factory=dict)  # pr -> its ready time, as members() read it
 
     def run(self) -> tuple[list[Served], str]:
-        turns: list[Served] = []
+        turns = self.turns
         while self.clock() < self.deadline:
             members = self.members()
             for member in [m for m in members if m.pull.mergeable == "conflicting"]:
@@ -131,6 +133,7 @@ class _Line:
             if ready is None and pull.auto_merge is None and pull.number not in self.held:
                 continue
             found.append(_Member(pull, ready.at if ready else pull.created_at, refers_to(pull.body)))
+            self.ready_at[pull.number] = found[-1].ready_at
         return sorted(found, key=lambda m: (m.ready_at, m.pull.number))
 
     def hold_others(self, head: int, members: list[_Member] | None = None) -> None:
@@ -157,8 +160,12 @@ class _Line:
         pull = self.hub.pull(self.repo, number)
         if pull is None or pull.state != "open":
             return
-        if self.follow(number).outcome in _STAYS:
+        done = self.follow(number)
+        if done.outcome in _STAYS:
             self.hub.set_auto_merge(self.repo, number, method)
+        else:  # it left the line while it was held: its turn ends here
+            member = _Member(pull, self.ready_at.get(number, pull.created_at), refers_to(pull.body))
+            self.end_turn(self.turns, self.turn(member, "left", 0, done.outcome))
 
     def release_all(self) -> None:
         for number in list(self.held):

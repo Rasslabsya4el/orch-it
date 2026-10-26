@@ -15,7 +15,7 @@
   `error: lock_busy` or `error: lock_stale`;
 - `main check [--branch main] [--repo R] [--role github]`: the red-on-main tickets brought in line
   with the newest ended `tests` run on the branch (decision 4, `orch_it.merge.main_check`); prints
-  `main <outcome> at <sha> opened=#<n>,... closed=#<n>,...`;
+  `main <outcome> at <sha> closed=#<n>,... opened=#<n>,...`;
 - `reconcile [--base main] [--repo R] [--role script]`: the scheduled sweep (`orch_it.merge.reconcile`);
   outside GitHub Actions it also brings the workflows' events into the store; prints whether Actions
   are on, then one line per repair (`<repair> #<n>`) and per pull request it could not follow;
@@ -43,9 +43,7 @@ from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_even
 from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitError
 from orch_it.merge.line import holder_of, run_line
-from orch_it.merge.main_check import ROLE as MAIN_ROLE
 from orch_it.merge.main_check import check_main
-from orch_it.merge.reconcile import ROLE as SWEEP_ROLE
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr
 from orch_it.merge.settings import MergeSettings
@@ -80,11 +78,11 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     group = commands.add_parser("main", help="the main line's tests").add_subparsers(dest="command", required=True)
     p = group.add_parser("check", parents=[repo], help="open, keep or close the red-on-main tickets")
     p.add_argument("--branch", default="main", help="the branch whose tests runs are read (default: main)")
-    p.add_argument("--role", default=MAIN_ROLE)
+    p.add_argument("--role", default=GITHUB)
 
     p = commands.add_parser("reconcile", parents=[repo], help="the scheduled repair of every mismatch")
     p.add_argument("--base", default="main", help="the branch of the merge line (default: main)")
-    p.add_argument("--role", default=SWEEP_ROLE)
+    p.add_argument("--role", default=SCRIPT)
 
     p = commands.add_parser("follow", parents=[repo], help="move a ticket as its pull request stands")
     p.add_argument("pr", nargs="?", type=int, help="the pull request (or give --event)")
@@ -158,11 +156,11 @@ def _follow(args, store_of, repo_of, now: datetime) -> str:
 
 def _main_check(args, store_of, repo_of, now: datetime) -> str:
     repo = args.repo or repo_of(".")
-    done = check_main(GhPullHub(), store_of(), repo, args.branch,
-                      settings=MergeSettings.from_settings(settings.load(), repo), now=now, role=args.role)
+    done = check_main(GhPullHub(), store_of(), repo, args.branch, role=args.role)
     opened = ",".join(f"#{n}" for n in done.opened) or "-"
     closed = ",".join(f"#{n}" for n in done.closed) or "-"
-    return f"main {done.outcome} at {(done.sha or '-')[:12]} closed={closed} opened={opened}\n"
+    brain = f" brain=#{done.brain[0]}" if done.brain else ""
+    return f"main {done.outcome} at {(done.sha or '-')[:12]} closed={closed} opened={opened}{brain}\n"
 
 
 def _reconcile(args, store_of, repo_of, now: datetime) -> str:

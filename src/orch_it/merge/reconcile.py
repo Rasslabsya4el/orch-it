@@ -12,9 +12,12 @@ own runs' stores (their `orch-it-events-*` artifacts): each file of a store's da
 once, under its own name.
 
 Each repair is one code of `repair`: `closed` (a ticket closed), `unparked` (a ticket returned to
-ready or sent to the brain), `rerun` (a run run again or cancelled to be), `red_ticket_opened`. A
-pull request it cannot follow is an `error.raised` and the sweep goes on. Events: the `reconcile`
-step (`run`; ended `repairs`, `actions`, `imported`), and every follow's and the main check's own.
+ready or sent to the brain), `rerun` (a run run again or cancelled to be: a pull request's, or
+main's), `red_ticket_opened`. A pull request it cannot follow, or a main check that breaks, is an
+`error.raised` and the sweep goes on; the step then ends `failed`. An artifact already brought in
+is not downloaded again (its name is kept in the store's `.imported-artifacts`). Events: the
+`reconcile` step (`run`; ended `repairs`, `actions`, `imported`), and every follow's and the main
+check's own.
 """
 
 from __future__ import annotations
@@ -28,20 +31,21 @@ from pathlib import Path
 
 from orch_it.events.store import Store
 from orch_it.merge import marks, record
-from orch_it.merge.follow import FollowError, FollowReport, follow
+from orch_it.merge.follow import FollowReport, follow
 from orch_it.merge.hub import PullHub
 from orch_it.merge.main_check import MainReport, check_main
 from orch_it.merge.settings import MergeSettings
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, GithubError
+from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
 from orch_it.tickets import park
 from orch_it.tickets.model import parse
-
-ROLE = "script"
+from orch_it.tickets.park import ROLE
 # the store's own layout: `<YYYY-MM-DD>/<writer id>.jsonl` (orch_it.events.store)
 _STORE_FILE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}/[A-Za-z0-9._-]{1,120}\.jsonl")
 _REPAIR = {"closed": "closed", "rerun": "rerun", "stuck": "rerun"}
-_UNPARKED = ("after_merge", "red", "red_on_main", "red_in_a_row", "conflict", "edited", "commented", "unanswered",
-             "timeout", "closed_unmerged", "no_result", "acceptance_missing", "row_failed", "ticket_changed")
+# a follow that changed nothing of its ticket; every other outcome returned it or sent it to the brain
+_NO_REPAIR = ("idle", "waiting", "green", "behind", "raced", "merged_alone", "merged_other", "already_closed",
+              "withdrawn")
+IMPORTED_FILE = ".imported-artifacts"  # in the store's folder, out of the index's `<day>/<writer>.jsonl`
 
 
 @dataclass(frozen=True)
@@ -69,23 +73,33 @@ def reconcile(hub: PullHub, store: Store, repo: str, base: str, *, settings: Mer
         try:
             done = follow(hub, store, repo, number, base=base, settings=settings, now=now, role=role,
                           required=required, owner=owner)
-        except (GithubError, FollowError, park.ParkError) as e:
-            failed.append(f"#{number}: {e}"[:200])
-            record.write(store, repo, None, role, run, None, [
-                ("error.raised", {"component": "reconcile", "error_code": getattr(e, "code", "error"),
-                                  "failed_open": False})])
+        except Exception as e:  # one pull request that cannot be followed never ends the sweep
+            failed.append(_failed(store, repo, role, run, f"#{number}", e))
             continue
         followed.append(done)
-        code = _REPAIR.get(done.outcome) or ("unparked" if done.outcome in _UNPARKED else None)
+        code = _REPAIR.get(done.outcome) or (None if done.outcome in _NO_REPAIR else "unparked")
         if code:
             repairs.append((code, f"#{number}"))
-    main = check_main(hub, store, repo, base, settings=settings, now=now, role=role)
-    repairs += [("red_ticket_opened", f"#{n}") for n in main.opened if main.outcome == "red"]
-    repairs += [("closed", f"#{n}") for n in main.closed]
+    main = None
+    try:
+        main = check_main(hub, store, repo, base, role=role)
+    except Exception as e:
+        failed.append(_failed(store, repo, role, run, "main", e))
+    if main is not None:
+        repairs += [("red_ticket_opened", f"#{n}") for n in main.opened]
+        repairs += [("closed", f"#{n}") for n in main.closed]
+        repairs += [("rerun", "main")] if main.outcome == "rerun" else []
     record.write(store, repo, None, role, run, "reconcile", [("step.ended", {
         "outcome": "failed" if failed else "passed", "repairs": [code for code, _ in repairs], "actions": actions,
         "imported": imported})])
     return ReconcileReport(actions, repairs, followed, main, imported, failed)
+
+
+def _failed(store: Store, repo: str, role: str, run: str, what: str, e: Exception) -> str:
+    record.write(store, repo, None, role, run, None, [
+        ("error.raised", {"component": "reconcile", "error_code": getattr(e, "code", type(e).__name__),
+                          "failed_open": False})])
+    return f"{what}: {e}"[:200]
 
 
 def _to_follow(hub: PullHub, repo: str, base: str, owner: str) -> list[int]:
@@ -110,7 +124,11 @@ def bring_workflow_events(hub: PullHub, store: Store, repo: str) -> int:
     returns how many files were copied."""
 
     copied = 0
+    seen_file = Path(store.root) / IMPORTED_FILE
+    seen = set(seen_file.read_text("utf-8").split()) if seen_file.exists() else set()
     for run_id, name in hub.event_artifacts(repo):
+        if name in seen:
+            continue
         with tempfile.TemporaryDirectory(prefix="orch-it-events-") as folder:
             hub.download_artifact(repo, run_id, name, Path(folder))
             for path in sorted(Path(folder).rglob("*.jsonl")):
@@ -121,4 +139,7 @@ def bring_workflow_events(hub: PullHub, store: Store, repo: str) -> int:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, target)
                 copied += 1
+        seen.add(name)
+        with open(seen_file, "a", encoding="utf-8") as f:
+            f.write(f"{name}\n")
     return copied

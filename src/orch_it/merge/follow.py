@@ -60,7 +60,7 @@ from orch_it.merge.settings import MergeSettings
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
 from orch_it.tickets import park
 from orch_it.tickets.hub import Issue
-from orch_it.tickets.model import PRIORITY_LABEL, READY_LABEL, parse
+from orch_it.tickets.model import READY_LABEL, parse
 from orch_it.tickets.reader import HUMAN_LABEL, TRIAGE_LABEL
 
 ROLE = "github"
@@ -248,9 +248,7 @@ class _Follow:
         self.hub.close_issue(self.repo, issue.number, "completed")
         passed = sum(row.result in ("pass", "na") for row in accepted.rows)
         self._write(None, None, [("comment.written", {"comment_kind": "closing"}),
-                                 ("ticket.closed", {"via": "close_command", "state_reason": "completed",
-                                                    "rows_total": len(accepted.rows), "rows_passed": passed,
-                                                    "comments_unanswered": 0})])
+                                 record.ticket_closed(len(accepted.rows), passed)])
         self._close_step("passed", None)
         self._end_pr("passed", "merged", merge)
         return self.report("closed", f"rows {passed}/{len(accepted.rows)}")
@@ -372,7 +370,8 @@ class _Follow:
             self._leave("red", f"{names} red")
             self._end_pr("failed", "red")
             return self.report("red", f"{len(ids)} tests")
-        covering = sorted(n for n, red in self._red_on_main() if set(ids) <= red)
+        failing = {red_main.normal(test_id) for test_id in ids}
+        covering = sorted(red.number for red in red_main.open_reds(self.hub, self.repo) if red.covers(failing))
         if covering and self._park_on_red_main(covering[0], _listed(ids)):
             self._leave("red_on_main", f"red only on tests red on main (#{covering[0]})")
             self._attempt("red_on_main", False, 0)
@@ -415,15 +414,6 @@ class _Follow:
         return self.report("rerun", ", ".join(c.name for c in checks))
 
     # moving the ticket
-
-    def _red_on_main(self) -> list[tuple[int, frozenset[str]]]:
-        found = []
-        for number in self.hub.issues_with_label(self.repo, PRIORITY_LABEL):
-            issue = self.hub.issue(self.repo, number)
-            ids = red_main.ids_of(issue.body) if issue is not None and issue.open else None
-            if ids:
-                found.append((number, ids))
-        return found
 
     def _park_on_red_main(self, red: int, listed: str) -> bool:
         """Park the ticket on the red-on-main ticket; False (nothing changed) when that park is

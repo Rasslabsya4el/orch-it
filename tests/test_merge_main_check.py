@@ -26,7 +26,7 @@ def world(tmp_path):
 
 
 def check(hub, store):
-    return check_main(hub, store, REPO, "main", settings=MergeSettings(), now=hub.now)
+    return check_main(hub, store, REPO, "main")
 
 
 def red_tickets(hub):
@@ -87,11 +87,11 @@ def test_no_result_runs_once_more_and_a_second_goes_to_the_brain(world):
     hub.main_runs.pop(0)
     hub.main_run(sha, {"linux": NO_RESULT, "windows": PASSED}, attempt=2, run_id=run_id)
     done = check(hub, store)
-    assert done.outcome == "no_result" and len(done.opened) == 1
-    issue = hub.issues[(REPO, done.opened[0])]
+    assert done.outcome == "no_result" and len(done.brain) == 1
+    issue = hub.issues[(REPO, done.brain[0])]
     assert "needs-triage" in issue.labels and "ready-for-agent" not in issue.labels
     assert tickets.violations(tickets.parse(issue.body, title=issue.title, labels=issue.labels)) == []
-    assert check(hub, store).opened == []  # one triage ticket per run, never two
+    assert check(hub, store).brain == []  # one triage ticket per run, never two
 
 
 def test_a_red_run_that_names_no_test_is_no_result(world):
@@ -112,6 +112,64 @@ def test_a_run_still_going_is_left_for_the_next_check_and_the_ended_one_before_i
 def test_no_run_at_all_is_nothing_to_do(world):
     hub, store = world
     assert check(hub, store).outcome == "no_run"
+
+
+@pytest.mark.parametrize("ids", [
+    [f"tests/test_{n}.py::test_{'x' * 80}" for n in range(3000)],  # more than one body lists
+    ["t::" + "y" * 70_000],  # one id longer than a body
+    ["t::a ", "t::b\nwith a line end", "t::````", "t::```\n## not a heading"],  # odd characters
+])
+def test_the_same_failures_never_open_a_second_ticket_however_their_ids_look(world, ids):
+    hub, store = world
+    hub.main_run(hub.land(), RED, failing=ids)
+    assert len(check(hub, store).opened) == 1
+    for again in range(2):
+        hub.later(minutes=10)
+        hub.main_run(hub.land(), RED, failing=ids, run_id=f"again-{again}")
+        done = check(hub, store)
+        assert (done.opened, done.closed) == ([], []), again
+
+
+def test_a_red_ticket_whose_ids_a_person_broke_still_closes_on_green(world):
+    hub, store = world
+    hub.main_run(hub.land(), RED, failing=["t::a"])
+    [number] = check(hub, store).opened
+    issue = hub.issues[(REPO, number)]
+    hub.add(number, issue.body.replace("```text", "``"), issue.labels, title=issue.title)
+    hub.later(minutes=10)
+    hub.main_run(hub.land(), GREEN, run_id="green")
+    assert check(hub, store).closed == [number]
+
+
+def test_a_red_run_with_a_job_of_no_result_closes_nothing(world):
+    hub, store = world
+    hub.main_run(hub.land(), RED, failing=["t::windows_only"])
+    [number] = check(hub, store).opened
+    hub.later(minutes=10)
+    hub.main_run(hub.land(), {"linux": FAILED, "windows": NO_RESULT}, failing=["t::other"], run_id="half")
+    done = check(hub, store)
+    assert number not in done.closed and hub.issues[(REPO, number)].open
+
+
+def test_a_rerun_github_refuses_is_a_rerun_already_asked_for(world):
+    from orch_it.testruns.github import GithubError
+
+    hub, store = world
+    hub.main_run(hub.land(), {"linux": NO_RESULT, "windows": PASSED})
+
+    def refused(repo, run_id):
+        raise GithubError("gh_failed", "This workflow is already running (HTTP 403)")
+
+    hub.rerun = refused
+    assert check(hub, store).outcome == "rerun"
+
+
+def test_the_ticket_to_the_brain_is_not_a_red_ticket(world):
+    hub, store = world
+    sha = hub.land()
+    hub.main_run(sha, {"linux": NO_RESULT, "windows": PASSED}, attempt=2)
+    done = check(hub, store)
+    assert done.opened == [] and len(done.brain) == 1
 
 
 def test_a_commit_with_no_pull_request_is_named_as_such(world):

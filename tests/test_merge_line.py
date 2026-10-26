@@ -164,6 +164,8 @@ def test_a_held_member_a_person_commented_on_never_gets_its_auto_merge_back(tmp_
     assert done.reason == "bound"
     assert hub.pull(REPO, prs[11]).auto_merge is None  # out of the line: the person's comment is read first
     assert "needs-triage" in hub.issues[(REPO, 11)].labels
+    assert [(s.pr, s.result, s.detail) for s in done.served if s.pr == prs[11]] == [(prs[11], "left", "commented")]
+    assert done.left == 1
 
 
 def test_the_line_closes_the_ticket_of_the_head_it_merged(tmp_path):

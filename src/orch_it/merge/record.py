@@ -32,3 +32,10 @@ def pr_updated(pr: int, old_head: str, new_head: str | None) -> tuple[str, dict]
 
     return ("pr.updated", {"pr": pr, "old_head": old_head, "new_head": new_head, "forced": False, "base_moved": True,
                            "runs_cancelled": None})
+
+
+def ticket_closed(rows_total: int | None, rows_passed: int | None) -> tuple[str, dict]:
+    """The `ticket.closed` of a ticket the layer closes as done (the follow's close, the main check's)."""
+
+    return ("ticket.closed", {"via": "close_command", "state_reason": "completed", "rows_total": rows_total,
+                              "rows_passed": rows_passed, "comments_unanswered": 0})
