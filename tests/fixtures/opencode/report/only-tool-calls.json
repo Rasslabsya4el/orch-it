@@ -1,0 +1,155 @@
+{
+ "about": "assistant steps with tool calls and no text",
+ "require_reddit": true,
+ "expect": {
+  "report_from": null,
+  "reason": "empty",
+  "compactions": 0,
+  "last_chars": 0
+ },
+ "messages": [
+  {
+   "info": {
+    "id": "msg_0002",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000000000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0001",
+     "type": "text",
+     "text": "Brief: three questions."
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0006",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1700000001000,
+     "completed": 1700000001500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0003",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0004",
+     "type": "tool",
+     "tool": "websearch",
+     "state": {
+      "status": "completed",
+      "input": {}
+     }
+    },
+    {
+     "id": "prt_0005",
+     "type": "step-finish",
+     "reason": "tool-calls"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0010",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1700000002000,
+     "completed": 1700000002500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0007",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0008",
+     "type": "tool",
+     "tool": "webfetch",
+     "state": {
+      "status": "completed",
+      "input": {}
+     }
+    },
+    {
+     "id": "prt_0009",
+     "type": "step-finish",
+     "reason": "tool-calls"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0014",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1700000003000,
+     "completed": 1700000003500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0011",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0012",
+     "type": "tool",
+     "tool": "webfetch",
+     "state": {
+      "status": "completed",
+      "input": {}
+     }
+    },
+    {
+     "id": "prt_0013",
+     "type": "step-finish",
+     "reason": "tool-calls"
+    }
+   ]
+  }
+ ]
+}

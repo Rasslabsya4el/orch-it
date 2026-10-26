@@ -1,0 +1,67 @@
+{
+ "about": "long, six links, none on Reddit, Reddit required",
+ "require_reddit": true,
+ "expect": {
+  "report_from": null,
+  "reason": "no_reddit",
+  "compactions": 0,
+  "last_chars": 5000
+ },
+ "messages": [
+  {
+   "info": {
+    "id": "msg_0002",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000000000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0001",
+     "type": "text",
+     "text": "Brief: three questions."
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0006",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "stop",
+    "time": {
+     "created": 1700000001000,
+     "completed": 1700000001500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0003",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0004",
+     "type": "text",
+     "text": "# Report\nthe source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applie\n> quoted passage 0 (https://docs.example.org/s43/page-0)\n\n> quoted passage 1 (https://docs.example.org/s43/page-1)\n\n> quoted passage 2 (https://docs.example.org/s43/page-2)\n\n> quoted passage 3 (https://docs.example.org/s43/page-3)\n\n> quoted passage 4 (https://docs.example.org/s43/page-4)\n\n> quoted passage 5 (https://docs.example.org/s43/page-5)\n"
+    },
+    {
+     "id": "prt_0005",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  }
+ ]
+}

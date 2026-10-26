@@ -1,0 +1,29 @@
+{
+ "about": "the prompt is there, no assistant message",
+ "require_reddit": true,
+ "expect": {
+  "report_from": null,
+  "reason": "no_reply",
+  "compactions": 0,
+  "last_chars": 0
+ },
+ "messages": [
+  {
+   "info": {
+    "id": "msg_0002",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000000000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0001",
+     "type": "text",
+     "text": "Brief: three questions."
+    }
+   ]
+  }
+ ]
+}
