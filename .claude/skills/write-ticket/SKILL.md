@@ -81,7 +81,7 @@ Agent block:
 
 ## Labels
 
-The label set is `orch_it/labels/labels.json`; `python -m orch_it labels sync` makes a repo's labels match it.
+The label set is `src/orch_it/labels/labels.json`; `python -m orch_it labels sync` makes a repo's labels match it.
 
 - `needs-triage`: the brain decides what happens next.
 - `needs-info`: waits for an answer before it can be shaped.
