@@ -75,7 +75,7 @@ def check_event(event: object, hub: Hub) -> CheckResult:
     found = violations(parse(issue.body, title=issue.title, labels=issue.labels))
     if not found:
         return CheckResult(number, "kept")
-    listed = "\n".join(f"- `{v.code}`: {v.message.split(': ', 1)[1]}" for v in found)
+    listed = "\n".join(f"- `{v.code}`: {v.rule}" for v in found)
     hub.comment(repo, number, f"{LAYER_MARK}\nThe shape check took `{READY_LABEL}` off this ticket. Write it again "
                               f"with the `write-ticket` skill, then set the label again:\n\n{listed}\n")
     held_name = next(label for label in issue.labels if label.lower() == READY_LABEL)
