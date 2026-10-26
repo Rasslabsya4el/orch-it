@@ -22,6 +22,11 @@ def test_it_calls_the_follow_on_the_event_and_keeps_its_events():
     assert "ORCH_IT_STORE: ${{ runner.temp }}/orch-it-events" in TEXT
 
 
+def test_it_runs_the_default_branch_s_code_never_the_pull_request_s():
+    assert "ref: ${{ github.event.repository.default_branch }}" in TEXT
+    assert "group: follow-${{ github.repository }}" in TEXT
+
+
 def test_it_adds_no_required_check():
     jobs = re.findall(r"^  ([A-Za-z0-9_-]+):$", TEXT.split("\njobs:\n", 1)[1], re.MULTILINE)
     assert jobs == ["follow"]

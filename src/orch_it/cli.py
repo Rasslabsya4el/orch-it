@@ -589,7 +589,7 @@ def main(argv: list[str] | None = None) -> int:
             return research_mcp.serve()
         elif args.group == "tickets":
             text, code = ticket_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of("."),
-                                             render), 0
+                                             render, follow_of=merge_commands.parks_follower), 0
         elif args.group in merge_commands.GROUPS:
             text, code = merge_commands.run(args, lambda: _store(args), _repo_of)
         else:
