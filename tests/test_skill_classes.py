@@ -203,3 +203,68 @@ def test_two_removed_skills_with_one_moved_copy_match_once():
     changes = classify(old, new)
     assert sorted((c.cls, c.old_path, c.new_path) for c in changes) == [
         ("removed", "skills/b/two", None), ("renamed", "skills/a/one", "skills/c/three")]
+
+
+def one(old_body, new_body, old_extra="", new_extra="", **files):
+    old = {"skills/x/a": skill("a", old_body, extra=old_extra, **files)}
+    new = {"skills/x/a": skill("a", new_body, extra=new_extra, **files)}
+    [change] = classify(old, new)
+    return change.cls, change.why
+
+
+NOTES = "Intro.\n\n## Notes\n\nn\n"
+
+
+def test_a_template_file_in_a_subfolder_is_contract():
+    old = {"skills/x/a": skill("a", NOTES, templates__pr="one\n")}
+    new = {"skills/x/a": skill("a", NOTES, templates__pr="two\n")}
+    assert [(c.cls, c.why) for c in classify(old, new)] == [("contract_changed", ["templates/pr"])]
+
+
+def test_any_frontmatter_field_is_contract():
+    assert one(NOTES, NOTES, new_extra="allowed-tools: Bash(rm:*)\n") == ("contract_changed", ["allowed-tools"])
+    assert one(NOTES, NOTES, "model: sonnet\n", "model: opus\n") == ("contract_changed", ["model"])
+    # the first of two same keys changing is a change too
+    assert one(NOTES, NOTES, "user-invocable: true\nuser-invocable: false\n",
+               "user-invocable: false\nuser-invocable: false\n") == ("contract_changed", ["user-invocable"])
+
+
+def test_his_calls_in_other_wordings_are_read():
+    for sentence in ('Call the `Skill` tool with "tdd".', 'Call the **Skill** tool with "tdd".',
+                     'Call the skill tool with "tdd".', 'Call the Skill tool (e.g. "tdd") first.'):
+        assert one(NOTES, NOTES + "\n" + sentence + "\n") == ("contract_changed", ["calls +tdd"]), sentence
+
+
+def test_template_blocks_in_any_case_with_attributes_or_left_open():
+    for open_tag, close_tag in (("<Spec-Template>", "</Spec-Template>"), ('<spec-template kind="a">', "</spec-template>"),
+                                ("<spec_template>", "</spec_template>"), ("<spec-template>", "")):
+        old = NOTES + f"\n{open_tag}\none\n{close_tag}\n"
+        new = NOTES + f"\n{open_tag}\ntwo\n{close_tag}\n"
+        cls, why = one(old, new)
+        assert cls == "contract_changed" and why[0].startswith("template "), (open_tag, why)
+
+
+def test_setext_and_indented_headings_are_sections():
+    old = "Intro.\n\nInputs\n------\n\nan issue number\n\n## Notes\n\nn\n"
+    assert one(old, old.replace("an issue number", "an issue or a URL")) == ("contract_changed", ["section Inputs"])
+    old = "Intro.\n\n   ## Inputs\n\nan issue number\n\n## Notes\n\nn\n"
+    assert one(old, old.replace("an issue number", "an issue or a URL")) == ("contract_changed", ["section Inputs"])
+    old = "Intro.\n\n## Options\n\none\n\n## Notes\n\nn\n"
+    assert one(old, old.replace("one", "two")) == ("contract_changed", ["section Options"])
+
+
+def test_a_longer_fence_holding_a_shorter_one_does_not_hide_the_headings_after_it():
+    old = "Intro.\n\n````md\n```\n## Output\n```\n````\n\n## Inputs\n\none\n\n## Notes\n\nn\n"
+    assert one(old, old.replace("one", "two")) == ("contract_changed", ["section Inputs"])
+    inline = "Intro.\n\n```x``` is inline.\n\n## Inputs\n\none\n\n## Notes\n\nn\n"
+    assert one(inline, inline.replace("one", "two")) == ("contract_changed", ["section Inputs"])
+
+
+def test_long_adversarial_text_is_read_in_bounded_time():
+    import time
+    many = NOTES + "\n" + "\n".join("the Skill tool and more words" for _ in range(20_000)) + "\n"
+    wide = NOTES + "\n## a" + " " * 40_000 + "x\n"
+    start = time.perf_counter()
+    one(many, many + "x\n")
+    one(wide, wide + "x\n")
+    assert time.perf_counter() - start < 5
