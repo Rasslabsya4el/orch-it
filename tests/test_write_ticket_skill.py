@@ -59,7 +59,8 @@ def test_a_skill_missing_one_rule_fails_the_check(code):
 
 def test_a_rule_only_in_prose_or_outside_the_rules_section_is_not_stated():
     text = SKILL.read_text("utf-8")
-    moved = re.sub(r"^(- `weight_bad`:.*\n)", "", text, count=1, flags=re.MULTILINE) + "\n## After\n\n- `weight_bad`: x\n"
+    moved = re.sub(r"^(- `weight_bad`:.*\n)", "", text, count=1, flags=re.MULTILINE)
+    moved += "\n## After\n\nThe rule `weight_bad` in prose.\n\n- `weight_bad`: in another section\n"
     assert agreement(moved).only_in_rules == {"weight_bad"}
 
 
