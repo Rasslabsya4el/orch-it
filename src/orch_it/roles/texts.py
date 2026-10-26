@@ -632,7 +632,7 @@ _NORMATIVE = re.compile(r"\b(?:must|never|always|only|do not|don't|may not|canno
                         re.IGNORECASE)
 _SENTENCE_END = re.compile(r"(?<=[.!?;])\s+(?=[A-Z`\"(*_])")
 _WORD = re.compile(r"[a-z0-9][a-z0-9_]+")
-_DEFINED = re.compile(r"^\*\*([^*]{1,60})\*\*|^`([^`]{1,40})`\s+means\b")
+_DEFINED = re.compile(r"^\*\*([^*]{0,59}[^*.:])\*\*|^`([^`]{1,40})`\s+means\b")  # `**Step.**` is a label, no term
 _STOP = frozenset("""a an the and or but nor of to in on at by for with from into onto as is are was were be been
 being it its this that these those there here which who whom whose what when where why how than then so if
 else not no any each every all both either neither one two their his her our your my we you they he she
