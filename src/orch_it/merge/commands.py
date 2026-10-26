@@ -36,7 +36,7 @@ from orch_it.merge import lock
 from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_event
 from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitError
-from orch_it.merge.line import run_line
+from orch_it.merge.line import holder_of, run_line
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr
 from orch_it.merge.settings import MergeSettings
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, REQUIRED_JOBS_SETTING
@@ -82,6 +82,10 @@ def run(args, store_of: Callable[[], Store], repo_of: Callable[[str], str]) -> t
         return _follow(args, store_of, repo_of, now), 0
     if args.command == "line":
         return _line(args, store_of, repo_of), 0
+    return _unlock(args, store_of, repo_of, now), 0
+
+
+def _unlock(args, store_of, repo_of, now: datetime) -> str:
     repo = args.repo or repo_of(".")
     removed = lock.unlock_stale(repo, settings=MergeSettings.from_settings(settings.load(), repo), clock=lambda: now)
     held = removed.age_minutes(now)
@@ -90,7 +94,7 @@ def run(args, store_of: Callable[[], Store], repo_of: Callable[[str], str]) -> t
                       "parent_session": None, "turn": None, "step": None, "run": None, "note": None,
                       "detail": {"holder": removed.holder, "since": removed.since.isoformat(),
                                  "held_minutes": round(held, 1) if held != float("inf") else None}})
-    return f"removed the stale lock of {repo}: {removed.said()}\n", 0
+    return f"removed the stale lock of {repo}: {removed.said()}\n"
 
 
 def _pr_open(args, store_of, repo_of, now: datetime) -> str:
@@ -137,13 +141,11 @@ def _line(args, store_of, repo_of) -> str:
         print(f"waits: the line of {repo} is held by {holder.said()}", flush=True)
 
     done = run_line(GhPullHub(), store_of(), repo, args.base, settings=MergeSettings.from_settings(raw, repo),
-                    holder=f"merge line of {repo} into {args.base} (pid {os.getpid()})", on_wait=say,
+                    holder=f"{holder_of(repo, args.base)} (pid {os.getpid()})", on_wait=say,
                     required=required_jobs(raw), owner=owner_login(raw))
     lines = [f"#{s.pr} {s.result} waited {s.waited_minutes:g} min updates {s.updates} {s.detail}".rstrip()
              for s in done.served]
-    merged = sum(s.result == "merged" for s in done.served)
-    left = sum(s.result == "left" for s in done.served)
-    lines.append(f"line of {repo} into {args.base}: merged={merged} left={left} {done.reason}")
+    lines.append(f"line of {repo} into {args.base}: merged={done.merged} left={done.left} {done.reason}")
     return "".join(f"{line}\n" for line in lines)
 
 

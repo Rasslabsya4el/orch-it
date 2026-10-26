@@ -17,11 +17,14 @@ ready mark's (else its creation). One run, until the line is empty or `line_minu
    then its required checks of the head sha are waited for, polling every `poll_seconds`, at most
    `check_minutes` (`bound`: it stays in the line for the next run, the next member goes), with the
    follow run at each poll (a person's comment, an edit of its ticket, a red, no result: the follow
-   moves the ticket and the head `left`); green and up to date → merged with its head sha (the
-   follow closes its ticket from GitHub's own event).
+   moves the ticket and the head `left`); green and up to date → merged with its head sha, and the
+   follow closes its ticket at once (GitHub refusing the merge more than `max_updates` times:
+   `refused`, left for the next run). A held member gets its auto-merge back only after its follow,
+   so what was said or done to it while held takes it out of the line instead.
 
-Events: a `line` step (started `base`, `prs`; ended `merged`, `left`, reason `empty` or `bound`, or
-`refused` with `lock_busy`/`lock_stale` when the lock is not had) and one `line.served` per head
+Events: a `line` step, run `line:<repo>@<start>` (started `base`, `prs`; ended `merged`, `left`,
+reason `empty`, `next_run` or `bound`; `failed` with `error` when the run breaks; `refused` with
+`lock_busy`/`lock_stale` when the lock is not had) and one `line.served` per turn under that run
 (`pr`, `result`, `followed`, `waited_minutes`, `updates`), plus `pr.updated` per update.
 """
 
@@ -40,17 +43,18 @@ from orch_it.merge.hub import Pull, PullHub
 from orch_it.merge.pr_open import refers_to
 from orch_it.merge.settings import MergeSettings
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
+from orch_it.tickets.park import ROLE
 
-ROLE = "script"
-# what the follow says of a head that is still in the line: the line goes on serving it
-_STAYS = ("waiting", "green", "behind", "rerun", "stuck")
+# what the follow says of a member that is still in the line: the line goes on serving it (a
+# `raced` follow wrote nothing: the member waits a poll and is followed again)
+_STAYS = ("waiting", "green", "behind", "rerun", "stuck", "raced")
 
 
 @dataclass(frozen=True)
 class Served:
     pr: int
     ticket: int | None
-    result: str  # merged, left, starved, bound
+    result: str  # a `line_result`: merged, left, starved (main moved too often), bound, refused (GitHub would not merge)
     waited_minutes: float  # from its ready time to the end of its turn
     updates: int
     detail: str = ""  # the follow's outcome when it left
@@ -61,7 +65,15 @@ class LineReport:
     repo: str
     base: str
     served: tuple[Served, ...]
-    reason: str  # `empty`: no member left; `bound`: the run's bound came first
+    reason: str  # `empty`: no member left; `next_run`: the ones left wait for the next run; `bound`: the run's bound
+
+    @property
+    def merged(self) -> int:
+        return sum(s.result == "merged" for s in self.served)
+
+    @property
+    def left(self) -> int:
+        return sum(s.result == "left" for s in self.served)
 
 
 @dataclass
@@ -84,22 +96,29 @@ class _Line:
     required: tuple[str, ...]
     owner: str
     deadline: datetime
+    run_id: str
     held: dict[int, str] = field(default_factory=dict)  # pr -> the auto-merge method it had
-    passed_by: set[int] = field(default_factory=set)  # members this run leaves for the next one
+    for_next_run: set[int] = field(default_factory=set)  # members this run leaves for the next one
 
     def run(self) -> tuple[list[Served], str]:
-        served: list[Served] = []
+        turns: list[Served] = []
         while self.clock() < self.deadline:
             members = self.members()
             for member in [m for m in members if m.pull.mergeable == "conflicting"]:
-                served.append(self._conflict(member, self.hub.conflict_files(self.repo, self.base, member.pull.number)))
-            members = [m for m in self.members() if m.pull.number not in self.passed_by]
+                self.end_turn(turns, self.conflict(member, self.hub.conflict_files(self.repo, self.base,
+                                                                                    member.pull.number)))
+            members = [m for m in self.members() if m.pull.number not in self.for_next_run]
             if not members:
-                return served, "empty"
+                return turns, "next_run" if self.for_next_run else "empty"
             self.hold_others(members[0].pull.number, members)
-            served.append(self.serve(members[0]))
-            self.record_served(served[-1])
-        return served, "bound"
+            self.end_turn(turns, self.serve(members[0]))
+        return turns, "bound"
+
+    def end_turn(self, turns: list[Served], turn: Served) -> None:
+        turns.append(turn)
+        record.write(self.store, self.repo, turn.ticket, self.role, self.run_id, None, [("line.served", {
+            "pr": turn.pr, "result": turn.result, "followed": turn.detail or None,
+            "waited_minutes": turn.waited_minutes, "updates": turn.updates})])
 
     # members and holds
 
@@ -116,23 +135,37 @@ class _Line:
 
     def hold_others(self, head: int, members: list[_Member] | None = None) -> None:
         """Auto-merge off on every member but the head while it is up to date; back on once it is
-        behind or is the head."""
+        behind (the head is given it back by `serve`, after its follow)."""
 
         for member in members if members is not None else self.members():
             number, pull = member.pull.number, member.pull
-            if number == head or pull.behind:
-                if number in self.held:
-                    self.hub.set_auto_merge(self.repo, number, self.held.pop(number))
+            if number == head:
+                continue
+            if pull.behind:
+                self.give_back(number)
             elif pull.auto_merge is not None and number not in self.held:
                 self.hub.set_auto_merge(self.repo, number, None)
                 self.held[number] = pull.auto_merge
 
+    def give_back(self, number: int) -> None:
+        """A held member's auto-merge back, after its follow: what was said or done to it while it
+        was held (a person's comment, its ticket closed) takes it out of the line instead."""
+
+        method = self.held.pop(number, None)
+        if method is None:
+            return
+        pull = self.hub.pull(self.repo, number)
+        if pull is None or pull.state != "open":
+            return
+        if self.follow(number).outcome in _STAYS:
+            self.hub.set_auto_merge(self.repo, number, method)
+
     def release_all(self) -> None:
-        for number, method in list(self.held.items()):
-            pull = self.hub.pull(self.repo, number)
-            if pull is not None and pull.state == "open":
-                self.hub.set_auto_merge(self.repo, number, method)
-            del self.held[number]
+        for number in list(self.held):
+            try:
+                self.give_back(number)
+            except Exception:  # one that fails stays without auto-merge; its ready mark keeps it in the line
+                self.held.pop(number, None)
 
     # the head
 
@@ -141,59 +174,58 @@ class _Line:
         turn_ends = min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
         while True:
             pull = self.hub.pull(self.repo, number)
-            if pull is None or pull.state != "open":
+            if pull is None or pull.state != "open":  # merged by GitHub's auto-merge, or closed by a person
+                if pull is not None:
+                    self.follow(number)
                 result = "merged" if pull is not None and pull.state == "merged" else "left"
-                return self._served(member, result, updates, "" if result == "merged" else "closed")
-            done = self._follow(number)
+                return self.turn(member, result, updates, "" if result == "merged" else "closed")
+            done = self.follow(number)
             if done.outcome not in _STAYS:
-                return self._served(member, "left", updates, done.outcome)
+                self.held.pop(number, None)
+                return self.turn(member, "left", updates, done.outcome)
+            self.give_back(number) if number in self.held else None
             if pull.behind:  # a run on a head behind the base would be thrown away: update now
                 if updates >= self.settings.max_updates:
-                    self.passed_by.add(number)
-                    return self._served(member, "starved", updates)
+                    self.for_next_run.add(number)
+                    return self.turn(member, "starved", updates)
                 if not self.hub.update_branch(self.repo, number, pull.head_sha):
-                    files = self.hub.conflict_files(self.repo, self.base, number)
-                    return self._conflict(member, files, updates)
+                    return self.conflict(member, self.hub.conflict_files(self.repo, self.base, number), updates)
                 updates += 1
                 fresh = self.hub.pull(self.repo, number)
-                record.write(self.store, self.repo, member.ticket, self.role, None, None, [("pr.updated", {
-                    "pr": number, "old_head": pull.head_sha, "new_head": fresh.head_sha if fresh else None,
-                    "forced": False, "base_moved": True, "runs_cancelled": None})])
+                record.write(self.store, self.repo, member.ticket, self.role, self.run_id, None,
+                             [record.pr_updated(number, pull.head_sha, fresh.head_sha if fresh else None)])
                 turn_ends = min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
                 continue
-            if done.outcome == "green":
+            if done.outcome == "green" and pull.behind == 0:
                 sha = self.hub.merge(self.repo, number, pull.head_sha, pull.auto_merge or self.settings.merge_method)
                 if sha:
-                    return self._served(member, "merged", updates)
+                    self.follow(number)  # its ticket closes now, whether the workflow runs or not
+                    return self.turn(member, "merged", updates)
                 refused += 1  # the base moved or a check changed between the read and the merge: read again
                 if refused > self.settings.max_updates:
-                    self.passed_by.add(number)
-                    return self._served(member, "refused", updates)
-                continue
+                    self.for_next_run.add(number)
+                    return self.turn(member, "refused", updates)
             if self.clock() >= turn_ends:
-                self.passed_by.add(number)
-                return self._served(member, "bound", updates, done.outcome)
+                self.for_next_run.add(number)
+                return self.turn(member, "bound", updates, done.outcome)
             self.sleep(self.settings.poll_seconds)
             self.hold_others(number)
 
-    def _follow(self, number: int) -> FollowReport:
+    def follow(self, number: int) -> FollowReport:
         return follow(self.hub, self.store, self.repo, number, base=self.base, settings=self.settings,
                       now=self.clock(), role=self.role, required=self.required, owner=self.owner)
 
-    def _conflict(self, member: _Member, files: list[str], updates: int = 0) -> Served:
+    def conflict(self, member: _Member, files: list[str], updates: int = 0) -> Served:
         done = follow_conflict(self.hub, self.store, self.repo, member.pull.number, files, settings=self.settings,
                                now=self.clock(), role=self.role, owner=self.owner)
         self.held.pop(member.pull.number, None)
-        return self._served(member, "left", updates, done.outcome)
+        if done.outcome == "raced":
+            self.for_next_run.add(member.pull.number)
+        return self.turn(member, "left", updates, done.outcome)
 
-    def _served(self, member: _Member, result: str, updates: int, detail: str = "") -> Served:
+    def turn(self, member: _Member, result: str, updates: int, detail: str = "") -> Served:
         waited = (self.clock() - member.ready_at).total_seconds() / 60
         return Served(member.pull.number, member.ticket, result, round(waited, 1), updates, detail)
-
-    def record_served(self, served: Served) -> None:
-        record.write(self.store, self.repo, served.ticket, self.role, None, None, [("line.served", {
-            "pr": served.pr, "result": served.result, "followed": served.detail or None,
-            "waited_minutes": served.waited_minutes, "updates": served.updates})])
 
 
 def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: MergeSettings,
@@ -202,18 +234,23 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
              role: str = ROLE, required: tuple[str, ...] = tuple(DEFAULT_REQUIRED_JOBS),
              owner: str | None = None) -> LineReport:
     """Run the repo's merge line once; see the module text. Another line holding the lock past
-    `lock_wait_minutes`, or a stale lock, is `LockError` (and a `line` step ended `refused`)."""
+    `lock_wait_minutes`, or a stale lock, is `LockError` (and a `line` step ended `refused`); a run
+    that breaks ends its step `failed` (`error`) and gives every held member its auto-merge back."""
 
     run = f"line:{repo}@{clock().isoformat()}"
-    holder = holder or f"merge line of {repo} into {base}"
     try:
-        with lock.hold(repo, holder, settings=settings, root=root, clock=clock, sleep=sleep, on_wait=on_wait):
+        with lock.hold(repo, holder or holder_of(repo, base), settings=settings, root=root, clock=clock, sleep=sleep,
+                       on_wait=on_wait):
             line = _Line(hub, store, repo, base, settings, clock, sleep, role, required,
-                         (owner or repo.split("/")[0]).lower(), clock() + timedelta(minutes=settings.line_minutes))
+                         (owner or repo.split("/")[0]).lower(), clock() + timedelta(minutes=settings.line_minutes), run)
             record.write(store, repo, None, role, run, "line",
                          [("step.started", {"base": base, "prs": len(line.members())})])
             try:
-                served, reason = line.run()
+                turns, reason = line.run()
+            except Exception:
+                record.write(store, repo, None, role, run, "line",
+                             [("step.ended", {"outcome": "failed", "reason": "error"})])
+                raise
             finally:
                 line.release_all()
     except lock.LockError as e:
@@ -222,8 +259,14 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
                          [("step.started", {"base": base, "prs": None}),
                           ("step.ended", {"outcome": "refused", "reason": e.code})])
         raise
-    merged = sum(s.result == "merged" for s in served)
+    report = LineReport(repo, base, tuple(turns), reason)
     record.write(store, repo, None, role, run, "line",
-                 [("step.ended", {"outcome": "passed", "reason": reason, "merged": merged,
-                                  "left": sum(s.result == "left" for s in served)})])
-    return LineReport(repo, base, tuple(served), reason)
+                 [("step.ended", {"outcome": "passed", "reason": reason, "merged": report.merged,
+                                  "left": report.left})])
+    return report
+
+
+def holder_of(repo: str, base: str) -> str:
+    """How a line names itself in its lock."""
+
+    return f"merge line of {repo} into {base}"

@@ -74,7 +74,7 @@
     "setting_source": ["repo", "machine", "default"],
     "resume_cause": ["suspend", "hibernate"],
     "attempt_reason": ["red", "red_on_main", "no_result", "conflict"],
-    "line_reason": ["empty", "bound", "lock_busy", "lock_stale"],
+    "line_reason": ["empty", "next_run", "bound", "error", "lock_busy", "lock_stale"],
     "line_result": ["merged", "left", "starved", "bound", "refused"]
   },
   "steps": {
