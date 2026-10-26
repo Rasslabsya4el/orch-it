@@ -96,7 +96,7 @@ CODE_FIELDS = {
     },
     ("report_line.checked", "label"): {
         "tdd", "diagnosis", "code-review", "research", "writing-for-agents",
-        "domain-modeling", "codebase-design",
+        "domain-modeling", "codebase-design", "report_cap", "table",
     },
     ("context.crossed", "threshold"): {"context_line", "ceiling"},
     ("context.crossed", "action_after"): {"handed_off", "new_work_taken", "told"},

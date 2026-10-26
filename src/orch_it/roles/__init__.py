@@ -31,7 +31,13 @@ from orch_it.events import pricing
 ROLES_FILE = Path(__file__).with_name("roles.json")
 AGENTS_FOLDER = Path(".claude") / "agents"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-ROLE_KEYS = ("model", "effort", "fallback", "inputs")
+ROLE_KEYS = ("model", "effort", "fallback", "inputs", "report")
+REPORT_KEYS = ("cap_lines", "owes", "context_line")
+# each report line a role may owe, and the skill a line of it claims (#399 decision 6)
+SKILL_OF_LINE = {"tdd": "tdd", "diagnosis": "diagnosing-bugs", "code-review": "code-review", "research": "research",
+                 "writing-for-agents": "writing-for-agents", "domain-modeling": "domain-modeling",
+                 "codebase-design": "codebase-design"}
+OWED_LINES = tuple(SKILL_OF_LINE)
 # what a spawn fills for a role's subagent (#399 decision 3); a role with none is a session, never spawned
 INPUTS = ("issue", "unit", "diff", "worktree", "scratchpad")
 ERROR_CODES = ("settings_unreadable", "bad_setting", "frontmatter_missing", "agent_unreadable", "agent_unwritable",
@@ -55,12 +61,24 @@ class RolesError(ValueError):
 
 
 @dataclass(frozen=True)
+class Report:
+    """What a role's final report is held to at its stop (#399 decision 6): at most `cap_lines`
+    lines, the lines it `owes`, and the `context_line` in tokens past which it must name its
+    table file (survey's 100k hand-back)."""
+
+    cap_lines: int | None = None
+    owes: tuple[str, ...] = ()
+    context_line: int | None = None
+
+
+@dataclass(frozen=True)
 class Role:
     name: str
     model: str
     effort: str | None
     fallback: str
     inputs: tuple[str, ...] = ()
+    report: Report | None = None  # None: the stop hold reads nothing of this role
 
 
 @dataclass(frozen=True)
@@ -128,7 +146,25 @@ def _role(name: object, value: object) -> Role:
     if (not isinstance(inputs, list) or any(item not in INPUTS for item in inputs)
             or len(set(inputs)) != len(inputs)):
         raise RolesError("bad_setting", f"{where}.inputs")
-    return Role(name, model, effort, fallback, tuple(inputs))
+    return Role(name, model, effort, fallback, tuple(inputs), _report(where, value.get("report")))
+
+
+def _report(where: str, value: object) -> Report | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or value.repeated:
+        raise RolesError("bad_setting", f"{where}.report")
+    for key in value:
+        if key not in REPORT_KEYS:
+            raise RolesError("bad_setting", f"{where}.report.{key}")
+    for key in ("cap_lines", "context_line"):
+        number = value.get(key)
+        if number is not None and (type(number) is not int or number < 1):
+            raise RolesError("bad_setting", f"{where}.report.{key}")
+    owes = value.get("owes", [])
+    if not isinstance(owes, list) or any(line not in OWED_LINES for line in owes) or len(set(owes)) != len(owes):
+        raise RolesError("bad_setting", f"{where}.report.owes")
+    return Report(value.get("cap_lines"), tuple(owes), value.get("context_line"))
 
 
 def _split(text: str) -> tuple[list[str], list[str]] | None:

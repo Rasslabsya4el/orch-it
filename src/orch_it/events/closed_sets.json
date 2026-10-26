@@ -47,7 +47,7 @@
     "hook_action": ["acted", "skipped"],
     "run_check_result": ["alive", "ended", "failed"],
     "tool_outcome": ["passed", "failed", "refused"],
-    "report_label": ["tdd", "diagnosis", "code-review", "research", "writing-for-agents", "domain-modeling", "codebase-design"],
+    "report_label": ["tdd", "diagnosis", "code-review", "research", "writing-for-agents", "domain-modeling", "codebase-design", "report_cap", "table"],
     "context_threshold": ["context_line", "ceiling"],
     "context_action": ["handed_off", "new_work_taken", "told"],
     "message_kind": ["notice", "question", "answer", "handoff", "report"],
