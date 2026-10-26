@@ -39,7 +39,7 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `test_os` | `linux`, `windows`, `macos` |
 | `place_reason` | `earliest_finish`, `nothing_measured`, `forced` |
 | `test_run_reason` | `red`, `cut`, `none_collected`, `ids_not_collected`, `summary_missing`, `job_missing`, `busy`, `os_missing`, `place_off`, `out_of_minutes`, `place_vanished`, `superseded` |
-| `research_run_reason` | `too_short`, `few_links`, `no_reddit`, `model_error`, `no_reply`, `empty`, `time_bound`, `stalled`, `server_failed` |
+| `research_run_reason` | `too_short`, `few_links`, `no_reddit`, `model_error`, `no_reply`, `empty`, `time_bound`, `stalled`, `server_failed`, `bridge_error` |
 | `report_from` | `last`, `earlier`, `joined` |
 | `review_axis` | `standards`, `spec`, `edge` |
 | `unit_reason` | `format`, `result`, `merge` |
@@ -97,7 +97,7 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 | `pr` | `pr`, `branch`, `base`, `head` | `merge_sha`, `reason` (`pr_reason`) | time from PR to merge; PRs that never end |
 | `core_update` | `target`, `from_version`, `to_version`, `pr` | `files_changed`, `files_removed`, `hooks_added`, `hooks_removed`, `settings_removed` | does an update remove what the core removed |
 | `install` | `target`, `version`, `steps` | `files_copied`, `stubs_written`, `labels_created` | an install into any repo, step by step |
-| `research_run` | `brief`, `model_alias`, `no_reddit` | `tokens_in`, `tokens_out`, `helper_tokens_in`, `helper_tokens_out`, `reddit_urls`, `search_429`, `compactions`, `report_path`, `report_chars`, `reason` (`research_run_reason`), `report_from` (`report_from`), `links`, `last_chars`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`, `helper_tokens_reasoning`, `helper_tokens_cache_read`, `helper_tokens_cache_write`, `helper_sessions`, `helper_depth`, `unread_sessions` | bridge cost and why a report was rejected |
+| `research_run` | `brief`, `model_alias`, `no_reddit`, `brief_chars`, `brief_sha`, `model`, `helpers`, `job` | `tokens_in`, `tokens_out`, `helper_tokens_in`, `helper_tokens_out`, `reddit_urls`, `search_429`, `compactions`, `report_path`, `report_chars`, `reason` (`research_run_reason`), `report_from` (`report_from`), `links`, `last_chars`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`, `helper_tokens_reasoning`, `helper_tokens_cache_read`, `helper_tokens_cache_write`, `helper_sessions`, `helper_depth`, `unread_sessions`, `partial_path`, `minutes`, `opencode_session`, `server_error`, `abort_failed`, `named_path_unwritable`, `error`, `model_error` (≤200) | bridge cost and why a report was rejected |
 | `process` | `program`, `pid`, `argv0`, `hidden`, `launched_by`, `mechanism` | `rc` | every process the layer starts; a console window seen |
 | `external_call` | `target` (`call_target`), `command` | `rc`, `transient`, `retries`, `timed_out` | which calls fail or are slow, per machine |
 | `check` | `check` (`check`), `target` | `findings`, `facts` | a periodic or start-up check and what it found |
@@ -194,6 +194,7 @@ after its prefix.
 - `import <transcript folder> --repo R [--role worker] [--subagent-role ROLE] [--ticket N] [--session ID] [--quiet-minutes 30]`: write the events of Claude Code transcripts.
 - `import-github [--repo R] [--since ISO]`: write a `test_run` pair, a `github_queue` wait and the `test.result` rows per required job of the repo's `tests` workflow runs (default repo `Rasslabsya4el/orch-it`); a second import writes nothing.
 - `test-places [--repo R]`: per place and OS, the runs, their outcomes, the median run minutes and the median GitHub queue minutes.
+- `guard-fires`: per guard and week, the denies, passes, reversals and failed-open errors the guards wrote.
 
 `python -m orch_it [--store PATH] tests run [--ids-file F] [--place P] [--work-tree PATH] [--repo R] [--ticket N] [--role script]`:
 run the repo's test command once at a test place, write its `test_run` pair and one `test.result` per test case, and
@@ -205,6 +206,10 @@ look for private data (this machine's home folder or host name, any user's home 
 It prints one line per hit, `<sha12> <where> <file or ->:<line or -> <kind>` (the value found is never printed; a value in a file path shows as `<kind>`), then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits, 2 with `error: <code>`.
 `--machine-independent` leaves out what is this machine's own (its home folder, host name and words); `--allow-email-of LOGIN` allows that GitHub account's public email (`gh api users/LOGIN`), else `warning: email_of_unreadable: LOGIN`.
 
+`python -m orch_it guards reverse <event id> [--by WHO]`: mark a `guard.fired` deny a false fire, writing a `guard.reversed` that names the fired event and who reversed it (so false fires are counted from the store, never from memory); `error: no_such_fire` or `not_a_deny` when the id names no reversible deny.
+
+`python -m orch_it hook pre-tool-use`: the Claude Code PreToolUse guard. It reads the hook's JSON on stdin (the tool, its command, the session id and the cwd), reads the command into its delete, move and stop actions, judges each against the object (the real path against the repo's worktrees, the real process tree), writes a `guard.fired` per triggered action, and prints the deny decision that refuses the tool call when one is refused; a guard that crashes lets the call through and writes `error.raised` with `failed_open`. It is wired in orch-it's `.claude/settings.json` for the Bash and PowerShell tools.
+
 `python -m orch_it labels sync [--repo R]`: make the repo's labels match the layer's set (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, `parked`, `priority`, each with a colour and description from `labels/labels.json`; default repo the work tree's GitHub origin): a missing label is created, one with another colour, description or letter case is updated, an equal one is kept, every other label is listed `foreign` and never changed or deleted; prints `label`, `action` rows.
 
 `python -m orch_it [--store PATH] tickets park <n> <kind> <ref> --until <YYYY-MM-DD> [--repo R] [--role script]`: the one way a ticket is parked: the line `Parked: <kind> <ref> until <date>` (kind one of `park_on`) and the `parked` label in one write, every other label kept; a park that could never return is refused with a `wait_end_reason` code and writes a `wait` pair ended `refused`; a park writes `ticket.parked` and starts its `wait` (run `park:<repo>#<n>@<label time>`). `tickets unpark <n> [--repo R] [--role script]` takes line and label off together (`ticket.unparked` by `hand`).
@@ -212,5 +217,20 @@ It prints one line per hit, `<sha12> <where> <file or ->:<line or -> <kind>` (th
 `python -m orch_it [--store PATH] tickets parks [--repo R] [--role script]`: the one reader (the setting `owner_login` names whose comment answers an `owner_answer` park, default the repo owner): every open ticket with the `parked` label, reported `waiting`, `due` (back to its queue), `other_way`, `late`, `comment`, `unreadable` (each to the brain: `needs-triage` and a comment) or `failed` (read again next run); writes the end of each `wait`, `ticket.unparked`, `park.unreadable` or a `step.progressed`.
 
 `python -m orch_it [--store PATH] skills shadowed`: the SessionStart hook of `.claude/settings.json`. It reads the hook's JSON from stdin, compares the project's skills (`CLAUDE_PROJECT_DIR`, else the work tree around `cwd`) with the personal ones (`$CLAUDE_CONFIG_DIR/skills`, default `~/.claude/skills`), letter case aside, and writes one `skill.shadowed` per clash: `copy` true for his copy, false for ours, null when the manifest cannot be read; `same_text` when the two `SKILL.md` are byte-equal. A resumed or compacted session writes nothing new. It prints nothing and exits 0 whatever happens, an error on stderr.
+
+`python -m orch_it [--store PATH] research <brief> [--model ALIAS] [--no-reddit] [--report PATH] [--work-tree PATH] [--repo R] [--ticket N]`:
+run the brief through the research bridge (#396): a private opencode server for this run, the model an alias of the
+setting `research.models`, the report written to the `docs/research/<name>.md` path the brief names (else `--report`,
+else the run's folder), a run with no report leaving what the model wrote beside it as `<name>.partial.md`; the
+`research_run` pair and its `step.progressed` events land in the store. It prints `run=… outcome=… reason=… report=…
+report_from=… chars=… links=… reddit_urls=… compactions=… minutes=… tokens_in=… helper_tokens_in=…` and exits 0 on
+passed, 1 on failed, 3 on any other outcome; a run the settings cannot serve is refused before any server starts
+(`error: <code>`, exit 2: `research_not_set`, `unknown_model`, `key_missing`, `brief_unreadable`,
+`report_path_outside`, `repo_unknown`, `opencode_missing`, `state_in_git_tree`).
+
+`python -m orch_it research-mcp`: the same bridge as an MCP server on stdin and stdout, registered in `.mcp.json` as
+`orch-it-research`; its tools `research_start` and `research_job` run a brief as a background job: `research_job` answers `running` (with
+the run's latest progress), `ended` (the run's end as the command line's `--done-file` writes it, plus the report text
+and its path) or `gone` (`worker_died`, `worker_lost`: the job's process ended with no answer).
 
 `python -m orch_it tickets check-github --event <file>`: the shape check of the workflow `ticket-shape` on an `issues` event: a ticket that got `ready-for-agent`, or a ready ticket that was edited, is read again and judged by the shape rules; with violations the label comes off, then a comment lists them (the body is never edited); prints `#<n> kept`, `#<n> removed: <codes>` or `skipped`; an event file that is no JSON object is `error: event_unreadable`.

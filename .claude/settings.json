@@ -4,6 +4,27 @@
     "mattpocock-skills@mattpocock": false
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m orch_it hook pre-tool-use"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m orch_it.tickets.hook",
+            "timeout": 90
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
