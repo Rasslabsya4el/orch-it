@@ -29,6 +29,8 @@
     "test_os": ["linux", "windows", "macos"],
     "place_reason": ["earliest_finish", "nothing_measured", "forced"],
     "test_run_reason": ["red", "cut", "none_collected", "ids_not_collected", "summary_missing", "job_missing", "busy", "os_missing", "place_off", "out_of_minutes", "place_vanished", "superseded"],
+    "research_run_reason": ["too_short", "few_links", "no_reddit", "model_error", "no_reply", "empty", "time_bound", "stalled", "server_failed"],
+    "report_from": ["last", "earlier", "joined"],
     "review_axis": ["standards", "spec", "edge"],
     "unit_reason": ["format", "result", "merge"],
     "pr_reason": ["merged", "red", "closed_unmerged", "timeout", "withdrawn"],
@@ -104,7 +106,7 @@
     },
     "research_run": {
       "started": {"brief": {}, "model_alias": {}, "no_reddit": {}},
-      "ended": {"tokens_in": {}, "tokens_out": {}, "helper_tokens_in": {}, "helper_tokens_out": {}, "reddit_urls": {}, "search_429": {}, "compactions": {}, "report_path": {}, "report_chars": {}}
+      "ended": {"tokens_in": {}, "tokens_out": {}, "helper_tokens_in": {}, "helper_tokens_out": {}, "reddit_urls": {}, "search_429": {}, "compactions": {}, "report_path": {}, "report_chars": {}, "reason": {"codes": "research_run_reason"}, "report_from": {"codes": "report_from"}, "links": {}, "last_chars": {}, "tokens_reasoning": {}, "tokens_cache_read": {}, "tokens_cache_write": {}, "helper_tokens_reasoning": {}, "helper_tokens_cache_read": {}, "helper_tokens_cache_write": {}, "helper_sessions": {}, "helper_depth": {}, "unread_sessions": {}}
     },
     "process": {
       "started": {"program": {}, "pid": {}, "argv0": {}, "hidden": {}, "launched_by": {}, "mechanism": {}},

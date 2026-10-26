@@ -1,0 +1,423 @@
+{
+ "root": "run",
+ "sessions": {
+  "run": {
+   "children": [
+    "c1",
+    "c2"
+   ],
+   "messages": [
+    {
+     "info": {
+      "id": "run-m0",
+      "role": "user"
+     },
+     "parts": [
+      {
+       "type": "text",
+       "text": "go"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "run-m1",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 2108,
+       "input": 333,
+       "output": 66,
+       "reasoning": 10,
+       "cache": {
+        "read": 1666,
+        "write": 33
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 0"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "run-m2",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 2110,
+       "input": 333,
+       "output": 67,
+       "reasoning": 10,
+       "cache": {
+        "read": 1667,
+        "write": 33
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 1"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "run-m3",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 2112,
+       "input": 334,
+       "output": 67,
+       "reasoning": 10,
+       "cache": {
+        "read": 1667,
+        "write": 34
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 2"
+      },
+      {
+       "type": "tool",
+       "tool": "task",
+       "state": {
+        "status": "completed",
+        "input": {},
+        "metadata": {
+         "sessionId": "c1"
+        }
+       }
+      },
+      {
+       "type": "tool",
+       "tool": "task",
+       "state": {
+        "status": "completed",
+        "input": {},
+        "metadata": {
+         "sessionId": "c2"
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "c1": {
+   "children": [
+    "g1"
+   ],
+   "messages": [
+    {
+     "info": {
+      "id": "c1-m0",
+      "role": "user"
+     },
+     "parts": [
+      {
+       "type": "text",
+       "text": "go"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "c1-m1",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 31132,
+       "input": 6666,
+       "output": 1000,
+       "reasoning": 133,
+       "cache": {
+        "read": 23333,
+        "write": 0
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 0"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "c1-m2",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 31133,
+       "input": 6667,
+       "output": 1000,
+       "reasoning": 133,
+       "cache": {
+        "read": 23333,
+        "write": 0
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 1"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "c1-m3",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 31135,
+       "input": 6667,
+       "output": 1000,
+       "reasoning": 134,
+       "cache": {
+        "read": 23334,
+        "write": 0
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 2"
+      },
+      {
+       "type": "tool",
+       "tool": "task",
+       "state": {
+        "status": "completed",
+        "input": {},
+        "metadata": {
+         "sessionId": "g1"
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "c2": {
+   "children": [],
+   "messages": [
+    {
+     "info": {
+      "id": "c2-m0",
+      "role": "user"
+     },
+     "parts": [
+      {
+       "type": "text",
+       "text": "go"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "c2-m1",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 184,
+       "input": 166,
+       "output": 16,
+       "reasoning": 0,
+       "cache": {
+        "read": 0,
+        "write": 2
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 0"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "c2-m2",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 186,
+       "input": 167,
+       "output": 17,
+       "reasoning": 0,
+       "cache": {
+        "read": 0,
+        "write": 2
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 1"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "c2-m3",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 187,
+       "input": 167,
+       "output": 17,
+       "reasoning": 0,
+       "cache": {
+        "read": 0,
+        "write": 3
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 2"
+      }
+     ]
+    }
+   ]
+  },
+  "g1": {
+   "children": [],
+   "messages": [
+    {
+     "info": {
+      "id": "g1-m0",
+      "role": "user"
+     },
+     "parts": [
+      {
+       "type": "text",
+       "text": "go"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "g1-m1",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 771431,
+       "input": 100000,
+       "output": 3000,
+       "reasoning": 400,
+       "cache": {
+        "read": 666666,
+        "write": 1365
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 0"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "g1-m2",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 771432,
+       "input": 100000,
+       "output": 3000,
+       "reasoning": 400,
+       "cache": {
+        "read": 666667,
+        "write": 1365
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 1"
+      }
+     ]
+    },
+    {
+     "info": {
+      "id": "g1-m3",
+      "role": "assistant",
+      "finish": "tool-calls",
+      "tokens": {
+       "total": 771433,
+       "input": 100000,
+       "output": 3000,
+       "reasoning": 400,
+       "cache": {
+        "read": 666667,
+        "write": 1366
+       }
+      }
+     },
+     "parts": [
+      {
+       "type": "step-start"
+      },
+      {
+       "type": "text",
+       "text": "step 2"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

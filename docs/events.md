@@ -39,6 +39,8 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `test_os` | `linux`, `windows`, `macos` |
 | `place_reason` | `earliest_finish`, `nothing_measured`, `forced` |
 | `test_run_reason` | `red`, `cut`, `none_collected`, `ids_not_collected`, `summary_missing`, `job_missing`, `busy`, `os_missing`, `place_off`, `out_of_minutes`, `place_vanished`, `superseded` |
+| `research_run_reason` | `too_short`, `few_links`, `no_reddit`, `model_error`, `no_reply`, `empty`, `time_bound`, `stalled`, `server_failed` |
+| `report_from` | `last`, `earlier`, `joined` |
 | `review_axis` | `standards`, `spec`, `edge` |
 | `unit_reason` | `format`, `result`, `merge` |
 | `pr_reason` | `merged`, `red`, `closed_unmerged`, `timeout`, `withdrawn` |
@@ -90,7 +92,7 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 | `pr` | `pr`, `branch`, `base`, `head` | `merge_sha`, `reason` (`pr_reason`) | time from PR to merge; PRs that never end |
 | `core_update` | `target`, `from_version`, `to_version`, `pr` | `files_changed`, `files_removed`, `hooks_added`, `hooks_removed`, `settings_removed` | does an update remove what the core removed |
 | `install` | `target`, `version`, `steps` | `files_copied`, `stubs_written`, `labels_created` | an install into any repo, step by step |
-| `research_run` | `brief`, `model_alias`, `no_reddit` | `tokens_in`, `tokens_out`, `helper_tokens_in`, `helper_tokens_out`, `reddit_urls`, `search_429`, `compactions`, `report_path`, `report_chars` | bridge cost and why a report was rejected |
+| `research_run` | `brief`, `model_alias`, `no_reddit` | `tokens_in`, `tokens_out`, `helper_tokens_in`, `helper_tokens_out`, `reddit_urls`, `search_429`, `compactions`, `report_path`, `report_chars`, `reason` (`research_run_reason`), `report_from` (`report_from`), `links`, `last_chars`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`, `helper_tokens_reasoning`, `helper_tokens_cache_read`, `helper_tokens_cache_write`, `helper_sessions`, `helper_depth`, `unread_sessions` | bridge cost and why a report was rejected |
 | `process` | `program`, `pid`, `argv0`, `hidden`, `launched_by`, `mechanism` | `rc` | every process the layer starts; a console window seen |
 | `external_call` | `target` (`call_target`), `command` | `rc`, `transient`, `retries`, `timed_out` | which calls fail or are slow, per machine |
 | `check` | `check` (`check`), `target` | `findings`, `facts` | a periodic or start-up check and what it found |

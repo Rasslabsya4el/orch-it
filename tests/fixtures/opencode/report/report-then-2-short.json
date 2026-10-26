@@ -1,0 +1,301 @@
+{
+ "about": "a report, then two short replies, each after a compaction",
+ "require_reddit": true,
+ "expect": {
+  "report_from": "earlier",
+  "reason": null,
+  "compactions": 2,
+  "chars": 6000,
+  "reddit_urls": 2,
+  "last_chars": 23
+ },
+ "messages": [
+  {
+   "info": {
+    "id": "msg_0002",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000000000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0001",
+     "type": "text",
+     "text": "Brief: three questions."
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0006",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "stop",
+    "time": {
+     "created": 1700000001000,
+     "completed": 1700000001500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0003",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0004",
+     "type": "text",
+     "text": "# Report\nthe source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small mac\n> quoted passage 0 (https://www.reddit.com/r/selfhosted/comments/x1a0/thread_0/)\n\n> quoted passage 1 (https://www.reddit.com/r/selfhosted/comments/x1a1/thread_1/)\n\n> quoted passage 2 (https://docs.example.org/s1/page-0)\n\n> quoted passage 3 (https://docs.example.org/s1/page-1)\n\n> quoted passage 4 (https://docs.example.org/s1/page-2)\n\n> quoted passage 5 (https://docs.example.org/s1/page-3)\n\n> quoted passage 6 (https://docs.example.org/s1/page-4)\n\n> quoted passage 7 (https://docs.example.org/s1/page-5)\n"
+    },
+    {
+     "id": "prt_0005",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0007",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000002000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0008",
+     "type": "compaction",
+     "auto": true,
+     "overflow": false
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0012",
+    "role": "assistant",
+    "agent": "compaction",
+    "mode": "compaction",
+    "finish": "stop",
+    "time": {
+     "created": 1700000003000,
+     "completed": 1700000003500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "summary": true
+   },
+   "parts": [
+    {
+     "id": "prt_0009",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0010",
+     "type": "text",
+     "text": "# Report\nthe source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the s\n> quoted passage 0 (https://www.reddit.com/r/selfhosted/comments/x10a0/thread_0/)\n\n> quoted passage 1 (https://docs.example.org/s10/page-0)\n\n> quoted passage 2 (https://docs.example.org/s10/page-1)\n\n> quoted passage 3 (https://docs.example.org/s10/page-2)\n\n> quoted passage 4 (https://docs.example.org/s10/page-3)\n"
+    },
+    {
+     "id": "prt_0011",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0014",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000004000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0013",
+     "type": "text",
+     "text": "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
+     "synthetic": true,
+     "metadata": {
+      "compaction_continue": true
+     }
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0018",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "stop",
+    "time": {
+     "created": 1700000005000,
+     "completed": 1700000005500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0015",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0016",
+     "type": "text",
+     "text": "Nothing left to do (0)."
+    },
+    {
+     "id": "prt_0017",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0019",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000006000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0020",
+     "type": "compaction",
+     "auto": true,
+     "overflow": false
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0024",
+    "role": "assistant",
+    "agent": "compaction",
+    "mode": "compaction",
+    "finish": "stop",
+    "time": {
+     "created": 1700000007000,
+     "completed": 1700000007500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "summary": true
+   },
+   "parts": [
+    {
+     "id": "prt_0021",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0022",
+     "type": "text",
+     "text": "# Report\nthe source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the source says the free tier keeps one small machine per account and the forum thread adds that the limit applies per region while the wiki disagrees the s\n> quoted passage 0 (https://www.reddit.com/r/selfhosted/comments/x11a0/thread_0/)\n\n> quoted passage 1 (https://docs.example.org/s11/page-0)\n\n> quoted passage 2 (https://docs.example.org/s11/page-1)\n\n> quoted passage 3 (https://docs.example.org/s11/page-2)\n\n> quoted passage 4 (https://docs.example.org/s11/page-3)\n"
+    },
+    {
+     "id": "prt_0023",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0026",
+    "role": "user",
+    "agent": "research",
+    "time": {
+     "created": 1700000008000
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0025",
+     "type": "text",
+     "text": "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
+     "synthetic": true,
+     "metadata": {
+      "compaction_continue": true
+     }
+    }
+   ]
+  },
+  {
+   "info": {
+    "id": "msg_0030",
+    "role": "assistant",
+    "agent": "research",
+    "mode": "research",
+    "finish": "stop",
+    "time": {
+     "created": 1700000009000,
+     "completed": 1700000009500
+    },
+    "tokens": {
+     "input": 1000,
+     "output": 100,
+     "reasoning": 10,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   },
+   "parts": [
+    {
+     "id": "prt_0027",
+     "type": "step-start"
+    },
+    {
+     "id": "prt_0028",
+     "type": "text",
+     "text": "Nothing left to do (1)."
+    },
+    {
+     "id": "prt_0029",
+     "type": "step-finish",
+     "reason": "stop"
+    }
+   ]
+  }
+ ]
+}
