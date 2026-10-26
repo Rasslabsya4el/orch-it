@@ -31,14 +31,22 @@ steps touch no `gh` or git themselves, the tests run them on `tests/fake_github.
 
 Every wait is bounded (`Plan.wait_minutes`, the line's own bounds in `Plan.settings`) and polls
 every `poll_seconds`. A workflow or Actions turned off is turned on again when its row ends and
-by `RealTrial.restore` when the script ends. The base ends with the trial's files on it (row 5
-leaves it green); a branch that must keep nothing is the owner's to reset.
+by `RealTrial.restore` when the script ends (every setting is restored even when one restore
+fails). Before any row, `RealTrial.preflight` refuses a clone that is not the repo's (its origin
+names exactly OWNER/NAME) or has changes to tracked files, a repo without auto-merge or a `tests`
+workflow, a base that does not exist, is not protected by strict checks `linux` and `windows` only,
+or is the repo's default branch (row 5 puts a red test on the base; `--allow-default-base`). When
+the rows end, every trial ticket still open is closed `not_planned` (`ready-for-agent` off first,
+so no agent takes one) and every trial pull request still open is closed; `--keep` leaves them.
+The base ends with the trial's files on it (row 5 leaves it green); a branch that must keep nothing
+is the owner's to reset.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tempfile
 import threading
@@ -67,7 +75,7 @@ from orch_it.merge.main_check import check_main
 from orch_it.merge.pr_open import Opened, open_pr
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, Gh, GithubError, run_gh
+from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, WORKFLOW_FILE, Gh, GithubError, run_gh
 from orch_it.tickets.model import READY_LABEL
 from orch_it.tickets.reader import TRIAGE_LABEL
 
@@ -128,6 +136,12 @@ class Trial(Protocol):
     def enable_workflow(self, file: str) -> None: ...
 
     def set_actions(self, on: bool) -> None: ...
+
+    def adopt(self, ticket: int) -> None:
+        """A ticket the merge flow opened during the trial (a red-on-main one): `cleanup` closes it too."""
+
+    def cleanup(self) -> dict:
+        """Close every trial ticket and pull request still open; what was closed (and what failed)."""
 
     def restore(self) -> None:
         """Turn on again whatever this trial turned off."""
@@ -304,6 +318,7 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
                              f"trial test {path} must fail on a push (jobs {first.jobs}) - the base stays as it is")
         out["failing_ids"] = sorted(ids)
         one = check_main(hub, store, run.repo, run.base)
+        run.adopt(one)
         run.say(f"main check: {one.outcome} opened {one.opened}")
         ours = run.red_tickets_of(ids)
         out["first_check"] = {"outcome": one.outcome, "opened": one.opened, "red_tickets": ours}
@@ -317,6 +332,7 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
         hub.rerun(run.repo, first.run_id)
         again = run.ended_run(first.sha, attempt=first.attempt + 1)
         two = check_main(hub, store, run.repo, run.base)
+        run.adopt(two)
         out["second_check"] = {"outcome": two.outcome, "attempt": again.attempt, "opened": two.opened,
                                "red_tickets": run.red_tickets_of(ids)}
         run.say(f"second main check: {two.outcome} opened {two.opened}")
@@ -325,6 +341,7 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
         run.follow(fixed.pr)
         green = run.ended_run(fix_merge.merge_sha)
         three = check_main(hub, store, run.repo, run.base)
+        run.adopt(three)
         closed = [n for n in ours if not hub.issue(run.repo, n).open
                   and hub.issue(run.repo, n).state_reason == "completed"]
         out["third_check"] = {"outcome": three.outcome, "run_id": green.run_id, "closed_by_this_check": three.closed,
@@ -612,8 +629,15 @@ class _Run:
         return found
 
     def events(self, ticket: int) -> list[tuple[str, dict]]:
-        rows = self.store.query("SELECT kind, detail FROM events WHERE ticket = ? ORDER BY at, id", (ticket,)).rows
+        rows = self.store.query("SELECT kind, detail FROM events WHERE ticket = ? AND repo = ? ORDER BY at, id",
+                                (ticket, self.repo)).rows
         return [(kind, json.loads(detail) if isinstance(detail, str) else (detail or {})) for kind, detail in rows]
+
+    def adopt(self, report) -> None:
+        """The tickets a main check opened are the trial's: cleanup closes them if the row ends before green does."""
+
+        for number in (*report.opened, *report.brain):
+            self.trial.adopt(number)
 
     def red_tickets_of(self, ids: frozenset[str]) -> list[int]:
         """The open red-on-main tickets that list exactly `ids`."""
@@ -647,45 +671,76 @@ class _Run:
 # --- the real adapter ---------------------------------------------------------------------------------------
 
 
+_ORIGIN = re.compile(r"(?:https?://(?:[^@/]+@)?github\.com/|ssh://git@github\.com/|git@github\.com:)"
+                     r"(?P<owner>[A-Za-z0-9-]+)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?")
+
+
+def origin_repo(url: str) -> str | None:
+    """The OWNER/NAME a GitHub remote url names (with or without `.git`); None for any other url."""
+
+    found = _ORIGIN.fullmatch(url.strip())
+    return f"{found['owner']}/{found['name']}" if found else None
+
+
 class RealTrial:
     """The trial over a clone (`work_tree`, its `origin` the repo) and the owner's `gh`."""
 
     def __init__(self, repo: str, base: str, work_tree: Path, hub: PullHub, *, gh: Gh = run_gh,
-                 lock_root: Path | None = None, identity: tuple[str, str] | None = None):
+                 lock_root: Path | None = None, identity: tuple[str, str] | None = None,
+                 allow_default_base: bool = False):
         self.repo, self.base, self.work_tree, self.hub, self.gh = repo, base, Path(work_tree), hub, gh
         self.git = merge_git.work_tree(self.work_tree)
         self.lock_root = lock_root
         self.identity = identity
+        self.allow_default_base = allow_default_base
+        self.tickets: list[int] = []  # every ticket the trial made or adopted
+        self.branches: set[str] = set()  # every branch it made
         self._workflows_off: set[str] = set()
         self._actions_off = False
 
     def preflight(self) -> dict:
-        """What the trial stands on; a repo it cannot run on is `TrialError`."""
+        """What the trial stands on; a repo or clone it cannot run on is `TrialError`, said before any row."""
 
         origin = self.git(["remote", "get-url", "origin"]).strip()
-        if self.repo.lower() not in origin.lower():
-            raise TrialError(f"the work tree's origin {origin} is not {self.repo}")
-        if self.git(["status", "--porcelain"]).strip():
-            raise TrialError(f"the work tree {self.work_tree} has changes: use a clean clone")
+        if (origin_repo(origin) or "").lower() != self.repo.lower():
+            raise TrialError(f"the work tree's origin {origin} is not exactly {self.repo}")
+        # untracked files are not the trial's concern; a change to a tracked file is
+        if self.git(["status", "--porcelain", "--untracked-files=no"]).strip():
+            raise TrialError(f"the work tree {self.work_tree} has changes to tracked files: use a clean clone")
         info = self._json(["api", f"repos/{self.repo}"])
         if not info.get("allow_auto_merge"):
             raise TrialError(f"{self.repo} does not allow auto-merge (settings > General): `pr open` needs it")
-        found = {"default_branch": info.get("default_branch"), "private": info.get("private"),
-                 "base_is_default": info.get("default_branch") == self.base}
-        branch = self._json(["api", f"repos/{self.repo}/branches/{self.base}"])
-        found["base_protected"] = branch.get("protected")
+        default = info.get("default_branch")
+        if default == self.base and not self.allow_default_base:
+            raise TrialError(f"{self.base} is the default branch of {self.repo} and row 5 puts a red test on the "
+                             "base: use a throwaway repo or a trial branch, or give --allow-default-base")
+        try:
+            branch = self._json(["api", f"repos/{self.repo}/branches/{self.base}"])
+        except TrialError as e:
+            raise TrialError(f"the base branch {self.base} is not in {self.repo}: {e}") from None
+        try:
+            self._json(["api", f"repos/{self.repo}/actions/workflows/{WORKFLOW_FILE}"])
+        except TrialError as e:
+            raise TrialError(f"{self.repo} has no `{WORKFLOW_FILE}` workflow: {e}") from None
         try:
             rule = self._json(["api", f"repos/{self.repo}/branches/{self.base}/protection"])
-            checks = rule.get("required_status_checks") or {}
-            found["strict"] = checks.get("strict")
-            found["required"] = sorted(c.get("context") for c in checks.get("checks") or [] if isinstance(c, dict))
-        except (GithubError, TrialError) as e:
-            found["protection"] = f"unreadable: {str(e)[:100]}"
-        return found
+        except TrialError as e:
+            raise TrialError(f"the base {self.base} has no readable branch protection: {e}") from None
+        checks = rule.get("required_status_checks") or {}
+        required = sorted({c.get("context") for c in checks.get("checks") or [] if isinstance(c, dict)}
+                          | set(checks.get("contexts") or []))
+        if checks.get("strict") is not True:
+            raise TrialError(f"the protection of {self.base} does not require branches to be up to date (strict)")
+        if required != sorted(REQUIRED):
+            raise TrialError(f"the protection of {self.base} requires {required}, not exactly {sorted(REQUIRED)}")
+        return {"default_branch": default, "private": info.get("private"), "base_is_default": default == self.base,
+                "base_protected": branch.get("protected"), "strict": True, "required": required}
 
     def _json(self, args: list[str]) -> dict:
         try:
             value = json.loads(self.gh(args))
+        except GithubError as e:
+            raise TrialError(f"gh {' '.join(args[:2])}: {e}") from None
         except json.JSONDecodeError as e:
             raise TrialError(f"gh {' '.join(args[:2])}: not JSON ({e})") from None
         if not isinstance(value, dict):
@@ -693,24 +748,48 @@ class RealTrial:
         return value
 
     def make_ticket(self, title: str, body: str) -> int:
-        return self.hub.create_issue(self.repo, title, body, [READY_LABEL])
+        number = self.hub.create_issue(self.repo, title, body, [READY_LABEL])
+        self.adopt(number)
+        return number
+
+    def adopt(self, ticket: int) -> None:
+        if ticket not in self.tickets:
+            self.tickets.append(ticket)
 
     def make_branch(self, name: str, files: dict[str, str | None]) -> str:
-        git = self.git
-        git(["fetch", "--quiet", "origin", self.base])
-        git(["checkout", "--quiet", "-B", name, f"origin/{self.base}"])
-        for path, text in files.items():
-            if text is None:
-                git(["rm", "--quiet", "--ignore-unmatch", "--", path])
-                continue
-            target = self.work_tree / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, "utf-8", newline="\n")
-            git(["add", "--", path])
-        who = ["-c", f"user.name={self.identity[0]}", "-c", f"user.email={self.identity[1]}"] if self.identity else []
-        git([*who, "commit", "--quiet", "-m", f"trial: {name}"])
-        git(["push", "--quiet", "origin", f"{name}:refs/heads/{name}"])
-        return git(["rev-parse", "HEAD"]).strip()
+        git, written = self.git, []
+        self.branches.add(name)
+        try:
+            git(["fetch", "--quiet", "origin", self.base])
+            git(["checkout", "--quiet", "-B", name, f"origin/{self.base}"])
+            for path, text in files.items():
+                if text is None:
+                    git(["rm", "--quiet", "--ignore-unmatch", "--", path])
+                    continue
+                target = self.work_tree / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, "utf-8", newline="\n")
+                written.append(path)
+                git(["add", "--", path])
+            name_email = self.identity or ()
+            who = ["-c", f"user.name={name_email[0]}", "-c", f"user.email={name_email[1]}"] if name_email else []
+            git([*who, "commit", "--quiet", "-m", f"trial: {name}"])
+            git(["push", "--quiet", "origin", f"{name}:refs/heads/{name}"])
+            return git(["rev-parse", "HEAD"]).strip()
+        except BaseException:
+            self._reset(written)
+            raise
+
+    def _reset(self, written: list[str]) -> None:
+        """After a branch that half failed: the work tree back at the base, the files this branch wrote gone."""
+
+        try:
+            self.git(["checkout", "--quiet", "--force", "--detach", f"origin/{self.base}"])
+            for path in written:
+                if not self.git(["ls-files", "--", path]).strip():  # untracked: this script wrote it
+                    (self.work_tree / path).unlink(missing_ok=True)
+        except (merge_git.GitError, OSError) as e:  # the failure being raised is the one that matters
+            print(f"could not reset the work tree to {self.base}: {e}", flush=True)
 
     def close_pull(self, pr: int) -> None:
         self.gh(["pr", "close", str(pr), "--repo", self.repo])
@@ -733,11 +812,49 @@ class RealTrial:
         self.gh(["api", "-X", "PUT", f"repos/{self.repo}/actions/permissions", "-F", f"enabled={str(on).lower()}"])
         self._actions_off = not on
 
+    def cleanup(self) -> dict:
+        """Every trial ticket still open: `ready-for-agent` off first (no agent takes it), a comment, closed
+        `not_planned`; then every pull request of a trial branch still open, closed."""
+
+        done: dict = {"tickets": [], "pulls": [], "errors": []}
+        for number in self.tickets:
+            try:
+                issue = self.hub.issue(self.repo, number)
+                if issue is None or not issue.open:
+                    continue
+                if READY_LABEL in issue.labels:
+                    self.hub.remove_label(self.repo, number, READY_LABEL)
+                self.hub.comment(self.repo, number, "Closed by the merge trial's cleanup: a ticket made for a trial "
+                                 "run, not planned work.")
+                self.hub.close_issue(self.repo, number, "not_planned")
+                done["tickets"].append(number)
+            except Exception as e:  # noqa: BLE001 - the others are still closed
+                done["errors"].append(f"ticket #{number}: {e}"[:200])
+        try:
+            for pull in self.hub.open_pulls(self.repo, self.base):
+                if pull.branch in self.branches and (pull.head_repo or "").lower() == self.repo.lower():
+                    self.hub.close_pull(self.repo, pull.number)
+                    done["pulls"].append(pull.number)
+        except Exception as e:  # noqa: BLE001
+            done["errors"].append(f"pull requests: {e}"[:200])
+        return done
+
     def restore(self) -> None:
+        """Turn on again Actions and every workflow this trial turned off; one that fails does not stop the others."""
+
+        errors = []
         if self._actions_off:
-            self.set_actions(True)
+            try:
+                self.set_actions(True)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"Actions: {e}")
         for file in sorted(self._workflows_off):
-            self.enable_workflow(file)
+            try:
+                self.enable_workflow(file)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"workflow {file}: {e}")
+        if errors:
+            raise TrialError("still off: " + "; ".join(errors)[:600])
 
 
 # --- the script --------------------------------------------------------------------------------------------
@@ -773,7 +890,8 @@ def _real_world(args: argparse.Namespace):
         name, _, email = args.identity.partition("<")
         identity = (name.strip(), email.strip().rstrip(">"))
     trial = RealTrial(args.repo, args.base, Path(args.work_tree), hub,
-                      lock_root=Path(args.lock_root) if args.lock_root else None, identity=identity)
+                      lock_root=Path(args.lock_root) if args.lock_root else None, identity=identity,
+                      allow_default_base=args.allow_default_base)
     return trial, hub, lambda: datetime.now(UTC), time.sleep
 
 
@@ -785,8 +903,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--rows", default=",".join(map(str, ROWS_ALL)), help="the rows to run (default: 2,3,4,5,6)")
     p.add_argument("--out", default=None, metavar="FILE", help="the JSON of the numbers (default: merge-trial.json)")
     p.add_argument("--owner", default=None, help="the login the layer's comments have (default: the repo's owner)")
-    p.add_argument("--store", default=str(Path(tempfile.gettempdir()) / "orch-it-merge-trial-store"), metavar="PATH",
-                   help="the trial's own event store, outside any git work tree (default: in the temp folder)")
+    p.add_argument("--store", default=None, metavar="PATH",
+                   help="the trial's own event store, outside any git work tree (default: a new temp folder)")
+    p.add_argument("--keep", action="store_true", help="leave the trial's tickets and pull requests open at the end")
+    p.add_argument("--allow-default-base", action="store_true",
+                   help="allow --base to be the repo's default branch (row 5 puts a red test on it)")
     p.add_argument("--lock-root", default=None, metavar="PATH", help="the merge line's lock folder")
     p.add_argument("--identity", default=None, metavar='"Name <email>"', help="author of the trial's commits")
     p.add_argument("--line-minutes", type=float, default=90, help="the bound of the line's run (default: 90)")
@@ -812,10 +933,11 @@ def main(argv: list[str] | None = None, *, world=_real_world) -> int:
     settings = MergeSettings(line_minutes=args.line_minutes, lock_stale_minutes=args.line_minutes + 90,
                              check_minutes=args.check_minutes)
     plan = Plan(settings, args.wait_minutes, args.owner)
-    store = Store.open(args.store)
+    store_path = args.store or tempfile.mkdtemp(prefix="orch-it-merge-trial-")
+    store = Store.open(store_path)
     out = Path(args.out or "merge-trial.json")
     report: dict = {"repo": args.repo, "base": args.base, "started": clock().isoformat(), "plan": asdict(plan),
-                    "rows": {}}
+                    "store": str(store_path), "rows": {}}
     wanted, ready = args.row_list, True
     try:
         try:
@@ -832,6 +954,13 @@ def main(argv: list[str] | None = None, *, world=_real_world) -> int:
                 function = ROW_FUNCTIONS[number]
                 _attempt(report, (number,), lambda f=function: {number: f(trial, hub, store, clock, sleep, plan)})
     finally:
+        if not args.keep:  # before the workflows are on again: closing a trial ticket or pull request starts none
+            try:
+                report["cleanup"] = trial.cleanup()
+                print(f"cleanup: {report['cleanup']}", flush=True)
+            except Exception as e:  # noqa: BLE001 - restore and the report still follow
+                report["cleanup_error"] = f"{type(e).__name__}: {e}"
+                print(f"CLEANUP FAILED: {e} - close the trial's tickets and pull requests by hand", flush=True)
         try:
             trial.restore()
         except Exception as e:  # noqa: BLE001 - say what stayed off, and still write what was measured
@@ -840,7 +969,8 @@ def main(argv: list[str] | None = None, *, world=_real_world) -> int:
         report["finished"] = clock().isoformat()
         out.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n", "utf-8")
         _table(report, wanted, out)
-    return 0 if ready and all(report["rows"].get(str(n), {}).get("passed") for n in wanted) else 1
+    clean = not ({"restore_error", "cleanup_error"} & report.keys()) and not (report.get("cleanup") or {}).get("errors")
+    return 0 if ready and clean and all(report["rows"].get(str(n), {}).get("passed") for n in wanted) else 1
 
 
 def _attempt(report: dict, numbers: tuple[int, ...], make: Callable[[], dict]) -> None:

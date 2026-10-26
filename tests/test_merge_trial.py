@@ -9,12 +9,15 @@ from dataclasses import replace
 
 import merge_trial
 import pytest
+from datetime import timedelta
+
 from fake_github import FAILED, PASSED, REPO, FakeGitHub
 from follow_world import NOW, Git
 from line_world import CI
 
 from orch_it import tickets
 from orch_it.events.store import Store
+from orch_it.testruns.github import GithubError
 
 OWNER = REPO.split("/")[0]
 RED_TESTS = "tests/test_trial_pr_red_"
@@ -51,6 +54,8 @@ class FakeTrial:
         self.off: set[str] = set()
         self.actions_log: list[bool] = []
         self.closed: list[int] = []
+        self.adopted: list[int] = []
+        self.cleaned = self.restored = False
         hub.on_merge.append(self._merged)
 
     def preflight(self):
@@ -84,6 +89,13 @@ class FakeTrial:
     def set_actions(self, on):
         self.actions_log.append(on)
         self.hub.actions = on
+
+    def adopt(self, ticket):
+        self.adopted.append(ticket)
+
+    def cleanup(self):
+        self.cleaned = True
+        return {"tickets": [], "pulls": [], "errors": []}
 
     def restore(self):
         self.restored = True
@@ -372,23 +384,6 @@ def test_the_real_adapter_makes_branches_and_turns_things_off_with_the_arguments
     assert gh.calls == []
 
 
-def test_the_real_adapter_refuses_a_clone_of_another_repo_and_a_repo_without_auto_merge(tmp_path):
-    answers = {"api repos/owner-x/repo-y": json.dumps({"allow_auto_merge": False, "default_branch": "main"})}
-    trial = merge_trial.RealTrial(REPO, "main", tmp_path, FakeGitHub(NOW), gh=Recorder(answers))
-    trial.git = Recorder({"remote": "https://github.com/someone/else.git\n"})
-    with pytest.raises(merge_trial.TrialError, match="origin"):
-        trial.preflight()
-    trial.git = Recorder({"remote": f"https://github.com/{REPO}.git\n"})
-    with pytest.raises(merge_trial.TrialError, match="auto-merge"):
-        trial.preflight()
-    answers["api repos/owner-x/repo-y"] = json.dumps({"allow_auto_merge": True, "default_branch": "main"})
-    answers[f"api repos/{REPO}/branches/main/protection"] = json.dumps({"required_status_checks": {
-        "strict": True, "checks": [{"context": "windows"}, {"context": "linux"}]}})
-    trial.gh = Recorder(answers)
-    found = trial.preflight()
-    assert (found["strict"], found["required"], found["base_is_default"]) == (True, ["linux", "windows"], True)
-
-
 def test_a_workflow_that_cannot_be_disabled_is_said_and_the_row_goes_on(world):
     def absent(file):
         raise merge_trial.TrialError(f"workflow {file}: HTTP 404")
@@ -396,3 +391,295 @@ def test_a_workflow_that_cannot_be_disabled_is_said_and_the_row_goes_on(world):
     world.trial.disable_workflow = absent
     row6 = world.run(merge_trial.row_6)
     assert row6["workflow_off"]["workflow_off"] is False and world.trial.workflow_log == []
+
+
+# --- the preflight, the cleanup and the restore of the real adapter ---------------------------------------------
+
+GOOD = {
+    f"api repos/{REPO}": json.dumps({"allow_auto_merge": True, "default_branch": "main", "private": False}),
+    f"api repos/{REPO}/branches/trial-main": json.dumps({"protected": True}),
+    f"api repos/{REPO}/actions/workflows/tests.yml": json.dumps({"id": 1, "path": ".github/workflows/tests.yml"}),
+    f"api repos/{REPO}/branches/trial-main/protection": json.dumps({"required_status_checks": {
+        "strict": True, "checks": [{"context": "windows"}, {"context": "linux"}]}}),
+}
+
+
+class Refusing(Recorder):
+    """`gh` that answers with `GithubError` for the calls whose start is in `fail`."""
+
+    def __init__(self, answers, fail=()):
+        super().__init__(answers)
+        self.fail = tuple(fail)
+
+    def __call__(self, args):
+        if any(" ".join(args).startswith(start) for start in self.fail):
+            self.calls.append(args)
+            raise GithubError("gh_failed", f"{' '.join(args[:3])}: HTTP 404")
+        return super().__call__(args)
+
+
+def real(tmp_path, answers=None, *, base="trial-main", remote=None, status="", fail=(), **kwargs):
+    gh = Refusing(GOOD if answers is None else answers, fail)
+    trial = merge_trial.RealTrial(REPO, base, tmp_path, FakeGitHub(NOW), gh=gh, **kwargs)
+    trial.git = Recorder({"remote": f"{remote or f'https://github.com/{REPO}.git'}\n", "status": status})
+    return trial
+
+
+def test_the_preflight_of_a_clone_and_a_repo_it_can_run_on_says_what_it_stands_on(tmp_path):
+    found = real(tmp_path).preflight()
+    assert found == {"default_branch": "main", "private": False, "base_is_default": False, "base_protected": True,
+                     "strict": True, "required": ["linux", "windows"]}
+
+
+@pytest.mark.parametrize("remote", [f"https://github.com/{REPO}.git", f"https://github.com/{REPO}",
+                                    f"https://github.com/{REPO}/", f"https://user@github.com/{REPO}.git",
+                                    f"git@github.com:{REPO}.git", f"ssh://git@github.com/{REPO}.git",
+                                    "https://github.com/OWNER-X/Repo-Y.git"])
+def test_the_origin_of_the_clone_names_exactly_the_repo(tmp_path, remote):
+    assert real(tmp_path, remote=remote).preflight()["required"] == ["linux", "windows"]
+
+
+@pytest.mark.parametrize("remote", [f"https://github.com/{REPO}-fork.git", f"https://github.com/x{REPO}.git",
+                                    f"https://github.com/someone/{REPO}.git", f"https://example.org/{REPO}.git",
+                                    f"https://github.com/{REPO}.git/more", "C:/clones/repo-y"])
+def test_an_origin_that_only_contains_the_repo_is_refused(tmp_path, remote):
+    with pytest.raises(merge_trial.TrialError, match="origin"):
+        real(tmp_path, remote=remote).preflight()
+
+
+def test_a_clone_with_changes_to_tracked_files_is_refused_and_untracked_files_are_not_asked_about(tmp_path):
+    trial = real(tmp_path, status=" M src/orch_it/cli.py\n")
+    with pytest.raises(merge_trial.TrialError, match="changes to tracked files"):
+        trial.preflight()
+    assert ["status", "--porcelain", "--untracked-files=no"] in trial.git.calls  # git is not shown untracked files
+    assert real(tmp_path, status="").preflight()
+
+
+def test_a_base_branch_that_is_not_there_is_refused(tmp_path):
+    with pytest.raises(merge_trial.TrialError, match="base branch trial-main is not in"):
+        real(tmp_path, fail=[f"api repos/{REPO}/branches/trial-main"]).preflight()
+
+
+def test_a_repo_without_the_tests_workflow_is_refused(tmp_path):
+    with pytest.raises(merge_trial.TrialError, match="no `tests.yml` workflow"):
+        real(tmp_path, fail=[f"api repos/{REPO}/actions/workflows/tests.yml"]).preflight()
+
+
+def test_a_base_without_branch_protection_or_with_protection_that_is_not_what_orch_it_has_is_refused(tmp_path):
+    protection = f"api repos/{REPO}/branches/trial-main/protection"
+    with pytest.raises(merge_trial.TrialError, match="no readable branch protection"):
+        real(tmp_path, fail=[protection]).preflight()
+
+    def with_checks(checks):
+        return {**GOOD, protection: json.dumps({"required_status_checks": checks})}
+
+    for checks, said in [({"strict": False, "checks": [{"context": "linux"}, {"context": "windows"}]}, "strict"),
+                         ({"strict": True, "checks": [{"context": "linux"}]}, r"\['linux'\]"),
+                         ({"strict": True, "checks": [{"context": "linux"}, {"context": "windows"},
+                                                       {"context": "lint"}]}, "lint"),
+                         ({"strict": True, "contexts": ["linux", "windows"]}, None),
+                         ({}, "strict")]:
+        trial = real(tmp_path, with_checks(checks))
+        if said is None:
+            assert trial.preflight()["required"] == ["linux", "windows"]  # the older form of the same rule
+        else:
+            with pytest.raises(merge_trial.TrialError, match=said):
+                trial.preflight()
+
+
+def test_a_repo_without_auto_merge_is_refused(tmp_path):
+    answers = {**GOOD, f"api repos/{REPO}": json.dumps({"allow_auto_merge": False, "default_branch": "main"})}
+    with pytest.raises(merge_trial.TrialError, match="auto-merge"):
+        real(tmp_path, answers).preflight()
+
+
+def test_the_default_branch_is_refused_as_the_base_unless_it_is_allowed(tmp_path):
+    answers = {k.replace("trial-main", "main"): v for k, v in GOOD.items()}
+    with pytest.raises(merge_trial.TrialError, match="default branch.*--allow-default-base"):
+        real(tmp_path, answers, base="main").preflight()
+    assert real(tmp_path, answers, base="main", allow_default_base=True).preflight()["base_is_default"] is True
+
+
+def test_the_new_arguments_default_to_off_and_allow_default_base_reaches_the_adapter(tmp_path):
+    args = merge_trial.parse_args(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "5"])
+    assert args.allow_default_base is False and args.keep is False and args.store is None
+    on = merge_trial.parse_args(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--keep",
+                                 "--allow-default-base"])
+    assert merge_trial._real_world(on)[0].allow_default_base is True and on.keep
+
+
+def test_the_cleanup_takes_ready_off_closes_every_open_trial_ticket_and_pull_request_and_nothing_else(tmp_path):
+    hub = FakeGitHub(NOW)
+    trial = merge_trial.RealTrial(REPO, "main", tmp_path, hub, gh=Recorder())
+    trial.git = Recorder({"rev-parse": "abc\n"})
+    mine, done, adopted = (trial.make_ticket(f"t{n}", merge_trial.BODY) for n in range(3))
+    hub.close(done)  # a ticket the flow closed itself
+    red = hub._number()
+    hub.add(red, "red on main", ["ready-for-agent", "priority"])
+    trial.adopt(red)
+    trial.adopt(red)
+    strange = hub._number()
+    hub.add(strange, "someone else's", ["ready-for-agent"])
+    trial.make_branch("trial-1-a", {"a.txt": "a\n"})
+    ours = hub.open_pull(branch="trial-1-a", body=f"Refs #{mine}")
+    other = hub.open_pull(branch="somebody-elses")
+    report = trial.cleanup()
+    assert report == {"tickets": [mine, adopted, red], "pulls": [ours], "errors": []}
+    for number in (mine, adopted, red):
+        issue = hub.issues[(REPO, number)]
+        assert not issue.open and issue.state_reason == "not_planned" and "ready-for-agent" not in issue.labels
+        assert "cleanup" in hub.comments(REPO, number)[-1].body
+    assert hub.issues[(REPO, done)].state_reason == "completed"  # a ticket already closed is left as it was
+    assert hub.issues[(REPO, strange)].open and "ready-for-agent" in hub.issues[(REPO, strange)].labels
+    assert hub.pulls[ours].state == "closed" and hub.pulls[other].state == "open"
+    assert [c[1] for c in hub.calls if c[0] == "close_issue"] == [mine, adopted, red]
+    assert trial.cleanup() == {"tickets": [], "pulls": [], "errors": []}
+
+
+def test_a_ticket_the_cleanup_cannot_close_is_told_and_the_others_still_close(tmp_path):
+    hub = FakeGitHub(NOW)
+    trial = merge_trial.RealTrial(REPO, "main", tmp_path, hub, gh=Recorder())
+    first, second = trial.make_ticket("a", merge_trial.BODY), trial.make_ticket("b", merge_trial.BODY)
+    hub.failing.add((REPO, first))
+    report = trial.cleanup()
+    assert report["tickets"] == [second] and len(report["errors"]) == 1 and f"#{first}" in report["errors"][0]
+
+
+def test_the_script_cleans_up_unless_told_to_keep_and_does_it_when_a_row_broke(world, tmp_path, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("a row broke")
+
+    monkeypatch.setitem(merge_trial.ROW_FUNCTIONS, 6, broken)
+    argv = ["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "6",
+            "--store", str(tmp_path / "trial-store")]
+    factory = lambda args: (world.trial, world.rows, world.clock, world.sleep)  # noqa: E731
+    out = tmp_path / "kept.json"
+    merge_trial.main([*argv, "--keep", "--out", str(out)], world=factory)
+    assert not world.trial.cleaned and "cleanup" not in json.loads(out.read_text("utf-8"))
+    out = tmp_path / "cleaned.json"
+    code = merge_trial.main([*argv, "--out", str(out)], world=factory)
+    assert world.trial.cleaned and json.loads(out.read_text("utf-8"))["cleanup"]["errors"] == [] and code == 1
+
+
+def test_a_cleanup_that_fails_is_told_and_the_restore_still_runs(world, tmp_path, capsys):
+    def refuse():
+        raise RuntimeError("gh is gone")
+
+    world.trial.cleanup = refuse
+    out = tmp_path / "n.json"
+    code = merge_trial.main(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "6",
+                             "--out", str(out), "--store", str(tmp_path / "s")],
+                            world=lambda args: (world.trial, world.rows, world.clock, world.sleep))
+    assert code == 1 and world.trial.restored
+    assert "gh is gone" in json.loads(out.read_text("utf-8"))["cleanup_error"]
+    assert "CLEANUP FAILED" in capsys.readouterr().out
+
+
+def test_row_5_gives_the_tickets_a_main_check_opened_to_the_cleanup(world):
+    world.run(merge_trial.row_5)
+    assert len(world.trial.adopted) >= 1  # the red-on-main ticket, closed on green, is still the trial's
+
+
+def test_the_restore_turns_back_on_everything_it_can_and_then_says_what_stayed_off(tmp_path):
+    gh = Refusing({}, fail=["api -X PUT", "workflow enable follow.yml"])
+    trial = merge_trial.RealTrial(REPO, "main", tmp_path, FakeGitHub(NOW), gh=gh)
+    for file in ("follow.yml", "main-check.yml"):
+        trial.disable_workflow(file)
+    trial._actions_off = True
+    with pytest.raises(merge_trial.TrialError) as caught:
+        trial.restore()
+    assert ["workflow", "enable", "main-check.yml", "--repo", REPO] in gh.calls  # tried after the two that failed
+    said = str(caught.value)
+    assert "Actions" in said and "follow.yml" in said and "main-check" not in said
+    assert trial._workflows_off == {"follow.yml"} and trial._actions_off
+
+
+def test_a_branch_that_half_failed_leaves_the_work_tree_at_the_base_and_the_files_it_wrote_gone(tmp_path):
+    class FailsAtCommit(Recorder):
+        def __call__(self, args):
+            super().__call__(args)
+            if "commit" in args:
+                raise merge_trial.merge_git.GitError("git_failed", "commit: nothing to commit")
+            return ""
+
+    (tmp_path / "mine.txt").write_text("a person's untracked file\n", "utf-8")
+    trial = merge_trial.RealTrial(REPO, "trial-main", tmp_path, FakeGitHub(NOW), gh=Recorder())
+    trial.git = git = FailsAtCommit()
+    with pytest.raises(merge_trial.merge_git.GitError, match="nothing to commit"):
+        trial.make_branch("trial-1-a", {"trial/a.txt": "a\n"})
+    assert git.calls[-2:] == [["checkout", "--quiet", "--force", "--detach", "origin/trial-main"],
+                              ["ls-files", "--", "trial/a.txt"]]
+    assert not (tmp_path / "trial" / "a.txt").exists()  # written by the script, untracked: gone
+    assert (tmp_path / "mine.txt").exists()  # nobody else's file is touched
+
+
+def test_a_file_the_base_tracks_is_not_deleted_by_the_reset(tmp_path):
+    class Tracks(Recorder):
+        def __call__(self, args):
+            super().__call__(args)
+            if "commit" in args:
+                raise merge_trial.merge_git.GitError("git_failed", "no")
+            return "tracked\n" if args[0] == "ls-files" else ""
+
+    trial = merge_trial.RealTrial(REPO, "trial-main", tmp_path, FakeGitHub(NOW), gh=Recorder())
+    trial.git = Tracks()
+    with pytest.raises(merge_trial.merge_git.GitError):
+        trial.make_branch("trial-1-a", {"tracked.txt": "changed\n"})
+    assert (tmp_path / "tracked.txt").exists()  # git restored it, the script does not remove what the base holds
+
+
+def test_the_events_of_a_ticket_are_read_for_this_repo_only(world):
+    from orch_it.merge import record
+
+    record.write(world.store, REPO, 7, "github", None, None, [("comment.written", {"comment_kind": "closing"})])
+    record.write(world.store, "other-x/other-y", 7, "github", None, None, [("attempt.counted", {
+        "reason": "red", "counted": True, "in_a_row": 1})])
+    run = merge_trial._Run(world.trial, world.rows, world.store, world.clock, world.sleep, None, "r9")
+    assert [kind for kind, _ in run.events(7)] == ["comment.written"]
+
+
+def test_each_run_without_a_store_argument_gets_a_new_store_folder(world, tmp_path, monkeypatch):
+    made = []
+
+    def fresh(prefix):
+        made.append(tmp_path / f"store-{len(made)}")
+        made[-1].mkdir()
+        return str(made[-1])
+
+    monkeypatch.setattr(merge_trial.tempfile, "mkdtemp", fresh)
+    for n in range(2):
+        merge_trial.main(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "6",
+                          "--out", str(tmp_path / f"{n}.json")],
+                         world=lambda args: (world.trial, world.rows, world.clock, world.sleep))
+    assert len(made) == 2 and made[0] != made[1]
+    assert json.loads((tmp_path / "1.json").read_text("utf-8"))["store"] == str(made[1])
+
+
+def test_checks_that_never_come_end_the_row_at_its_bound_with_a_timeout_and_everything_is_restored(world, tmp_path):
+    world.sleep = lambda seconds: world.hub.later(seconds=seconds)  # no CI: no check run ever starts
+    started = world.hub.now
+    out = tmp_path / "numbers.json"
+    code = merge_trial.main(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "6",
+                             "--wait-minutes", "3", "--out", str(out), "--store", str(tmp_path / "s")],
+                            world=lambda args: (world.trial, world.rows, world.clock, world.sleep))
+    report = json.loads(out.read_text("utf-8"))
+    assert code == 1 and report["rows"]["6"]["passed"] is False
+    assert "TrialTimeout" in report["rows"]["6"]["error"] and "not within 3 minutes" in report["rows"]["6"]["error"]
+    assert (world.hub.now - started) <= timedelta(minutes=4)  # bounded: the bound and one poll
+    assert not world.trial.off and world.hub.actions is True and world.trial.restored
+    with pytest.raises(merge_trial.TrialTimeout):
+        world.run(merge_trial.row_6, wait_minutes=1)
+    assert not world.trial.off
+
+
+def test_a_wait_that_gh_fails_in_is_tried_again_and_then_raised(world):
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        raise GithubError("gh_failed", "HTTP 502")
+
+    run = merge_trial._Run(world.trial, world.rows, world.store, world.clock, world.sleep, None, "r9")
+    with pytest.raises(GithubError):
+        run.wait("a thing", flaky)
+    assert len(calls) == 4
