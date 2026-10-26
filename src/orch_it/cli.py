@@ -32,6 +32,7 @@ from orch_it.merge.lock import LockError
 from orch_it.research import mcp as research_mcp
 from orch_it.research import run as research_run
 from orch_it.research.settings import ResearchRefused, ResearchSettings
+from orch_it.roles.spawn import SpawnRefused
 from orch_it.skills import shadow, update
 from orch_it.skills.copies import SkillsError
 from orch_it.skills.forge import GithubForge
@@ -189,6 +190,8 @@ def _parser() -> argparse.ArgumentParser:
         dest="command", required=True)
     hook_commands.add_parser("pre-tool-use", parents=[common],
                              help="the PreToolUse guard; reads the hook's JSON on stdin")
+    hook_commands.add_parser("subagent-stop", parents=[common],
+                             help="the SubagentStop hold of report lines; reads the hook's JSON on stdin")
     p = hook_commands.add_parser("pre-push", parents=[common],
                                  help="the git pre-push guard; git passes the remote's name and url "
                                       "and writes the refs on stdin")
@@ -243,7 +246,24 @@ def _parser() -> argparse.ArgumentParser:
 
     ticket_commands.add_parsers(commands, common)
     merge_commands.add_parsers(commands, common)
+
+    p = commands.add_parser("spawn", parents=[common],
+                            help="build a role's subagent prompt from its inputs, or refuse naming the missing one")
+    p.add_argument("role", choices=_spawned_roles(), help="a role of the roles settings that is spawned")
+    p.add_argument("--issue", type=int, help="the ticket number")
+    p.add_argument("--unit", help="the unit id, a row of the plan's unit table in the ticket")
+    p.add_argument("--diff", help="a diff file, or a git range of the worktree (main...HEAD)")
+    p.add_argument("--worktree", metavar="PATH", help="the git work tree (default: the one around here)")
+    p.add_argument("--scratchpad", metavar="PATH", help="the folder of the spawn's files (default: orch-it's data folder)")
+    p.add_argument("--repo", help="owner/name (default: the worktree's GitHub origin)")
     return root
+
+
+def parser() -> argparse.ArgumentParser:
+    """The command line's parser: the role-text check reads every `python -m orch_it` command a
+    text names against it (#399 decision 4)."""
+
+    return _parser()
 
 
 def _aliases() -> str:
@@ -344,6 +364,15 @@ def _guards_install(args) -> tuple[str, int]:
 
 
 def _hook(args) -> tuple[str, int]:
+    if args.command == "subagent-stop":
+        # the hold never blocks a stop by an error: whatever goes wrong lets the stop through
+        try:
+            from orch_it.roles.hold import run_subagent_stop
+
+            raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+            return run_subagent_stop(raw, open_store=lambda: _store(args))  # a bad store never stops a block
+        except Exception:
+            return "", 0
     if args.command == "pre-tool-use":
         # the hook must never block a tool call: a store or settings error (which the CLI would
         # otherwise print and exit 2 on, Claude Code's blocking code) lets the call through
@@ -405,6 +434,29 @@ def _labels_sync(args) -> str:
 def _roles_render(args) -> str:
     done = roles.render(Path(args.work_tree), roles.RoleSet.load(args.settings))
     return render(QueryResult(["file", "action"], done))
+
+
+def _spawned_roles() -> list[str] | None:
+    """The roles `spawn` takes (those with inputs); a roles file that cannot be read leaves the
+    choice open, and the command then says what is wrong."""
+
+    try:
+        return sorted(name for name, role in roles.RoleSet.load().roles.items() if role.inputs)
+    except roles.RolesError:
+        return None
+
+
+def _spawn(args) -> str:
+    from orch_it.roles import spawn
+
+    if args.worktree is not None and not args.worktree.strip():  # Path("") would be the folder it runs in
+        raise SpawnRefused("worktree_not_git", "worktree", "an empty path")
+    if args.scratchpad is not None and not args.scratchpad.strip():
+        raise SpawnRefused("scratchpad_unusable", "scratchpad", "an empty path")
+    request = spawn.SpawnRequest(issue=args.issue, repo=args.repo, unit=args.unit, diff=args.diff,
+                                 worktree=Path(args.worktree) if args.worktree is not None else None,
+                                 scratchpad=Path(args.scratchpad) if args.scratchpad is not None else None)
+    return spawn.spawn(args.role, request, roles=roles.RoleSet.load(), store=_store(args)).prompt
 
 
 def _research(args) -> tuple[str, int]:
@@ -528,6 +580,8 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _labels_sync(args), 0
         elif args.group == "roles":
             text, code = _roles_render(args), 0
+        elif args.group == "spawn":
+            text, code = _spawn(args), 0
         elif args.group == "skills":
             text, code = _skills(args), 0
         elif args.group == "research":
@@ -543,7 +597,7 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError,
-            SkillsError, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
+            SkillsError, SpawnRefused, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
             ResearchRefused, LockError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR

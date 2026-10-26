@@ -22,6 +22,8 @@
     "outcome": ["passed", "failed", "no_result", "refused", "lost", "stopped"],
     "step_ended_any": ["suspended", "lease_lost"],
     "launched_by": ["launcher", "owner", "session", "boot"],
+    "spawn_refusal": ["role_unknown", "role_not_spawned", "input_missing", "issue_unreadable", "unit_not_found", "unit_ambiguous", "diff_unreadable", "diff_empty", "worktree_not_git", "scratchpad_in_git_tree", "scratchpad_unusable", "repo_unknown"],
+    "spawn_input": ["issue", "unit", "diff", "worktree", "scratchpad"],
     "session_end_reason": ["turn_ended", "idle", "context_ceiling", "killed", "outage", "stopped_by_owner", "crashed"],
     "delivered": ["commit", "comment", "file", "none"],
     "wait_reason": ["test_place", "rate_limit", "owner_answer", "brain_answer", "parked", "blocker", "review", "github_queue", "capacity"],
@@ -45,7 +47,7 @@
     "hook_action": ["acted", "skipped"],
     "run_check_result": ["alive", "ended", "failed"],
     "tool_outcome": ["passed", "failed", "refused"],
-    "report_label": ["tdd", "diagnosis", "code-review", "research", "writing-for-agents", "domain-modeling", "codebase-design"],
+    "report_label": ["tdd", "diagnosis", "code-review", "research", "writing-for-agents", "domain-modeling", "codebase-design", "report_cap", "table"],
     "context_threshold": ["context_line", "ceiling"],
     "context_action": ["handed_off", "new_work_taken", "told"],
     "message_kind": ["notice", "question", "answer", "handoff", "report"],
@@ -79,7 +81,7 @@
     },
     "subagent": {
       "started": {"model": {}, "effort": {}, "agent_file": {}, "title": {}, "launched_by": {"codes": "launched_by"}, "unit": {}, "worktree": {}, "prompt_has": {}, "prompt_chars": {}},
-      "ended": {"reason": {"codes": "session_end_reason"}, "held_tickets": {}, "checkpoint_written": {}, "delivered": {"codes": "delivered"}, "report_lines_owed": {}, "report_lines_present": {}}
+      "ended": {"reason": {"codes": "session_end_reason"}, "held_tickets": {}, "checkpoint_written": {}, "delivered": {"codes": "delivered"}, "report_lines_owed": {}, "report_lines_present": {}, "refused": {"codes": "spawn_refusal"}, "refused_input": {"codes": "spawn_input"}}
     },
     "wait": {
       "started": {"reason": {"codes": "wait_reason"}, "on": {}},
