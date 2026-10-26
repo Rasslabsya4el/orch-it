@@ -27,7 +27,7 @@ from orch_it import settings
 from orch_it.events.store import Store
 from orch_it.merge import git as merge_git
 from orch_it.merge import lock
-from orch_it.merge.follow import FollowError, follow, pr_of_event
+from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_event
 from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitError
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr
@@ -35,7 +35,7 @@ from orch_it.merge.settings import MergeSettings
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, REQUIRED_JOBS_SETTING
 from orch_it.tickets.commands import OWNER_SETTING
 from orch_it.tickets.gh_check import read_event
-from orch_it.tickets.park import ROLE
+from orch_it.tickets.park import ROLE as SCRIPT
 
 GROUPS = ("merge", "pr", "follow")
 ERRORS = (lock.LockError, PrError, FollowError)
@@ -61,7 +61,7 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p.add_argument("pr", nargs="?", type=int, help="the pull request (or give --event)")
     p.add_argument("--event", metavar="PATH", help="a GitHub event payload ($GITHUB_EVENT_PATH)")
     p.add_argument("--base", default="main", help="the branch of the merge line (default: main)")
-    p.add_argument("--role", default="github")
+    p.add_argument("--role", default=GITHUB)
 
 
 def run(args, store_of: Callable[[], Store], repo_of: Callable[[str], str]) -> tuple[str, int]:
@@ -74,7 +74,7 @@ def run(args, store_of: Callable[[], Store], repo_of: Callable[[str], str]) -> t
     removed = lock.unlock_stale(repo, settings=MergeSettings.from_settings(settings.load(), repo), clock=lambda: now)
     held = removed.age_minutes(now)
     with store_of().writer() as writer:
-        writer.write({"kind": "lock.removed", "repo": repo, "ticket": None, "role": ROLE, "session": None,
+        writer.write({"kind": "lock.removed", "repo": repo, "ticket": None, "role": SCRIPT, "session": None,
                       "parent_session": None, "turn": None, "step": None, "run": None, "note": None,
                       "detail": {"holder": removed.holder, "since": removed.since.isoformat(),
                                  "held_minutes": round(held, 1) if held != float("inf") else None}})
@@ -110,6 +110,20 @@ def _follow(args, store_of, repo_of, now: datetime) -> str:
                   now=now, role=args.role, required=required_jobs(raw), owner=owner_login(raw))
     ticket = f"#{done.ticket}" if done.ticket else "-"
     return f"#{done.pr} {done.outcome} ticket={ticket} {done.detail}".rstrip() + "\n"
+
+
+def parks_follower(store: Store, repo: str, now: datetime, role: str) -> Callable[[int], str]:
+    """The follow of a pull request for the park reader of `tickets parks`: it moves the ticket
+    of a `pr_ended` park whose pull request ended and says what it did."""
+
+    hub, raw = GhPullHub(), settings.load()
+
+    def followed(number: int) -> str:
+        done = follow(hub, store, repo, number, settings=MergeSettings.from_settings(raw, repo), now=now, role=role,
+                      required=required_jobs(raw), owner=owner_login(raw))
+        return f"#{done.pr} {done.outcome} {done.detail}".rstrip()
+
+    return followed
 
 
 def required_jobs(raw: dict) -> tuple[str, ...]:

@@ -3,6 +3,7 @@ of a pull request moves its ticket once, through #398's park and the ticket shap
 to the store; check results are read for the head sha only."""
 
 import json
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -77,7 +78,8 @@ def test_merged_with_an_after_merge_row_returns_the_ticket_to_ready_for_that_row
     (lambda hub, n, pr: hub.notes[(REPO, n)].clear(), "acceptance_missing"),
     (lambda hub, n, pr: hub.note(n, "Wait, should 10115 not be free?", author="owner-x", at=hub.now + timedelta(minutes=1)),
      "unanswered"),
-    (lambda hub, n, pr: hub.add(n, BODY.replace("10115", "10117"), hub.issues[(REPO, n)].labels), "ticket_changed"),
+    (lambda hub, n, pr: hub.add(n, hub.issues[(REPO, n)].body.replace("10115", "10117"), hub.issues[(REPO, n)].labels),
+     "ticket_changed"),
 ])
 def test_merged_but_not_closable_goes_to_the_brain_and_stays_open(tmp_path, change, reason):
     hub, store, prs = world(tmp_path)
@@ -350,6 +352,118 @@ def test_the_park_reader_hands_a_merged_pull_request_s_ticket_to_the_follow(tmp_
     reports = read_parks(hub, store, REPO, now=hub.now, follow=lambda pr: run(hub, store, pr).outcome)
     assert [(r.number, r.outcome, r.detail) for r in reports] == [(10, "followed", "closed")]
     assert not hub.issues[(REPO, 10)].open  # closed with its rows, never sent back to ready
+
+
+def test_a_pull_request_that_lost_its_refs_line_still_closes_the_ticket_parked_on_it(tmp_path):
+    hub, store, prs = world(tmp_path)
+    pr = prs[10]
+    hub.pulls[pr].body = "A person rewrote the description."
+    merged(hub, pr)
+    assert run(hub, store, pr).outcome == "closed" and not hub.issues[(REPO, 10)].open
+
+
+def test_of_two_refs_lines_the_ticket_parked_on_the_pull_request_is_its_own(tmp_path):
+    hub, store, prs = world(tmp_path)
+    pr = prs[10]
+    hub.add(9, BODY, ["ready-for-agent"])
+    hub.pulls[pr].body = "Refs #9\nRefs #10\n"
+    merged(hub, pr)
+    done = run(hub, store, pr)
+    assert (done.outcome, done.ticket) == ("closed", 10) and hub.issues[(REPO, 9)].open
+
+
+def test_a_merge_never_moves_a_ticket_that_waits_on_another_pull_request(tmp_path):
+    hub, store, prs = world(tmp_path)
+    old = hub.open_pull(body="Refs #10", branch="ticket-10-old")
+    merged(hub, old)
+    writes = len(hub.writes)
+    done = run(hub, store, old)
+    assert done.outcome == "merged_other" and len(hub.writes) == writes and hub.issues[(REPO, 10)].open
+
+
+def test_the_close_of_a_parked_ticket_records_its_return(tmp_path):
+    hub, store, prs = world(tmp_path)
+    merged(hub, prs[10])
+    run(hub, store, prs[10])
+    assert [row[4]["returned_as"] for row in events(store, "ticket.unparked")] == ["due"]
+
+
+def test_no_result_with_no_run_to_run_again_goes_to_the_brain_at_once(tmp_path):
+    hub, store, prs = world(tmp_path)
+    sha = hub.head(prs[10])
+    hub.checks_on(sha, NO_RESULT)
+    hub.check_runs[sha] = {name: replace(check, run_id=None) for name, check in hub.check_runs[sha].items()}
+    assert run(hub, store, prs[10]).outcome == "no_result"
+    assert "needs-triage" in ticket(hub)[0].labels
+
+
+def test_a_red_whose_other_job_has_no_report_returns_the_ids_it_has(tmp_path):
+    hub, store, prs = world(tmp_path)
+    sha = hub.head(prs[10])
+    hub.checks_on(sha, FAILED, names=("linux",), failing=["t::linux_only"], run_id="r1")
+    hub.checks_on(sha, FAILED, names=("windows",), failing=None, run_id="r2")
+    assert run(hub, store, prs[10]).outcome == "red"
+    assert "t::linux_only" in last_comment(hub, 10)
+
+
+def test_a_ticket_edited_while_the_follow_acts_is_left_as_it_is_and_the_next_follow_acts(tmp_path, monkeypatch):
+    from orch_it.tickets import park
+
+    hub, store, prs = world(tmp_path)
+    pr = prs[10]
+    hub.checks_on(hub.head(pr), FAILED, failing=["t::a"])
+    real = park.write_unchanged
+    raced = []
+
+    def edited_meanwhile(*args, **kwargs):  # #398's write refuses: the ticket changed since it was read
+        if not raced:
+            raced.append(1)
+            raise park.ParkError("ticket_changed", "edited while it was read")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(park, "write_unchanged", edited_meanwhile)
+    comments = len(hub.comments(REPO, 10))
+    assert run(hub, store, pr).outcome == "raced"
+    assert len(hub.comments(REPO, 10)) == comments and hub.pull(REPO, pr).auto_merge == "merge"
+    assert ticket(hub)[0].parked  # nothing moved: the next follow acts on the ticket as it is then
+    assert run(hub, store, pr).outcome == "red"
+
+
+def test_a_red_main_ticket_closed_a_moment_before_the_park_returns_the_ticket_as_red(tmp_path):
+    hub, store, prs = world(tmp_path)
+    title, body = red_main.build(["t::a"], sha="m0", run_id="7", pr=None)
+    red = hub.create_issue(REPO, title, body, list(red_main.LABELS))
+    hub.checks_on(hub.head(prs[10]), FAILED, failing=["t::a"])
+    from orch_it.tickets import park
+    real = park.park
+
+    def closed_first(*args, **kwargs):
+        hub.close(red)
+        return real(*args, **kwargs)
+
+    park.park = closed_first
+    try:
+        done = run(hub, store, prs[10])
+    finally:
+        park.park = real
+    assert done.outcome == "red"
+    held, _ = ticket(hub)
+    assert held.ready and not held.parked
+
+
+def test_thousands_of_failing_ids_fit_one_comment(tmp_path):
+    hub, store, prs = world(tmp_path)
+    ids = [f"tests/test_{n}.py::test_{'x' * 250}" for n in range(3000)]
+    hub.checks_on(hub.head(prs[10]), FAILED, failing=ids)
+    run(hub, store, prs[10])
+    said = last_comment(hub, 10)
+    assert len(said) < 65_536 and "and 2900 more" in said
+
+
+def test_a_person_s_comment_in_the_same_second_as_the_ready_mark_counts(tmp_path):
+    hub, store, prs = world(tmp_path)
+    hub.note(prs[10], "wait", author="owner-x")
+    assert run(hub, store, prs[10]).outcome == "commented"
 
 
 def test_a_pull_request_out_of_the_line_is_idle(tmp_path):

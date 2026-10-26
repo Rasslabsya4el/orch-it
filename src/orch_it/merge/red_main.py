@@ -14,6 +14,7 @@ MARK = "<!-- orch-it red-main -->"
 IDS_HEADING = "Failing tests:"
 LABELS = (READY_LABEL, PRIORITY_LABEL)
 WEIGHT = 3
+BODY_MAX = 60_000  # under GitHub's 65536 for an issue body; failing tests past it are counted, not listed
 
 
 class RedMainShapeError(AssertionError):
@@ -24,13 +25,21 @@ def build(ids: list[str], *, sha: str, run_id: str, pr: int | None) -> tuple[str
     """(title, body) of the red-on-main ticket for `ids`, failing on main at `sha` in run `run_id`."""
 
     ids = sorted(set(ids))
-    count = len(ids)
+    count, newline = len(ids), "\n"
     by = f"пулл-реквеста #{pr}" if pr else "коммита без пулл-реквеста"
     brought = f"#{pr}" if pr else "a commit with no pull request"
     tests = "тест падает" if count == 1 else ("теста падают" if 2 <= count % 10 <= 4 and count % 100 // 10 != 1
                                                  else "тестов падают")
     title = f"Main is red: {count} test{'s' if count != 1 else ''} fail"
     fence = "````" if any("```" in test_id for test_id in ids) else "```"
+    listed, size = [], 0
+    for test_id in ids:  # the ids that fit; a pull request red on one left out is red on its own
+        size += len(test_id) + 1
+        if size > BODY_MAX - 4000:
+            break
+        listed.append(test_id)
+    more = len(ids) - len(listed)
+    rest = f"\n... and {more} more failing tests of that run, not listed here.\n" if more else ""
     body = f"""{MARK}
 ## For the human
 - **What:** main красный: {count} {tests} после слияния {by}.
@@ -59,9 +68,9 @@ Weight: {WEIGHT}
 {IDS_HEADING}
 
 {fence}text
-{chr(10).join(ids)}
+{newline.join(listed)}
 {fence}
-"""
+{rest}"""
     broken = violations(parse(body, title=title, labels=LABELS))
     if broken:
         raise RedMainShapeError(", ".join(v.message for v in broken))
