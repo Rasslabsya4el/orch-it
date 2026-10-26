@@ -2,5 +2,18 @@
   "enabledPlugins": {
     "mattpocock-skills@claude-plugins-official": false,
     "mattpocock-skills@mattpocock": false
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m orch_it hook pre-tool-use"
+          }
+        ]
+      }
+    ]
   }
 }

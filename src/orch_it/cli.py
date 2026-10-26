@@ -18,7 +18,7 @@ from pathlib import Path
 from orch_it import labels, settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
-from orch_it.guards import scanner
+from orch_it.guards import hook, scanner
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
@@ -92,6 +92,8 @@ def _parser() -> argparse.ArgumentParser:
 
     command("limit-rate", "dollars per 1 %% of the weekly limit between readings")
 
+    command("guard-fires", "per guard and week: denies, passes, reversals and failed-open errors")
+
     p = command("measure-limit", "record a reading of the usage card's weekly percent")
     p.add_argument("pct", type=float)
     p.add_argument("--repo", default=DEFAULT_REPO)
@@ -147,6 +149,14 @@ def _parser() -> argparse.ArgumentParser:
                    help="allow the public email of this GitHub account")
     p.add_argument("--words-file", metavar="PATH",
                    help="the private words (default: the setting `private_words_file`)")
+    p = guards.add_parser("reverse", parents=[common], help="mark a guard deny a false fire")
+    p.add_argument("fired_event", metavar="EVENT-ID", help="the `guard.fired` deny to reverse")
+    p.add_argument("--by", default="owner", help="who marks it (default: owner)")
+
+    hook_commands = commands.add_parser("hook", help="the Claude Code and git hooks").add_subparsers(
+        dest="command", required=True)
+    hook_commands.add_parser("pre-tool-use", parents=[common],
+                             help="the PreToolUse guard; reads the hook's JSON on stdin")
 
     label_commands = commands.add_parser("labels", help="the layer's labels").add_subparsers(
         dest="command", required=True)
@@ -210,6 +220,21 @@ def _email_of(login: str) -> str | None:
     return email
 
 
+def _guards(args) -> tuple[str, int]:
+    if args.command == "scan":
+        return _guards_scan(args)
+    if args.command == "reverse":
+        event = hook.reverse(_store(args), args.fired_event, by=args.by)
+        return f"reversed={event['id']} guard={event['detail']['guard']}\n", 0
+    raise AssertionError(args.command)
+
+
+def _hook(args) -> tuple[str, int]:
+    if args.command == "pre-tool-use":
+        return hook.run_pre_tool_use(sys.stdin.read(), _store(args))
+    raise AssertionError(args.command)
+
+
 def _guards_scan(args) -> tuple[str, int]:
     """`guards scan`: one line per hit, then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits."""
 
@@ -258,6 +283,8 @@ def _run(args) -> str:
                                            since=args.since, until=args.until))
     if command == "limit-rate":
         return render(queries.limit_rate(_store(args)))
+    if command == "guard-fires":
+        return render(hook.guard_fires(_store(args)))
     if command == "measure-limit":
         if not 0 <= args.pct <= 100:
             raise CommandError("bad_pct", str(args.pct))
@@ -302,14 +329,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.group == "tests":
             text, code = _tests_run(args)
         elif args.group == "guards":
-            text, code = _guards_scan(args)
+            text, code = _guards(args)
+        elif args.group == "hook":
+            text, code = _hook(args)
         elif args.group == "labels":
             text, code = _labels_sync(args), 0
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, CommandError, RunError,
-            scanner.ScanError) as e:
+            scanner.ScanError, hook.ReverseError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
