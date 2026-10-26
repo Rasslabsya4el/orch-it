@@ -11,6 +11,7 @@ escapes it). `kill` waits, bounded, for the process to end and is safe to call t
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 
@@ -24,6 +25,18 @@ class ProcessTree:
     def __init__(self, process: subprocess.Popen, job=None):
         self.process = process
         self.job = job
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self.process.returncode
+
+    def poll(self) -> int | None:
+        """The exit code of the process, or None while it runs."""
+        return self.process.poll()
 
     @classmethod
     def start(cls, argv, *, cwd, env, stdout, stderr) -> ProcessTree:
@@ -48,7 +61,7 @@ class ProcessTree:
             _win.kill(self.process, job)
         else:
             try:
-                os.killpg(self.process.pid, 9)
+                os.killpg(self.process.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
         try:

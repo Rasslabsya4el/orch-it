@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -204,8 +205,10 @@ def test_a_call_that_takes_too_long_is_unreachable():
     assert caught.value.code == "unreachable"
 
 
-def test_free_ports_are_real_ports():
-    assert 0 < free_port() < 65536
+def test_a_free_port_can_be_listened_on_at_once():
+    port = free_port()
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), http.server.BaseHTTPRequestHandler)
+    httpd.server_close()
 
 
 def test_the_program_comes_from_the_path_a_name_a_path_or_an_argv_prefix(tmp_path, monkeypatch):
@@ -218,10 +221,13 @@ def test_the_program_comes_from_the_path_a_name_a_path_or_an_argv_prefix(tmp_pat
     assert find_opencode(str(program)) == [str(program)]
     assert find_opencode([sys.executable, "tests/opencode_stub.py"]) == [sys.executable,
                                                                            "tests/opencode_stub.py"]
+    assert find_opencode((sys.executable, "tests/opencode_stub.py")) == [sys.executable,
+                                                                           "tests/opencode_stub.py"]
 
 
-@pytest.mark.parametrize("setting", [None, "no-such-program-orch-it", [], [""], [3],
-                                     ["no-such-program-orch-it", "serve"], 7])
+@pytest.mark.parametrize("setting", [None, "no-such-program-orch-it", [], [""], [3], (), 7,
+                                     ["no-such-program-orch-it", "serve"],
+                                     ("no-such-program-orch-it",)])
 def test_a_program_that_is_not_there_is_opencode_missing(setting, tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(OpencodeError) as caught:
@@ -246,3 +252,113 @@ def test_an_unknown_error_code_is_refused():
     with pytest.raises(ValueError):
         OpencodeError("nope")
     assert OpencodeError("http_error", "x").code == "http_error"
+
+
+class Canned:
+    """A local HTTP server that answers every request with `body` and notes each request path."""
+
+    def __init__(self, body: bytes = b"[]", on_request=None):
+        self.paths = []
+        canned = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def handle_any(self):
+                canned.paths.append(self.requestline.split()[1])
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                if on_request:
+                    on_request()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = handle_any
+
+            def log_message(self, *args):
+                pass
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd.daemon_threads = True
+        self.port = self.httpd.server_address[1]
+        self.url = f"http://127.0.0.1:{self.port}"
+
+    def __enter__(self):
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def test_a_port_that_another_program_answered_on_is_not_ours(tmp_path, monkeypatch):
+    flag = tmp_path / "answered"
+    # the squatter answers the first poll, and the program started for the port ends right after
+    with Canned(b"{}", on_request=lambda: flag.write_text("x")) as squatter:
+        monkeypatch.setattr(opencode, "free_port", lambda: squatter.port)
+        waits = ("import os, sys, time\n"
+                 "while not os.path.exists(sys.argv[1]): time.sleep(0.01)\n")
+        server = Stub(tmp_path).server([sys.executable, "-c", waits, str(flag), "--"])
+        with pytest.raises(OpencodeError) as caught:
+            server.__enter__()
+    assert caught.value.code == "server_start_failed"
+    assert dead_within(server.pid)
+
+
+def test_session_ids_are_quoted_in_every_path():
+    ids = ["a/b", "x?y=1", "a#b", "sp ace"]
+    with Canned() as canned:
+        client = Client(canned.url, "pw", "/d")
+        for sid in ids:
+            client.prompt(sid, agent="a", provider_id="p", model_id="m", text="t")
+            client.messages(sid)
+            client.children(sid)
+            client.abort(sid)
+    expected = [f"/session/{quote(sid, safe='')}/{tail}?directory=%2Fd"
+                for sid in ids for tail in ("prompt_async", "message", "children", "abort")]
+    assert canned.paths == expected
+
+
+def test_a_reply_nested_too_deep_for_json_is_a_bad_reply():
+    with Canned(b"[" * 200000 + b"]" * 200000) as canned:
+        with pytest.raises(OpencodeError) as caught:
+            Client(canned.url, "pw", "/d").messages("any")
+    assert caught.value.code == "bad_reply"
+
+
+def test_a_reply_past_the_size_cap_is_a_bad_reply(monkeypatch):
+    monkeypatch.setattr(opencode, "MAX_REPLY_BYTES", 1000)
+    with Canned(b'["' + b"x" * 1500 + b'"]') as canned:
+        with pytest.raises(OpencodeError) as caught:
+            Client(canned.url, "pw", "/d").messages("any")
+    assert caught.value.code == "bad_reply"
+    with Canned(b'["' + b"x" * 500 + b'"]') as canned:
+        assert len(Client(canned.url, "pw", "/d").messages("any")) == 1
+
+
+def test_a_state_folder_or_log_that_cannot_be_opened_starts_nothing(tmp_path):
+    stub = Stub(tmp_path)
+    (tmp_path / "afile").write_text("x")
+    in_the_way = Server(STUB, config={}, env=stub.env, state_dir=tmp_path / "afile", work_dir=stub.dir)
+    (stub.dir / "state2" / "server.log").mkdir(parents=True)
+    log_is_a_folder = Server(STUB, config={}, env=stub.env, state_dir=stub.dir / "state2",
+                             work_dir=stub.dir)
+    for server in (in_the_way, log_is_a_folder):
+        with pytest.raises(OpencodeError) as caught:
+            server.__enter__()
+        assert caught.value.code == "server_start_failed"
+        assert server.pid is None and not stub.record.exists()
+
+
+def test_children_keeps_only_ids_that_are_non_empty_strings():
+    body = json.dumps([{"id": "ok"}, {"id": ""}, {"id": 5}, {"id": None}, {"title": "x"}, "str",
+                       {"id": "also"}]).encode()
+    with Canned(body) as canned:
+        assert Client(canned.url, "pw", "/d").children("s") == ["ok", "also"]
+
+
+def test_a_status_that_is_not_a_mapping_is_a_bad_reply():
+    with Canned(b"[1]") as canned:
+        with pytest.raises(OpencodeError) as caught:
+            Client(canned.url, "pw", "/d").busy("s")
+    assert caught.value.code == "bad_reply"
