@@ -239,3 +239,64 @@ _Avoid_: parked note, wait marker
 **Park reader**:
 The one reader that looks at every park and returns, sends to triage or leaves waiting each parked ticket.
 _Avoid_: unparker, dispatcher, poller
+
+## Roles
+
+**Role**:
+One kind of agent of the layer with one job: the brain, ORCH, a worker, a reviewer of one axis, a researcher.
+_Avoid_: agent type, persona, bot
+
+**Role file**:
+The text a role works from: its job, its inputs, its steps with the skill each calls, its report and the events it
+writes; its rules that matter are held by checks, not by its sentences.
+_Avoid_: prompt, agent doc, instructions
+
+**Roles settings**:
+Each role's model, effort, fallback model, inputs and report rules, in one place every repo shares.
+_Avoid_: role config, model table
+
+**Fallback model**:
+The model a role's session takes when its own model's safeguard pauses it.
+_Avoid_: backup model, second model
+
+**Session**:
+A role that runs as its own conversation, started by the owner or the launcher: the brain and ORCH.
+_Avoid_: main agent, chat
+
+**Subagent**:
+A role started inside a session for one piece of work, with its inputs filled at its spawn.
+_Avoid_: helper, child agent, sub-session
+
+**Spawn**:
+The one way a subagent starts: its inputs filled from one place and its prompt built from them, or a refusal that
+names the input it lacks.
+_Avoid_: delegation, dispatch, handoff
+
+**Input**:
+One thing a role needs before its first step: the ticket, the unit, the diff, the worktree or the scratchpad.
+_Avoid_: argument, parameter, context
+
+**Plan**:
+ORCH's split of a ticket into units, one row each with the test that shows it done.
+_Avoid_: task list, breakdown
+
+**Unit**:
+One row of a plan, done by one subagent and judged by its test.
+_Avoid_: task, subtask, chunk
+
+**Report line**:
+A line of a subagent's final report that states a skill it called at its step, or that it skipped it and why.
+_Avoid_: status line, skill line, footer
+
+**Report cap**:
+The most lines a role's final report may have.
+_Avoid_: length limit, max lines
+
+**Context line**:
+The context size past which a role hands its work back as it stands instead of going on.
+_Avoid_: context limit, token budget
+
+**Stop hold**:
+The check at a subagent's stop that sends its report back once when a report line has no call behind it, an owed
+line is missing, or the report breaks its cap or its context line.
+_Avoid_: stop hook, gate, validator
