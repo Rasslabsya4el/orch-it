@@ -35,12 +35,12 @@
     "report_from": ["last", "earlier", "joined"],
     "review_axis": ["standards", "spec", "edge"],
     "unit_reason": ["format", "result", "merge"],
-    "pr_reason": ["merged", "red", "closed_unmerged", "timeout", "withdrawn"],
+    "pr_reason": ["merged", "red", "closed_unmerged", "timeout", "withdrawn", "conflict"],
     "call_target": ["gh", "git", "github_api", "bridge_http", "claude_cli"],
     "check": ["pocock_contract", "leak", "guard_install", "branch_protection", "hooks_path", "environment"],
     "claim_reason": ["held_by_other", "not_ready"],
     "plan_reason": ["ticket_changed", "not_doable"],
-    "close_reason": ["acceptance_missing", "row_failed", "unanswered", "already_closed"],
+    "close_reason": ["acceptance_missing", "row_failed", "unanswered", "already_closed", "ticket_changed"],
     "repair": ["lease_released", "closed", "unparked", "rerun", "red_ticket_opened"],
     "turn_reason": ["price_missing", "usage_unreadable"],
     "load_verdict": ["code", "load"],
@@ -72,7 +72,8 @@
     "doc_kind": ["glossary", "adr", "state", "role_file", "skill", "core_block", "research", "memory", "config"],
     "drift": ["behind", "hook_extra", "hook_missing", "file_edited_in_target", "leak"],
     "setting_source": ["repo", "machine", "default"],
-    "resume_cause": ["suspend", "hibernate"]
+    "resume_cause": ["suspend", "hibernate"],
+    "attempt_reason": ["red", "red_on_main", "no_result", "conflict"]
   },
   "steps": {
     "session": {
@@ -193,7 +194,7 @@
     "ticket.unparked": {"by": {"codes": "unpark_by"}, "on_ref": {}, "late_minutes": {}, "returned_as": {"codes": "park_return"}},
     "park.unreadable": {"reason": {"codes": "park_unreadable"}},
     "comment.written": {"comment_kind": {"codes": "comment_kind"}},
-    "attempt.counted": {"reason": {}, "counted": {}, "in_a_row": {}},
+    "attempt.counted": {"reason": {"codes": "attempt_reason"}, "counted": {}, "in_a_row": {}},
     "ticket.closed": {"via": {"codes": "close_via"}, "state_reason": {"codes": "state_reason"}, "rows_total": {}, "rows_passed": {}, "comments_unanswered": {}},
     "ticket.reopened": {"reason": {}},
     "acceptance_row.checked": {"row": {}, "result": {"codes": "row_result"}, "place": {}, "evidence": {}},
