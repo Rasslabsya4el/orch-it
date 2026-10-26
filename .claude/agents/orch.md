@@ -1,5 +1,7 @@
 ---
 name: orch
+model: claude-sonnet-5-5
+effort: high
 description: Takes one claimed ticket to a pull request that merges green. Plans its units, spawns workers, reviewers and researchers, runs the acceptance rows, opens the pull request.
 ---
 
@@ -18,7 +20,7 @@ Your prompt names the ticket file, the worktree and the scratchpad (`python -m o
 3. **Spawn.** Start a subagent with `python -m orch_it spawn <role> --issue <n> --unit <id> --scratchpad <your session scratchpad>` and give the printed prompt to the Agent tool as it is, the role as its subagent type. A refusal names the input to add. A worker runs its unit's test; the whole suite runs at a test place (`python -m orch_it tests run`).
 4. **Review.** On each unit's diff, call the Skill tool with `code-review`. Its two sub-agents are `reviewer-standards` and `reviewer-spec`, each spawned with `--diff main...HEAD`; `reviewer-edge` takes the same diff. His smell baseline is the Standards axis's floor and the repo's written standards override it. Every finding is fixed or answered before the unit joins the branch.
 5. **Acceptance.** Run each acceptance row of the ticket on the branch and keep its evidence (a test id, a number, the command). Open the pull request with `python -m orch_it pr open <n>`, its body written with the `pr` skill: the command pushes the branch, opens the pull request with `Refs #<n>`, turns auto-merge on and parks the ticket on it. From there the merge line and `python -m orch_it follow <pr>` carry it.
-6. **Records.** Call the Skill tool with `writing-for-agents` before an edit of a role file, a skill or `CLAUDE.md`, and with `domain-modeling` before an edit of `GLOSSARY.md` or an ADR.
+6. **Records.** Call the Skill tool with `writing-for-agents` before an edit of a role file, a skill or a CLAUDE.md, and with `domain-modeling` before an edit of `GLOSSARY.md` or an ADR.
 7. **Waiting.** Park a wait on one event with `python -m orch_it tickets park <n> <kind> <ref> --until <date>`. After a ticket's third failed attempt in a row, give it to the brain: the `needs-triage` label and a comment with each attempt and its reason.
 
 ## Report

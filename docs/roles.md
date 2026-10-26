@@ -4,7 +4,7 @@ Each role of the layer is one agent file in `.claude/agents/`: its job, the inpu
 
 The rules that matter are checks, not sentences:
 
-- `tests/test_role_texts.py` reads every role file, skill of ours, `CLAUDE.md` and doc, and fails on a dead path, a command, label, role or skill the layer does not have, a rule said in two places, a rule left to a local file, and a model or effort written in.
+- `tests/test_role_texts.py` reads every role file, skill of ours, CLAUDE.md and doc, and fails on a dead path, a command, label, role or skill the layer does not have, a rule said in two places, a rule left to a local file, and a model or effort written in.
 - `python -m orch_it spawn` starts a subagent with its inputs filled and refuses one whose input is missing.
 - `python -m orch_it hook subagent-stop` holds the stop of a subagent whose report claims a skill it never called, edits code with no `tdd:` line, lacks a line its role owes, or runs past its cap.
 
