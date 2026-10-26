@@ -1,5 +1,7 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
-7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9); `python -m orch_it labels sync` (#398 decision 6).
+7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9);
+`python -m orch_it labels sync` (#398 decision 6); `python -m orch_it tickets ...` (#398 decisions 4
+and 5, in `orch_it.tickets.commands`).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -19,6 +21,8 @@ from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
+from orch_it.tickets import commands as ticket_commands
+from orch_it.tickets.park import ParkError
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
@@ -130,6 +134,8 @@ def _parser() -> argparse.ArgumentParser:
     p = label_commands.add_parser("sync", parents=[common],
                                   help="make a repo's labels match the layer's set")
     p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
+
+    ticket_commands.add_parsers(commands, common)
     return root
 
 
@@ -232,10 +238,12 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _tests_run(args)
         elif args.group == "labels":
             text, code = _labels_sync(args), 0
+        elif args.group == "tickets":
+            text, code = ticket_commands.run(args, _store(args), args.repo or _repo_of("."), render), 0
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, labels.LabelError, CommandError, RunError) as e:
+            queries.QueryError, github.GithubError, labels.LabelError, ParkError, CommandError, RunError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
