@@ -153,8 +153,7 @@ def _matching_pids(matcher, facts):
             name = facts.name(pid)
             if name is None:
                 continue
-            hit = (name.casefold() == matcher.text.casefold() if matcher.exact
-                   else fnmatch.fnmatch(name.casefold(), matcher.text.casefold()))
+            hit = _name_matches(name, matcher.text, matcher.exact)
         else:
             text = (facts.cmdline(pid) if matcher.kind == "cmdline_regex" else facts.name(pid)) or ""
             hit = _regex_hit(matcher.text, text, matcher.exact)
@@ -170,6 +169,27 @@ MAX_MATCH_TEXT = 8192
 # shape of catastrophic backtracking; such a pattern is refused unrun, since CPython's `re`
 # holds the GIL and cannot be interrupted once started
 _REDOS = __import__("re").compile(r"\([^()]*[*+][^()]*\)\s*[*+{]")
+
+
+_EXE_SUFFIXES = (".exe", ".com", ".bat", ".cmd")
+
+
+def _name_matches(name: str, pattern: str, exact: bool) -> bool:
+    """A process name matched against a kill target's name (case-insensitive). The target may
+    omit the executable extension (`Stop-Process -Name explorer` for `explorer.exe`), so the
+    name's bare stem is tried too."""
+
+    import fnmatch
+
+    candidates = {name.casefold()}
+    lower = name.casefold()
+    for suffix in _EXE_SUFFIXES:
+        if lower.endswith(suffix):
+            candidates.add(lower[: -len(suffix)])
+    pat = pattern.casefold()
+    if exact:
+        return pat in candidates
+    return any(fnmatch.fnmatch(c, pat) for c in candidates)
 
 
 def _regex_hit(pattern: str, text: str, exact: bool):

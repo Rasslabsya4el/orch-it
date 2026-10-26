@@ -1,9 +1,13 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
-7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9);
+7 and 9 for `import-github` and `test-places`), `python -m orch_it tests run` (#394 decision 9);
 `python -m orch_it labels sync` (#398 decision 6); `python -m orch_it guards scan` (#395 decision 4:
-it prints one line per private value found and exits 1 when there is any); `python -m orch_it skills
+it prints one line per private value found and exits 1 when there is any), `guards install` and
+`guards status` (decisions 5 and 6: the hooks path, and the six facts of the guards), `hook pre-push`
+(the git hook that scans a push to a public repo); `python -m orch_it skills
 shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m orch_it
-tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`).
+research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m orch_it
+tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`); `python -m orch_it skills check` and
+`skills update` (#397 decision 4).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -20,8 +24,14 @@ from pathlib import Path
 from orch_it import labels, settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
-from orch_it.guards import scanner
-from orch_it.skills import shadow
+from orch_it.guards import hook, install, prepush, scanner
+from orch_it.guards import status as guards_status
+from orch_it.research import mcp as research_mcp
+from orch_it.research import run as research_run
+from orch_it.research.settings import ResearchRefused, ResearchSettings
+from orch_it.skills import shadow, update
+from orch_it.skills.copies import SkillsError
+from orch_it.skills.forge import GithubForge
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, run_tests
@@ -37,6 +47,8 @@ EXIT_INTERRUPTED = 130
 # stopped): a script tells "red" from "no answer" without reading the line
 TESTS_EXIT = {"passed": 0, "failed": 1}
 TESTS_EXIT_OTHER = 3
+# `research` exits the same way: 0 passed, 1 failed (a reply that is no report), 3 no result
+RESEARCH_EXIT = TESTS_EXIT
 
 
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
@@ -99,6 +111,8 @@ def _parser() -> argparse.ArgumentParser:
 
     command("limit-rate", "dollars per 1 %% of the weekly limit between readings")
 
+    command("guard-fires", "per guard and week: denies, passes, reversals and failed-open errors")
+
     p = command("measure-limit", "record a reading of the usage card's weekly percent")
     p.add_argument("pct", type=float)
     p.add_argument("--repo", default=DEFAULT_REPO)
@@ -154,6 +168,29 @@ def _parser() -> argparse.ArgumentParser:
                    help="allow the public email of this GitHub account")
     p.add_argument("--words-file", metavar="PATH",
                    help="the private words (default: the setting `private_words_file`)")
+    p = guards.add_parser("reverse", parents=[common], help="mark a guard deny a false fire")
+    p.add_argument("fired_event", metavar="EVENT-ID", help="the `guard.fired` deny to reverse")
+    p.add_argument("--by", default="owner", help="who marks it (default: owner)")
+
+    p = guards.add_parser("install", parents=[common],
+                          help="point the core.hooksPath setting at the repo's tracked hooks folder")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+
+    p = guards.add_parser("status", parents=[common],
+                          help="read main's branch protection and the hooks: the six facts of decision 5")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+
+    hook_commands = commands.add_parser("hook", help="the Claude Code and git hooks").add_subparsers(
+        dest="command", required=True)
+    hook_commands.add_parser("pre-tool-use", parents=[common],
+                             help="the PreToolUse guard; reads the hook's JSON on stdin")
+    p = hook_commands.add_parser("pre-push", parents=[common],
+                                 help="the git pre-push guard; git passes the remote's name and url "
+                                      "and writes the refs on stdin")
+    p.add_argument("remote_name", nargs="?", default="")
+    p.add_argument("remote_url", nargs="?", default="")
 
     label_commands = commands.add_parser("labels", help="the layer's labels").add_subparsers(
         dest="command", required=True)
@@ -165,9 +202,44 @@ def _parser() -> argparse.ArgumentParser:
         dest="command", required=True)
     skills.add_parser("shadowed", parents=[common],
                       help="the session-start hook: a skill.shadowed event per personal skill of a repo skill's name")
+    p = skills.add_parser("check", parents=[common],
+                          help="fetch his upstream and give each skill its class against the manifest")
+    p.add_argument("--ref", default="main", help="his branch (default: main)")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p = skills.add_parser("update", parents=[common],
+                          help="on a change, one pull request with the new copies and every skill's class")
+    p.add_argument("--ref", default="main", help="his branch (default: main)")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
+    p.add_argument("--dispatch-tests", action="store_true",
+                   help="start the tests workflow on the branch (a workflow token's pull request starts none)")
+
+    p = commands.add_parser("research", parents=[common], help="run a brief through the research bridge")
+    p.add_argument("brief", help="the brief file (Markdown); the report goes to the path it names")
+    p.add_argument("--model", help=f"a model alias of the setting research.models: {_aliases()} "
+                                   "(default: by brief size)")
+    p.add_argument("--no-reddit", action="store_true", help="primary sources: no Reddit link required")
+    p.add_argument("--report", metavar="PATH", help="write the report here instead of the brief's path")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+    p.add_argument("--ticket", type=int)
+    p.add_argument("--done-file", metavar="PATH", help=argparse.SUPPRESS)  # the MCP front's job answer
+    p.add_argument("--job", help=argparse.SUPPRESS)  # the MCP front's job id, carried by the started event
+
+    commands.add_parser("research-mcp", help="the research bridge's MCP server on stdin and stdout")
 
     ticket_commands.add_parsers(commands, common)
     return root
+
+
+def _aliases() -> str:
+    """The aliases the settings name, for the help text; a settings file that cannot be read
+    leaves the help plain (the command then says what is wrong)."""
+
+    try:
+        return ", ".join(ResearchSettings.from_settings(settings.load()).models) or "none set"
+    except settings.SettingsError:
+        return "see the settings"
 
 
 def render(result: QueryResult) -> str:
@@ -220,6 +292,65 @@ def _email_of(login: str) -> str | None:
     return email
 
 
+def _guards(args) -> tuple[str, int]:
+    if args.command == "scan":
+        return _guards_scan(args)
+    if args.command == "reverse":
+        event = hook.reverse(_store(args), args.fired_event, by=args.by)
+        return f"reversed={event['id']} guard={event['detail']['guard']}\n", 0
+    if args.command == "install":
+        return _guards_install(args)
+    if args.command == "status":
+        return _guards_status(args)
+    raise AssertionError(args.command)
+
+
+def _guards_status(args) -> tuple[str, int]:
+    """`guards status`: the six facts as a table (fact, ok, detail); exit 0 when all are ok, 1 when
+    any is not (a protection that cannot be read is a failed fact, not an error)."""
+
+    work_tree = Path(args.work_tree)
+    report = guards_status.status(_store(args), args.repo or _repo_or_none(work_tree) or DEFAULT_REPO,
+                                  work_tree)
+    rows = [[fact.name, "yes" if fact.ok else "no", fact.detail] for fact in report.facts]
+    return render(QueryResult(["fact", "ok", "detail"], rows)), 0 if report.ok else 1
+
+
+def _guards_install(args) -> tuple[str, int]:
+    """`guards install`: a short summary and exit 0; another `core.hooksPath` is a coded error
+    (`hooks_path_taken`, exit 2) that leaves it as it was."""
+
+    work_tree = Path(args.work_tree)
+    done = install.install(work_tree, _store(args),
+                           repo=args.repo or _repo_or_none(work_tree) or DEFAULT_REPO)
+    return (f"pre-push hook: {'installed' if done.changed else 'already installed'}"
+            f" (core.hooksPath={done.hooks_path})\n"
+            f"claude code hook: {'present' if done.claude_hook else 'missing'}"
+            " (.claude/settings.json PreToolUse)\n"), 0
+
+
+def _hook(args) -> tuple[str, int]:
+    if args.command == "pre-tool-use":
+        # the hook must never block a tool call: a store or settings error (which the CLI would
+        # otherwise print and exit 2 on, Claude Code's blocking code) lets the call through
+        try:
+            raw = sys.stdin.read()
+            return hook.run_pre_tool_use(raw, _store(args))
+        except Exception:
+            return "", 0
+    if args.command == "pre-push":
+        # a pre-push that always blocks would wedge every push: whatever goes wrong before the scan
+        # (a store or settings error, a bad stdin) lets the push through; a scan that finds private
+        # data exits 1 (the guard working) and says so on stderr
+        try:
+            raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+            return prepush.run_pre_push(raw, _store(args), remote_url=args.remote_url,
+                                        remote_name=args.remote_name)
+        except Exception:
+            return "", 0
+    raise AssertionError(args.command)
+
+
 def _guards_scan(args) -> tuple[str, int]:
     """`guards scan`: one line per hit, then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits."""
 
@@ -257,6 +388,21 @@ def _labels_sync(args) -> str:
     return render(QueryResult(["label", "action"], done))
 
 
+def _research(args) -> tuple[str, int]:
+    try:
+        brief = Path(args.brief).read_text("utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        raise ResearchRefused("brief_unreadable", f"{args.brief}: {e}") from None
+    repo = args.repo or research_run.repo_of(Path(args.work_tree))
+    done = research_run.research(
+        brief, settings=ResearchSettings.from_settings(settings.load()), store=_store(args), repo=repo,
+        work_tree=Path(args.work_tree), brief_name=Path(args.brief).stem, model=args.model,
+        no_reddit=args.no_reddit, report_to=args.report, ticket=args.ticket, job=args.job)
+    if args.done_file:
+        research_run.write_done(Path(args.done_file), done)
+    return done.line(), RESEARCH_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
+
+
 def _run(args) -> str:
     command = args.command
     if command == "query":
@@ -268,6 +414,8 @@ def _run(args) -> str:
                                            since=args.since, until=args.until))
     if command == "limit-rate":
         return render(queries.limit_rate(_store(args)))
+    if command == "guard-fires":
+        return render(hook.guard_fires(_store(args)))
     if command == "measure-limit":
         if not 0 <= args.pct <= 100:
             raise CommandError("bad_pct", str(args.pct))
@@ -321,6 +469,22 @@ def _skills_shadowed(args) -> int:
     return 0
 
 
+def _skills(args) -> str:
+    if args.command == "check":
+        return update.render(update.check(Path(args.work_tree), ref=args.ref))
+    repo = args.repo or _repo_of(args.work_tree)
+    done = update.update(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref,
+                         dispatch_tests=args.dispatch_tests)
+    if done.status == "no_change":
+        return "no change\n"
+    rule = f"labels={','.join(done.labels)}" if done.labels else "merges when green"
+    if done.status == "already_open":
+        return f"pull request already open: {done.pr} {rule}\n"
+    if done.status == "declined":
+        return f"pull request closed unmerged for this commit, not opened again: {done.pr}\n"
+    return f"pull request: {done.pr} {rule}\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
@@ -332,17 +496,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.group == "tests":
             text, code = _tests_run(args)
         elif args.group == "guards":
-            text, code = _guards_scan(args)
+            text, code = _guards(args)
+        elif args.group == "hook":
+            text, code = _hook(args)
         elif args.group == "labels":
             text, code = _labels_sync(args), 0
+        elif args.group == "skills":
+            text, code = _skills(args), 0
+        elif args.group == "research":
+            text, code = _research(args)
+        elif args.group == "research-mcp":
+            return research_mcp.serve()
         elif args.group == "tickets":
             text, code = ticket_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of("."),
                                              render), 0
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, labels.LabelError, ParkError, CheckError, CommandError,
-            RunError, scanner.ScanError) as e:
+            queries.QueryError, github.GithubError, labels.LabelError, ParkError, CheckError, SkillsError,
+            CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
+            ResearchRefused) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
