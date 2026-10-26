@@ -435,7 +435,7 @@ def test_the_preflight_of_a_clone_and_a_repo_it_can_run_on_says_what_it_stands_o
 
 
 @pytest.mark.parametrize("remote", [f"https://github.com/{REPO}.git", f"https://github.com/{REPO}",
-                                    f"https://github.com/{REPO}/", f"https://user@github.com/{REPO}.git",
+                                    f"https://github.com/{REPO}/", f"https://git@github.com/{REPO}.git",
                                     f"git@github.com:{REPO}.git", f"ssh://git@github.com/{REPO}.git",
                                     "https://github.com/OWNER-X/Repo-Y.git"])
 def test_the_origin_of_the_clone_names_exactly_the_repo(tmp_path, remote):
