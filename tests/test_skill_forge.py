@@ -59,12 +59,12 @@ def test_the_body_goes_by_file_and_the_rest_are_plain_calls():
     assert not hasattr(forge, "dispatch_tests") and not hasattr(forge, "merge_when_green")
 
 
-def test_the_open_issues_are_read_from_every_page_without_pull_requests():
-    lines = [{"url": "i/1", "title": "His skills moved to abc", "labels": ["ready-for-agent"]}]
+def test_the_issues_of_any_state_are_read_from_every_page_without_pull_requests():
+    lines = [{"url": "i/1", "title": "His skills moved to abc", "labels": ["ready-for-agent"], "state": "OPEN"}]
     gh = FakeGh({("api", "--paginate"): "\n".join(json.dumps(line) for line in lines) + "\n"})
     assert GithubForge("o/r", gh=gh).update_issues() == lines
     [call] = gh.calls
-    assert call[:3] == ["api", "--paginate", "repos/o/r/issues?state=open&per_page=100"]
+    assert call[:3] == ["api", "--paginate", "repos/o/r/issues?state=all&per_page=100"]
     assert "pull_request" in call[call.index("--jq") + 1]
 
 
@@ -76,10 +76,9 @@ def test_an_issue_is_opened_edited_and_closed_with_the_layers_labels():
     created = next(c for c in gh.calls if c[:2] == ["issue", "create"])
     assert created[created.index("--label") + 1] == "ready-for-agent" and gh.bodies == ["the table"]
     assert ["label", "create", "ready-for-agent"] == next(c for c in gh.calls if c[:2] == ["label", "create"])[:3]
-    forge.edit_issue("i/12", "a new table", "needs-triage", ["ready-for-agent"])
+    forge.edit_issue("i/12", "a new table")
     edited = next(c for c in gh.calls if c[:2] == ["issue", "edit"])
-    assert edited[edited.index("--add-label") + 1] == "needs-triage"
-    assert edited[edited.index("--remove-label") + 1] == "ready-for-agent"
+    assert "--add-label" not in edited and "--remove-label" not in edited and gh.bodies[-1] == "a new table"
     forge.close_issue("i/11", "Superseded by i/12")
     assert gh.calls[-1][:5] == ["issue", "close", "i/11", "--comment", "Superseded by i/12"]
 
@@ -91,3 +90,19 @@ def test_a_refusal_is_its_own_error():
     with pytest.raises(SkillsError) as e:
         GithubForge("o/r", gh=FakeGh(fail={("issue", "close")})).close_issue("i/1", "x")
     assert e.value.code == "forge_failed"
+
+
+class RacingGh(FakeGh):
+    """Another run creates the label between this run's list and its create."""
+
+    def __call__(self, args):
+        if args[:2] == ["label", "create"]:
+            self.answers[("label", "list")] = json.dumps([{"name": args[2]}])
+            self.calls.append(args)
+            raise GithubError("gh_failed", "already exists")
+        return super().__call__(args)
+
+
+def test_a_label_another_run_made_at_the_same_moment_is_no_failure():
+    gh = RacingGh({("label", "list"): "[]", ("issue", "create"): "https://github.com/o/r/issues/3\n"})
+    assert GithubForge("o/r", gh=gh).create_issue("t", "b", "needs-triage") == "https://github.com/o/r/issues/3"

@@ -9,7 +9,8 @@ update class and keeps one issue per upstream commit with the class table; ORCH 
 under the owner's `gh`, whose pull request lists every skill with its class, runs its own tests and merges as any
 other; one with a copy renamed, removed or changed in its contract carries the label `needs-triage` and waits for the
 brain (the session that writes and judges tickets) (decision 4, as the brain refined it on orch-it #35 and after the
-probe orch-it #44: a pull request a workflow's own token opens starts no workflow, so its required checks never come). Copies in the repo because a skill the layer leans on must not
+probe orch-it #44: a pull request a workflow's own token opens starts no workflow, so its required checks never come).
+Copies in the repo because a skill the layer leans on must not
 change under it on one machine and not another, or on the day his plugin updates itself; the whole text compared
 because the earlier check by names and headings let a one-line change inside a skill through.
 
@@ -42,5 +43,6 @@ same session listed 27 of them).
   somewhere (decision 5).
 - **The skills the layer leaves out are not copied** (those the #390 table hides, and those with no job there), but the
   manifest lists them with why and their hashes, so a new skill upstream is told from one always there; a change to
-  one is listed in the update pull request and does not hold it, since nothing the layer runs changes.
+  one is listed in the issue and the pull request and does not wait for the brain, since nothing the layer runs
+  changes.
 - **An added skill is copied and called by no role** until the brain assigns it.

@@ -212,7 +212,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
     p = skills.add_parser("update", parents=[common],
-                          help="on a change, one pull request with the new copies and every skill's class")
+                          help="run by ORCH on the report's issue: one pull request with the new copies")
     p.add_argument("--ref", default="main", help="his branch (default: main)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
@@ -480,17 +480,18 @@ def _skills(args) -> str:
         done = update.report(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref)
         if done.status == "no_change":
             return "no change\n"
-        opened = "issue already open" if done.status == "already_open" else "issue"
-        return f"{opened}: {done.pr} {','.join(done.labels)}\n"
+        said = {"opened": "issue", "already_open": "issue already open, body updated",
+                "declined": "issue closed by the brain for this commit, not opened again"}[done.status]
+        return f"{said}: {done.url} {','.join(done.labels)}".rstrip() + "\n"
     done = update.update(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref)
     if done.status == "no_change":
         return "no change\n"
     rule = f"labels={','.join(done.labels)}" if done.labels else "no label"
     if done.status == "already_open":
-        return f"pull request already open: {done.pr} {rule}\n"
+        return f"pull request already open: {done.url} {rule}\n"
     if done.status == "declined":
-        return f"pull request closed unmerged for this commit, not opened again: {done.pr}\n"
-    return f"pull request: {done.pr} {rule}\n"
+        return f"pull request closed unmerged for this commit, not opened again: {done.url}\n"
+    return f"pull request: {done.url} {rule}\n"
 
 
 def main(argv: list[str] | None = None) -> int:

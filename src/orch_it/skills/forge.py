@@ -45,12 +45,19 @@ class GithubForge:
                 f.write(body)
             return self._gh(*args, "--body-file", path)
 
+    def _labels(self) -> set[str]:
+        return {item["name"] for item in json.loads(self._gh("label", "list", "--limit", LABEL_LIST_LIMIT,
+                                                             "--json", "name") or "[]")}
+
     def _ensure_label(self, label: str) -> None:
-        names = {item["name"] for item in json.loads(self._gh("label", "list", "--limit", LABEL_LIST_LIMIT,
-                                                              "--json", "name") or "[]")}
-        if label not in names:  # the layer's own set says how it looks (#398 decision 6)
-            want = labels.label_set()[label]
+        if label in self._labels():
+            return
+        want = labels.label_set()[label]  # the layer's own set says how it looks (#398 decision 6)
+        try:
             self._gh("label", "create", label, "--color", want["color"], "--description", want["description"])
+        except SkillsError:
+            if label not in self._labels():  # not made by another run at the same moment
+                raise
 
     def _gh(self, *args: str) -> str:
         try:
@@ -81,21 +88,18 @@ class GithubForge:
         self._gh("pr", "close", pr, "--comment", comment)
 
     def update_issues(self) -> list[dict]:
-        """Every open issue (pull requests left out): url, title, label names."""
+        """Every issue of any state (pull requests left out): url, title, label names, state."""
 
-        pick = '.[] | select(.pull_request | not) | {url: .html_url, title: .title, labels: [.labels[].name]}'
-        return self._api_lines(f"repos/{self.repo}/issues?state=open&per_page=100", pick)
+        pick = ('.[] | select(.pull_request | not) | {url: .html_url, title: .title, labels: [.labels[].name],'
+                ' state: (if .state == "open" then "OPEN" else "CLOSED" end)}')
+        return self._api_lines(f"repos/{self.repo}/issues?state=all&per_page=100", pick)
 
     def create_issue(self, title: str, body: str, label: str) -> str:
         self._ensure_label(label)
         return self._with_body(body, "issue", "create", "--title", title, "--label", label).strip().splitlines()[-1]
 
-    def edit_issue(self, url: str, body: str, label: str, drop: list[str]) -> None:
-        self._ensure_label(label)
-        args = ["issue", "edit", url, "--add-label", label]
-        if drop:
-            args += ["--remove-label", ",".join(drop)]
-        self._with_body(body, *args)
+    def edit_issue(self, url: str, body: str) -> None:
+        self._with_body(body, "issue", "edit", url)
 
     def close_issue(self, url: str, comment: str) -> None:
         self._gh("issue", "close", url, "--comment", comment)

@@ -1,8 +1,8 @@
 """The update (#397 decision 4, rows 4 to 6): `skills check` fetches his upstream, compares it with the
-manifest file by file and classifies each skill; `skills update` builds the new copies and manifest on
+manifest file by file and classifies each skill; `skills report`, the daily run, keeps one issue per
+upstream commit; `skills update`, run by ORCH under the owner's gh, builds the new copies and manifest on
 `origin/main` without touching the work tree, pushes them to a branch and keeps one pull request per
-upstream commit, labelled `needs-triage` when a skill is renamed, removed or changed in contract, set
-to merge when green otherwise."""
+upstream commit, labelled `needs-triage` when a copy is renamed, removed or changed in contract."""
 
 import subprocess
 
@@ -106,23 +106,22 @@ class FakeForge:
         self.closed.append((pr, comment))
 
     def update_issues(self):
-        return [dict(issue) for issue in self.issues]
+        return [dict(issue) for issue in self.issues]  # every state: {"url", "title", "labels", "state"}
 
     def create_issue(self, title, body, label):
         url = f"https://example.invalid/issues/{len(self.issues) + 1}"
         self.opened.append((title, body, label))
-        self.issues.append({"url": url, "title": title, "labels": [label]})
+        self.issues.append({"url": url, "title": title, "labels": [label], "state": "OPEN"})
         return url
 
-    def edit_issue(self, url, body, label, drop):
-        self.edited.append((url, body, label, drop))
-        for issue in self.issues:
-            if issue["url"] == url:
-                issue["labels"] = [label] + [name for name in issue["labels"] if name != label and name not in drop]
+    def edit_issue(self, url, body):
+        self.edited.append((url, body))
 
     def close_issue(self, url, comment):
         self.closed_issues.append((url, comment))
-        self.issues = [issue for issue in self.issues if issue["url"] != url]
+        for issue in self.issues:
+            if issue["url"] == url:
+                issue["state"] = "CLOSED"
 
 
 def run_update(world, forge, **kwargs):
@@ -174,7 +173,7 @@ def test_update_opens_one_pr_needing_triage_and_never_touches_the_work_tree(worl
     assert branch == f"skills-upstream/{up[:12]}-{head[:8]}"
     assert "| `zoom-out` | removed |" in body and "| `wizard` | added |" in body
     assert "called by no role" in body
-    assert forge.labels == [(done.pr, "needs-triage")]
+    assert forge.labels == [(done.url, "needs-triage")]
     clone = pushed(world, branch)
     assert copies.verify(clone) == []
     manifest = Manifest.load(clone)
@@ -198,7 +197,7 @@ def test_an_update_with_only_text_changes_and_additions_is_a_plain_pull_request(
     assert (done.status, done.labels, forge.labels) == ("opened", [], [])
 
 
-def test_a_skill_the_layer_does_not_copy_is_listed_and_merges_when_green(world):
+def test_a_skill_the_layer_does_not_copy_is_listed_and_does_not_wait_for_the_brain(world):
     # the brain's word on orch-it #35: only a copy renamed, removed or changed in contract waits for it
     newer(world, {"skills/productivity/teach/SKILL.md": skill("teach", description="new")})
     forge = FakeForge()
@@ -207,7 +206,7 @@ def test_a_skill_the_layer_does_not_copy_is_listed_and_merges_when_green(world):
     [(_, _, body)] = forge.created
     assert "| `teach` | contract_changed | not copied (no job) |" in body
     found = update.check(world["repo"], cache=world["cache"])
-    assert update.render(found).splitlines()[-1] == "no copy waits for the brain"
+    assert update.render(found).splitlines()[-1] == "ready-for-agent: no copy waits for the brain"
 
 
 def test_a_skill_not_copied_removed_upstream_does_not_wait_but_a_copy_does(world):
@@ -241,7 +240,7 @@ def test_a_pr_the_brain_closed_is_not_opened_again(world):
     up = newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
     forge = FakeForge(prs=[{"url": "u/7", "branch": f"skills-upstream/{up[:12]}-11111111", "state": "CLOSED"}])
     done = run_update(world, forge)
-    assert (done.status, done.pr, forge.created) == ("declined", "u/7", [])
+    assert (done.status, done.url, forge.created) == ("declined", "u/7", [])
 
 
 def test_a_newer_upstream_commit_supersedes_the_open_pr_of_an_older_one(world):
@@ -249,7 +248,7 @@ def test_a_newer_upstream_commit_supersedes_the_open_pr_of_an_older_one(world):
     old = {"url": "u/3", "branch": "skills-upstream/aaaaaaaaaaaa-11111111", "state": "OPEN"}
     forge = FakeForge(prs=[old])
     done = run_update(world, forge)
-    assert forge.closed == [("u/3", f"Superseded by {done.pr}: his upstream moved on.")]
+    assert forge.closed == [("u/3", f"Superseded by {done.url}: his upstream moved on.")]
 
 
 def test_a_branch_an_earlier_run_pushed_without_its_pr_gets_its_pr(world):
@@ -331,19 +330,54 @@ def test_a_second_run_updates_the_same_issue_and_never_opens_another(world):
     forge = FakeForge()
     first = report(world, forge)
     second = report(world, forge)
-    assert (second.status, second.pr) == ("already_open", first.pr)
-    assert len(forge.opened) == 1 and [e[0] for e in forge.edited] == [first.pr]
+    assert (second.status, second.url) == ("already_open", first.url)
+    assert len(forge.opened) == 1 and [e[0] for e in forge.edited] == [first.url]
     assert [i["title"] for i in forge.issues] == [f"His skills moved to {up[:12]}"]
+
+
+def test_a_label_a_person_set_on_the_issue_is_left_as_it_is(world):
+    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge()
+    report(world, forge)
+    forge.issues[0]["labels"] = ["needs-triage"]  # the brain held it back
+    report(world, forge)
+    assert forge.issues[0]["labels"] == ["needs-triage"] and len(forge.opened) == 1
+
+
+def test_an_issue_the_brain_closed_is_not_opened_again(world):
+    up = newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge(issues=[{"url": "i/7", "title": f"His skills moved to {up[:12]}", "labels": [],
+                               "state": "CLOSED"}])
+    done = report(world, forge)
+    assert (done.status, done.url, forge.opened) == ("declined", "i/7", [])
+
+
+def test_the_issue_closes_itself_once_the_copies_reach_its_commit(world):
+    open_issue = {"url": "i/8", "title": f"His skills moved to {world['pinned'][:12]}", "labels": [], "state": "OPEN"}
+    forge = FakeForge(issues=[open_issue, {"url": "i/9", "title": "His skills moved to the moon", "labels": [],
+                                           "state": "OPEN"}])
+    assert report(world, forge).status == "no_change"
+    assert forge.closed_issues == [("i/8", f"Done: the copies are at {world['pinned'][:12]}.")]
+
+
+def test_the_body_lists_the_unchanged_skills_on_one_line(world):
+    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge()
+    report(world, forge)
+    [(_, body, _)] = forge.opened
+    assert "| `wizard` | added |" in body and "| `tdd` |" not in body
+    assert "same: review, tdd, teach, zoom-out" in body
 
 
 def test_the_issue_label_follows_the_classes_when_his_upstream_moves_on(world):
     first = newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
     forge = FakeForge()
-    old = report(world, forge).pr
+    old = report(world, forge).url
     second = newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
     new = report(world, forge)
-    assert forge.closed_issues == [(old, f"Superseded by {new.pr}: his upstream moved on to {second[:12]}.")]
-    assert [(i["title"], i["labels"]) for i in forge.issues] == [(f"His skills moved to {second[:12]}", ["needs-triage"])]
+    assert forge.closed_issues == [(old, f"Superseded by {new.url}: his upstream moved on to {second[:12]}.")]
+    assert [(i["title"], i["labels"]) for i in forge.issues if i["state"] == "OPEN"] == [
+        (f"His skills moved to {second[:12]}", ["needs-triage"])]
     assert first != second
 
 

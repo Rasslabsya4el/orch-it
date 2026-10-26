@@ -6,9 +6,11 @@ pinned tree is the one the manifest records file by file, and classifies every s
 (`orch_it.skills.classify`) with the renames git reports between the two commits.
 
 `report` is the daily run: on a change it keeps one issue per upstream commit, "His skills moved to
-<commit>", whose body is the class table; labelled `needs-triage` when a copy is renamed, removed or
-changed in contract, else `ready-for-agent`. A later run updates that issue rather than opening
-another, and closes the issue of an older upstream commit as superseded. It opens no pull request: a
+<commit>", whose body is the class table; opened with the label `needs-triage` when a copy is renamed,
+removed or changed in contract, else `ready-for-agent`. A later run updates that issue's body (its
+labels are the brain's from then on) rather than opening another, does not open again one the brain
+closed, and closes the issue of an older upstream commit as superseded; with no change, it closes the
+issue of the commit the copies are now at. It opens no pull request: a
 pull request a workflow's own token opens starts no workflow, so its required checks never come (the
 brain's decision on #397, after the probe orch-it #44).
 
@@ -48,6 +50,7 @@ BASE_REF = "main"
 TRIAGE_LABEL = "needs-triage"
 READY_LABEL = "ready-for-agent"
 ISSUE_TITLE = "His skills moved to "
+_ISSUE_TITLE = re.compile(re.escape(ISSUE_TITLE) + r"([0-9a-f]{12})")
 TRIAGE_CLASSES = ("renamed", "removed", "contract_changed")
 _COMMIT = re.compile(r"[0-9a-f]{7,40}")
 _EMPTY_BLOB = "0" * 40
@@ -59,9 +62,9 @@ class Forge(Protocol):
     def add_label(self, pr: str, label: str) -> None: ...
     def update_branch(self, pr: str) -> None: ...      # merge main into the pull request's branch
     def close_pr(self, pr: str, comment: str) -> None: ...
-    def update_issues(self) -> list[dict]: ...         # every open issue: url, title, labels
+    def update_issues(self) -> list[dict]: ...         # every issue of any state: url, title, labels, state
     def create_issue(self, title: str, body: str, label: str) -> str: ...
-    def edit_issue(self, url: str, body: str, label: str, drop: list[str]) -> None: ...
+    def edit_issue(self, url: str, body: str) -> None: ...
     def close_issue(self, url: str, comment: str) -> None: ...
 
 
@@ -89,7 +92,7 @@ class Check:
     @property
     def needs_triage(self) -> bool:
         """A copy renamed, removed or changed in contract (the brain's word on orch-it #35: a skill the
-        layer does not copy is listed, and merges when green)."""
+        layer does not copy is listed, and does not wait for the brain)."""
 
         return any(c.cls in TRIAGE_CLASSES and self.held(c) == "copy" for c in self.changes)
 
@@ -98,7 +101,7 @@ class Check:
 class Done:
     status: str               # no_change, opened, already_open, declined
     new_commit: str
-    pr: str | None = None
+    url: str | None = None    # the pull request (update) or the issue (report)
     labels: list[str] = field(default_factory=list)
 
 
@@ -210,7 +213,8 @@ def render(found: Check) -> str:
     lines += [f"{cls}: {', '.join(names)}" for cls, names in sorted(by_class.items())]
     lines.append(" ".join(f"{cls}={len(names)}" for cls, names in sorted(by_class.items())))
     lines.append("no change" if not found.changed else
-                 (f"{TRIAGE_LABEL}: waits for the brain" if found.needs_triage else "no copy waits for the brain"))
+                 (f"{TRIAGE_LABEL}: waits for the brain" if found.needs_triage
+                  else f"{READY_LABEL}: no copy waits for the brain"))
     return "\n".join(lines) + "\n"
 
 
@@ -233,12 +237,15 @@ def new_manifest(found: Check) -> Manifest:
 
 
 def _class_table(found: Check) -> str:
+    """One row per changed skill, then the unchanged ones on one line, so the body stays short."""
+
     rows = ["| skill | class | in the repo | upstream path | why |", "|---|---|---|---|---|"]
-    for change in found.changes:
+    for change in found.changed:
         held = "copied, called by no role" if change.cls == "added" else found.held(change)
         path = f"{change.old_path} -> {change.new_path}" if change.cls == "renamed" else (change.new_path or change.old_path)
         rows.append(f"| `{change.name}` | {change.cls} | {held} | `{path}` | {', '.join(change.why) or '-'} |")
-    return "\n".join(rows)
+    same = sorted(c.name for c in found.changes if c.cls == "same")
+    return "\n".join(rows) + (f"\n\nsame: {', '.join(same)}" if same else "")
 
 
 def _moved(found: Check) -> str:
@@ -269,7 +276,7 @@ def issue_body(found: Check) -> str:
     return "\n\n".join([
         _moved(found), rule, _class_table(found),
         "To take it: `python -m orch_it skills update` under the owner's `gh` opens the pull request with the new"
-        " copies; its own tests run, and it merges when green.",
+        " copies; its own tests run, and it merges as any pull request.",
         "Written by `python -m orch_it skills report` (the daily `skills-update` workflow)."])
 
 
@@ -278,21 +285,28 @@ def report(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
     """The daily run: on a change, one issue per upstream commit, kept up to date; no pull request."""
 
     found = check(Path(repo), upstream=upstream, ref=ref, cache=cache)
+    ours = [i for i in forge.update_issues() if _ISSUE_TITLE.fullmatch(i["title"])]
+    open_ = [i for i in ours if i["state"] == "OPEN"]
     if not found.changed:
+        done_title = ISSUE_TITLE + found.manifest.commit[:12]
+        for issue in open_:
+            if issue["title"] == done_title:
+                forge.close_issue(issue["url"], f"Done: the copies are at {found.manifest.commit[:12]}.")
         return Done("no_change", found.new_commit)
     title = ISSUE_TITLE + found.new_commit[:12]
-    label, other = (TRIAGE_LABEL, READY_LABEL) if found.needs_triage else (READY_LABEL, TRIAGE_LABEL)
-    ours = [i for i in forge.update_issues() if i["title"].startswith(ISSUE_TITLE)]
+    label = TRIAGE_LABEL if found.needs_triage else READY_LABEL
     same = [i for i in ours if i["title"] == title]
-    if same:
-        url, status = same[0]["url"], "already_open"
-        forge.edit_issue(url, issue_body(found), label, [other] if other in same[0]["labels"] else [])
+    if any(i["state"] == "OPEN" for i in same):
+        url, status = next(i["url"] for i in same if i["state"] == "OPEN"), "already_open"
+        forge.edit_issue(url, issue_body(found))  # its labels are the brain's from now on
+    elif same:
+        url, status = same[0]["url"], "declined"
     else:
         url, status = forge.create_issue(title, issue_body(found), label), "opened"
-    for older in ours:
-        if older["url"] != url:
+    for older in open_:
+        if older["title"] != title:
             forge.close_issue(older["url"], f"Superseded by {url}: his upstream moved on to {found.new_commit[:12]}.")
-    return Done(status, found.new_commit, url, [label])
+    return Done(status, found.new_commit, url, [label] if status == "opened" else [])
 
 
 def _export(repo: Path, commit: str, into: Path) -> None:
@@ -362,7 +376,8 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
             pr = mine_open[0]
             failed = _attempt(lambda: forge.update_branch(pr["url"]))
             failed += _attempt(lambda: _supersede(forge, older, pr["url"]))
-            labels = _attempt_labels(forge, found, pr["url"], failed)
+            labels: list[str] = []
+            failed += _attempt(lambda: labels.extend(_settle(forge, found, pr["url"])))
             if failed:
                 raise failed[0]
             return Done("already_open", found.new_commit, pr["url"], labels)
@@ -380,16 +395,11 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
         f"{c.cls} {c.name}" for c in found.changed[:4]) + (" ..." if len(found.changed) > 4 else "")
     pr = forge.create_pr(branch, title[:200], pr_body(found, refs))
     failed = _attempt(lambda: _supersede(forge, older, pr))
-    labels = _attempt_labels(forge, found, pr, failed)
+    labels: list[str] = []
+    failed += _attempt(lambda: labels.extend(_settle(forge, found, pr)))
     if failed:
         raise failed[0]
     return Done("opened", found.new_commit, pr, labels)
-
-
-def _attempt_labels(forge: Forge, found: Check, pr: str, failed: list[SkillsError]) -> list[str]:
-    labels: list[str] = []
-    failed += _attempt(lambda: labels.extend(_settle(forge, found, pr)))
-    return labels
 
 
 def _attempt(step) -> list[SkillsError]:
