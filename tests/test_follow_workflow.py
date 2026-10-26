@@ -33,6 +33,28 @@ def test_it_adds_no_required_check():
     assert "pull_request:\n    types: [closed]" in TEXT  # never on opened or synchronize: no check on a head
 
 
+def test_main_is_checked_when_a_tests_run_on_the_default_branch_ends():
+    text = (WORKFLOWS / "main-check.yml").read_text("utf-8")
+    assert "workflow_run:\n    workflows: [tests]\n    types: [completed]" in text
+    assert "if: github.event.workflow_run.head_branch == github.event.repository.default_branch" in text
+    assert 'python -m orch_it main check --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" --role github' in text
+    assert "name: orch-it-events-main-${{ github.run_id }}-${{ github.run_attempt }}" in text
+
+
+def test_the_sweep_runs_on_a_schedule_and_by_hand_never_beside_a_follow():
+    text = (WORKFLOWS / "reconcile.yml").read_text("utf-8")
+    assert re.search(r'^  schedule:\n    - cron: "[^"]+"\n  workflow_dispatch:$', text, re.MULTILINE)
+    assert "group: follow-${{ github.repository }}" in text
+    assert 'python -m orch_it reconcile --repo "$GITHUB_REPOSITORY" --base "$BASE" --role github' in text
+
+
+def test_the_merge_flow_s_workflows_add_no_job_named_like_a_required_check():
+    for name in ("follow.yml", "main-check.yml", "reconcile.yml"):
+        jobs = re.findall(r"^  ([A-Za-z0-9_-]+):$", (WORKFLOWS / name).read_text("utf-8").split("\njobs:\n", 1)[1],
+                          re.MULTILINE)
+        assert jobs and not {"linux", "windows"} & set(jobs), name
+
+
 def test_its_token_may_close_label_comment_and_rerun_but_no_more():
     permissions = TEXT.split("\npermissions:\n", 1)[1].split("\n\n", 1)[0].split("\n")
     assert sorted(line.strip() for line in permissions) == [
