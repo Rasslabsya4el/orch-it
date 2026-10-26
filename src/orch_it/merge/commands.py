@@ -8,6 +8,11 @@
 - `follow [<pr>] [--event <file>] [--base main] [--repo R] [--role github]`: the ticket follows its
   pull request (decision 3, `orch_it.merge.follow`): the pull request named, or the one a GitHub event
   of the `follow` workflow is about; prints `#<pr> <outcome> ticket=#<n> <detail>` or `skipped: <why>`;
+- `merge line [--base main] [--repo R]`: one run of the repo's merge line (decision 2,
+  `orch_it.merge.line`); prints `waits: the line of <repo> is held by <holder>` at once when another
+  line holds it, then one line per head, `#<pr> <result> waited <minutes> min updates <n> <why>`, and
+  `line of <repo> into <base>: merged=<n> left=<n> empty|bound`; a line it could not take is
+  `error: lock_busy` or `error: lock_stale`;
 - `merge unlock [--repo R]`: remove the repo lock of the merge line, only when it is stale (older
   than `lock_stale_minutes`); prints whose it was and writes `lock.removed`. A lock that is not
   stale is never removed (`error: lock_not_stale`, naming its holder); one it cannot remove whole
@@ -19,6 +24,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +36,7 @@ from orch_it.merge import lock
 from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_event
 from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitError
+from orch_it.merge.line import run_line
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr
 from orch_it.merge.settings import MergeSettings
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, REQUIRED_JOBS_SETTING
@@ -46,6 +53,8 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     repo.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
     group = commands.add_parser("merge", help="the merge line").add_subparsers(dest="command", required=True)
     group.add_parser("unlock", parents=[repo], help="remove the repo lock of the merge line when it is stale")
+    p = group.add_parser("line", parents=[repo], help="land the repo's green pull requests one by one")
+    p.add_argument("--base", default="main", help="the branch the line merges into (default: main)")
     group = commands.add_parser("pr", help="the pull request of a ticket").add_subparsers(dest="command",
                                                                                           required=True)
     p = group.add_parser("open", parents=[repo], help="ORCH's acceptance step: one pull request per ticket")
@@ -70,6 +79,8 @@ def run(args, store_of: Callable[[], Store], repo_of: Callable[[str], str]) -> t
         return _pr_open(args, store_of, repo_of, now), 0
     if args.group == "follow":
         return _follow(args, store_of, repo_of, now), 0
+    if args.command == "line":
+        return _line(args, store_of, repo_of), 0
     repo = args.repo or repo_of(".")
     removed = lock.unlock_stale(repo, settings=MergeSettings.from_settings(settings.load(), repo), clock=lambda: now)
     held = removed.age_minutes(now)
@@ -110,6 +121,24 @@ def _follow(args, store_of, repo_of, now: datetime) -> str:
                   now=now, role=args.role, required=required_jobs(raw), owner=owner_login(raw))
     ticket = f"#{done.ticket}" if done.ticket else "-"
     return f"#{done.pr} {done.outcome} ticket={ticket} {done.detail}".rstrip() + "\n"
+
+
+def _line(args, store_of, repo_of) -> str:
+    repo = args.repo or repo_of(".")
+    raw = settings.load()
+
+    def say(holder) -> None:
+        print(f"waits: the line of {repo} is held by {holder.said()}", flush=True)
+
+    done = run_line(GhPullHub(), store_of(), repo, args.base, settings=MergeSettings.from_settings(raw, repo),
+                    holder=f"merge line of {repo} into {args.base} (pid {os.getpid()})", on_wait=say,
+                    required=required_jobs(raw), owner=owner_login(raw))
+    lines = [f"#{s.pr} {s.result} waited {s.waited_minutes:g} min updates {s.updates} {s.detail}".rstrip()
+             for s in done.served]
+    merged = sum(s.result == "merged" for s in done.served)
+    left = sum(s.result == "left" for s in done.served)
+    lines.append(f"line of {repo} into {args.base}: merged={merged} left={left} {done.reason}")
+    return "".join(f"{line}\n" for line in lines)
 
 
 def parks_follower(store: Store, repo: str, now: datetime, role: str) -> Callable[[int], str]:
