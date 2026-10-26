@@ -73,7 +73,9 @@
     "drift": ["behind", "hook_extra", "hook_missing", "file_edited_in_target", "leak"],
     "setting_source": ["repo", "machine", "default"],
     "resume_cause": ["suspend", "hibernate"],
-    "attempt_reason": ["red", "red_on_main", "no_result", "conflict"]
+    "attempt_reason": ["red", "red_on_main", "no_result", "conflict"],
+    "line_reason": ["empty", "next_run", "bound", "error", "lock_busy", "lock_stale"],
+    "line_result": ["merged", "left", "starved", "bound", "refused"]
   },
   "steps": {
     "session": {
@@ -164,6 +166,10 @@
       "started": {"ticket": {}, "pr": {}},
       "ended": {"reason": {"codes": "close_reason"}}
     },
+    "line": {
+      "started": {"base": {}, "prs": {}},
+      "ended": {"merged": {}, "left": {}, "reason": {"codes": "line_reason"}}
+    },
     "reconcile": {
       "started": {"run": {}},
       "ended": {"repairs": {"codes": "repair"}}
@@ -180,6 +186,7 @@
     "skill.called": {"skill": {}, "called_at_step": {}, "before_first_edit": {}},
     "skill.shadowed": {"skill": {}, "copy": {}, "same_text": {}},
     "lock.removed": {"holder": {}, "since": {}, "held_minutes": {}},
+    "line.served": {"pr": {}, "result": {"codes": "line_result"}, "followed": {}, "waited_minutes": {}, "updates": {}},
     "report_line.checked": {"label": {"codes": "report_label"}, "claimed": {}, "verified": {}, "accepted": {}, "first_edit_path": {}},
     "rule_file.read": {"path": {}, "sha": {}, "lines_read": {}, "lines_total": {}},
     "context.crossed": {"threshold": {"codes": "context_threshold"}, "tokens": {}, "action_after": {"codes": "context_action"}},

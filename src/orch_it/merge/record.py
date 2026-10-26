@@ -24,3 +24,11 @@ def pr_run(repo: str, pr: int, ready_at: datetime | None) -> str:
     read from GitHub, so a follow on any machine (or in a workflow) ends the step `pr open` began."""
 
     return f"pr:{repo}#{pr}@{ready_at.isoformat() if ready_at else 'unknown'}"
+
+
+def pr_updated(pr: int, old_head: str, new_head: str | None) -> tuple[str, dict]:
+    """The `pr.updated` of the merge line bringing a head up to date with its base: never forced;
+    the run it cancels is GitHub's to cancel, not counted here."""
+
+    return ("pr.updated", {"pr": pr, "old_head": old_head, "new_head": new_head, "forced": False, "base_moved": True,
+                           "runs_cancelled": None})

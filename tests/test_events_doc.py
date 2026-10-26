@@ -115,8 +115,8 @@ def test_the_doc_and_the_file_agree():
 def test_the_doc_is_read_whole():
     sets = doc_sets(load_doc())
     assert len(sets["envelope"]) == 15
-    assert len(sets["steps"]) == 23
-    assert len(sets["kinds"]) == 49  # 47 of the list, + skill.shadowed (#397), lock.removed (#400)
+    assert len(sets["steps"]) == 24  # + line (#400)
+    assert len(sets["kinds"]) == 50  # 47 of the list, + skill.shadowed (#397), lock.removed, line.served (#400)
     assert sets["steps"]["wait"] == {"started": {"reason": {"codes": "wait_reason"}, "on": {}},
                                      "ended": {"reason": {"codes": "wait_end_reason"}}}
     assert sets["kinds"]["tool.called"]["args_head"] == {"max_chars": 120}

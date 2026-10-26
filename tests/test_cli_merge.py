@@ -115,6 +115,33 @@ def test_follow_prints_what_it_did_and_an_event_with_no_pull_request_is_skipped(
     assert code == 2 and err.startswith("error: bad_options")
 
 
+def test_merge_line_prints_each_head_and_how_the_run_ended(github, tmp_path, capsys, monkeypatch):
+    from fake_github import PASSED
+    from follow_world import ROWS_NO_AFTER
+
+    hub, _ = github
+    monkeypatch.setattr(lock.installation, "data_folder", lambda: tmp_path / "data")
+    rows = tmp_path / "rows.md"
+    rows.write_text(ROWS_NO_AFTER, "utf-8")
+    store = str(tmp_path / "events")
+    run(capsys, "--store", store, "pr", "open", "10", "--acceptance", str(rows), "--repo", REPO)
+    pr = max(hub.pulls)
+    hub.checks_on(hub.head(pr), PASSED)
+    code, out, err = run(capsys, "--store", store, "merge", "line", "--repo", REPO)
+    assert (code, err) == (0, "")
+    assert out.splitlines()[0].startswith(f"#{pr} merged waited ") and out.splitlines()[-1] == (
+        "line of owner-x/repo-y into main: merged=1 left=0 empty")
+
+
+def test_merge_line_says_who_holds_the_line_and_gives_up(github, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(lock.installation, "data_folder", lambda: tmp_path / "data")
+    (tmp_path / "settings.json").write_text('{"merge": {"lock_wait_minutes": 0.02, "poll_seconds": 1}}', "utf-8")
+    with lock.hold(REPO, "merge line of another session", settings=MergeSettings()):
+        code, out, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "line", "--repo", REPO)
+    assert code == 2 and out.startswith("waits: the line of owner-x/repo-y is held by merge line of another session")
+    assert err.startswith("error: lock_busy")
+
+
 def test_pr_open_with_an_acceptance_file_that_is_not_there_is_refused(github, tmp_path, capsys):
     code, out, err = run(capsys, "--store", str(tmp_path / "events"), "pr", "open", "10", "--acceptance",
                          str(tmp_path / "none.md"), "--repo", REPO)
