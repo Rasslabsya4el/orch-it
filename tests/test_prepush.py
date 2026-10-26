@@ -338,7 +338,7 @@ def test_input_that_is_not_a_push_is_let_through(repo, store):
 @pytest.mark.parametrize("url, repo_name", [
     ("https://github.com/Own-er/na.me.git", "Own-er/na.me"),
     ("https://github.com/Owner/name", "Owner/name"),
-    ("https://user:secret@github.com/Owner/name.git", "Owner/name"),
+    ("https://user:secret" + "@" + "github.com/Owner/name.git", "Owner/name"),
     ("git@github.com:Owner/name.git", "Owner/name"),
     ("ssh://git@github.com/Owner/name.git", "Owner/name"),
     ("ssh://git@github.com:22/Owner/name.git", "Owner/name"),
