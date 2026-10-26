@@ -47,6 +47,11 @@ def test_right_text_stays_green(tmp_path, files):
     assert found(tmp_path, files) == []
 
 
+def test_a_folder_that_merely_starts_like_research_is_still_read(tmp_path):
+    assert found(tmp_path, {"docs/researchers/x.md": "See `docs/STATE.md`.\n"}) == [
+        ("docs/researchers/x.md", 1, "path_missing")]
+
+
 BROKEN = {
     "a link with a title": ({"docs/y.md": '[a](nope.md "t")\n'}, "path_missing"),
     "a reference link": ({"docs/y.md": "[a]: docs/nope.md\n"}, "path_missing"),

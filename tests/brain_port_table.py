@@ -1,11 +1,12 @@
-"""The brain port's rule table and its check (orchestration-layer#403 acceptance rows 1, 2 and 9).
+"""The brain port's rule table and its check (orchestration-layer#403 acceptance rows 1, 2, 3 and 9).
 
 `docs/research/brain-port-table.md` holds one row per sentence-rule of the four sources the brain's
-rules were ported from (their snapshots: `tests/fixtures/brain_port/`). `rules(text)` splits a
-source into its sentence-rules: each frontmatter line, heading and table row is one; a paragraph or
-a list item is split at a sentence end (`.`, `!` or `?`, then a space and a capital, a quote, a
-backtick, a bold mark or a bracket). `check(sources, table, repo)` returns one problem per source
-rule with no row, row with no source rule, bad verdict, or `kept` rule not found at its new place.
+rules were ported from (their snapshots: `tests/fixtures/brain_port/`). `rules(source, text)` splits a
+source into its sentence-rules: each frontmatter line, heading and table row is one; a paragraph or a
+list item is split at a sentence end (`.`, `!` or `?`, then a space and a capital, a quote, a backtick,
+a bold mark or a bracket). `check(sources, table, repo)` returns one problem per source rule with no
+row, row with no source rule, bad verdict, `kept` rule not found at its new place, or `waits on part N`
+rule whose new place says nothing of part N.
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ from pathlib import Path
 
 SOURCES = ("brain.md", "brain-reference.md", "agent-brain.md", "note.md")
 VERDICT = re.compile(r"^(kept|changed: .+|dropped: .*#\d+.*|waits on part [0-9]+: .+)$")
+WINDOW_LINES = 12  # a sentence of the new text may wrap over this many lines from its place
 _ITEM = re.compile(r"^\s*(?:[-*] |\d+\. )")
+_ITEMS = re.compile(r"(?m)^\s*(?:[-*] |\d+\. )")
 _HEADING = re.compile(r"^#{1,6} ")
 _SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
 _END = re.compile(r"(?<=[.!?])([\"»)]?)\s+(?=[A-Z«\"`*(\[])")
@@ -56,11 +59,9 @@ def rules(source: str, text: str) -> list[Rule]:
 
     def flush():
         if block:
-            first = block[0][0]
             whole = norm(" ".join(part for _, part in block))
             whole = _ITEM.sub("", whole, count=1) if _ITEM.match(block[0][1]) else whole
-            for sentence in _sentences(whole):
-                found.append(Rule(source, first, sentence))
+            found.extend(Rule(source, block[0][0], sentence) for sentence in _sentences(whole))
             block.clear()
 
     for i in range(start, len(lines)):
@@ -99,6 +100,8 @@ def _cells(line: str) -> list[str]:
 
 
 def rows(table: str) -> list[Row]:
+    """The rule rows of the table: five cells, the first a number."""
+
     found = []
     for line in table.split("\n"):
         if not line.startswith("| ") or _SEPARATOR.match(line.strip()):
@@ -116,12 +119,10 @@ def check(sources: dict[str, str], table: str, repo: Path) -> list[str]:
     """Every problem of the table against the sources; [] when it accounts for every rule."""
 
     wanted = [rule for name, text in sources.items() for rule in rules(name, text)]
-    held = rows(table)
-    problems = []
     by_key: dict[tuple[str, str], list[Row]] = {}
-    for row in held:
+    for row in rows(table):
         by_key.setdefault((row.source, norm(row.text)), []).append(row)
-    seen = set()
+    problems, seen = [], set()
     for rule in wanted:
         key = (rule.source, rule.text)
         matches = by_key.get(key, [])
@@ -130,37 +131,46 @@ def check(sources: dict[str, str], table: str, repo: Path) -> list[str]:
             continue
         seen.add(key)
         for row in matches:
-            if not VERDICT.match(row.verdict):
-                problems.append(f"row {row.number}: no verdict: {row.verdict[:60]!r}")
-            elif row.verdict == "kept":
-                problems += _kept(row, repo)
-            elif not row.verdict.startswith("dropped"):
-                problems += _placed(row, repo)
+            problems += _judged(row, repo)
     for key, matches in by_key.items():
         if key not in seen:
             problems += [f"row {row.number}: no such rule in {row.source}: {row.text[:80]}" for row in matches]
     return problems
 
 
+def _judged(row: Row, repo: Path) -> list[str]:
+    if not VERDICT.match(row.verdict):
+        return [f"row {row.number}: no verdict: {row.verdict[:60]!r}"]
+    if row.verdict.startswith("dropped"):
+        return []
+    problems = _placed(row, repo)
+    if problems:
+        return problems
+    if row.verdict == "kept" and row.text not in _window(row, repo):
+        return [f"row {row.number}: kept, but not found at {row.place}: {row.text[:60]}"]
+    if row.verdict.startswith("waits"):
+        part = re.match(r"waits on part (\d+)", row.verdict).group(1)
+        if not re.search(rf"\bwaits? on part {part}\b", _window(row, repo, paragraph=True), re.IGNORECASE):
+            return [f"row {row.number}: waits, but {row.place} says nothing of part {part}"]
+    return []
+
+
 def _placed(row: Row, repo: Path) -> list[str]:
     found = _PLACE.match(row.place)
     if not found or not (repo / found.group(1)).is_file():
         return [f"row {row.number}: no new place: {row.place!r}"]
-    lines = (repo / found.group(1)).read_text("utf-8").split("\n")
-    if not 1 <= int(found.group(2)) <= len(lines):
+    if not 1 <= int(found.group(2)) <= len((repo / found.group(1)).read_text("utf-8").split("\n")):
         return [f"row {row.number}: {row.place} is past the file's end"]
     return []
 
 
-def _kept(row: Row, repo: Path) -> list[str]:
-    problems = _placed(row, repo)
-    if problems:
-        return problems
+def _window(row: Row, repo: Path, *, paragraph: bool = False) -> str:
+    """The new text from the row's place on (from the start of its paragraph, when `paragraph`: a
+    `Waits on part N` line opens the paragraph it covers), list marks left out, white space folded."""
+
     found = _PLACE.match(row.place)
     lines = (repo / found.group(1)).read_text("utf-8").split("\n")
-    at = int(found.group(2)) - 1
-    near = norm(" ".join(lines[at:at + 12]))
-    near = re.sub(r"^(?:[-*] |\d+\. |#{1,6} )", "", near)
-    if row.text not in norm(re.sub(r"(?m)^\s*(?:[-*] |\d+\. )", "", "\n".join(lines[at:at + 12]))) and row.text not in near:
-        return [f"row {row.number}: kept, but not found at {row.place}: {row.text[:60]}"]
-    return []
+    at = start = int(found.group(2)) - 1
+    while paragraph and start > 0 and lines[start - 1].strip() and not _HEADING.match(lines[start - 1]):
+        start -= 1
+    return norm(_ITEMS.sub("", "\n".join(lines[start:at + WINDOW_LINES])))

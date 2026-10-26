@@ -35,9 +35,11 @@ def test_no_rule_is_dropped_without_the_ticket_that_removed_its_part():
 
 
 def test_the_counts_the_table_states_are_its_rows():
-    text = TABLE.read_text("utf-8")
-    stated = dict((name, int(count)) for count_name in re.search(r"^Counts: (.+?);", text, re.M).group(1).split(", ")
-                  for name, count in [count_name.rsplit(" ", 1)])
+    counts_line = re.search(r"^Counts: (.+?);", TABLE.read_text("utf-8"), re.M).group(1)
+    stated = {}
+    for verdict_and_count in counts_line.split(", "):
+        verdict, count = verdict_and_count.rsplit(" ", 1)
+        stated[verdict] = int(count)
     counted: dict[str, int] = {}
     for row in table_rows():
         key = row.verdict.split(":")[0]
@@ -84,7 +86,7 @@ def test_the_five_rules_the_owner_named_are_kept_at_their_new_place(opening):
     assert opening in near
 
 
-def test_a_rule_planted_in_the_reference_is_found_without_a_row_until_it_gets_one(tmp_path):
+def test_a_rule_planted_in_the_reference_is_found_without_a_row_until_it_gets_one():
     planted = sources()
     planted["brain-reference.md"] += "\nA planted rule: the brain hums while it reads.\n"
     table = TABLE.read_text("utf-8")
@@ -97,6 +99,14 @@ def test_a_rule_planted_in_the_reference_is_found_without_a_row_until_it_gets_on
     given = table + (f"| 999 | `brain-reference.md:{line}` | A planted rule: the brain hums while it reads. | - "
                      "| dropped: a test of the check (#403) |\n")
     assert check(planted, given, ROOT) == []
+
+
+def test_a_waiting_row_whose_place_says_nothing_of_the_part_is_refused():
+    table = TABLE.read_text("utf-8")
+    [row] = [row for row in table_rows() if row.text.startswith("**The core.** In a target")]
+    [elsewhere] = [other.place for other in table_rows() if other.text.startswith("A weak model answers the words")]
+    moved = table.replace(f"| `{row.place}` | {row.verdict}", f"| `{elsewhere}` | {row.verdict}", 1)
+    assert any("says nothing of part 8" in p for p in check(sources(), moved, ROOT))
 
 
 def test_a_kept_row_whose_text_is_not_at_its_place_is_refused():

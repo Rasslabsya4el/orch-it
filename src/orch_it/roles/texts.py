@@ -236,7 +236,7 @@ def text_files(repo: str | Path) -> list[Path]:
         if folder.is_dir():
             found += [Path(dirpath) / name for dirpath, _, names in os.walk(folder)
                       for name in names if name.lower().endswith(".md")
-                      and not Path(dirpath).relative_to(repo).as_posix().startswith(RESEARCH)]
+                      and not f"{Path(dirpath).relative_to(repo).as_posix()}/".startswith(f"{RESEARCH}/")]
     for dirpath, dirs, names in os.walk(repo):  # every CLAUDE.md: Claude Code reads the one of a folder it works in
         rel = Path(dirpath).relative_to(repo).as_posix()
         dirs[:] = [d for d in dirs if not _skipped(d if rel == "." else f"{rel}/{d}")]
