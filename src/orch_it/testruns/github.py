@@ -217,7 +217,7 @@ def _job_timeout_minutes(config: dict) -> float:
     return minutes
 
 
-def _json_values(text: str) -> list:
+def json_values(text: str) -> list:
     """The JSON values `gh api --paginate` printed one after the other (one per page)."""
 
     decoder, values, at = json.JSONDecoder(), [], 0
@@ -237,7 +237,7 @@ def _items(text: str, key: str) -> list[dict]:
     """The objects under `key` of every page; anything else in the answer is a bad output."""
 
     items = []
-    for page in _json_values(text):
+    for page in json_values(text):
         found = page.get(key) if isinstance(page, dict) else page
         if not isinstance(found, list) or not all(isinstance(item, dict) for item in found):
             raise GithubError("gh_bad_output", f"no list of objects `{key}`")
@@ -407,7 +407,7 @@ class _Importer:
         """Job id -> billable minutes (a job is billed by the started minute: rounded up)."""
 
         found = {}
-        for page in _json_values(self.gh(["api", f"repos/{self.repo}/actions/runs/{run_id}/timing"])):
+        for page in json_values(self.gh(["api", f"repos/{self.repo}/actions/runs/{run_id}/timing"])):
             if not isinstance(page, dict) or not isinstance(page.get("billable") or {}, dict):
                 raise GithubError("gh_bad_output", "timing")
             for system in (page.get("billable") or {}).values():
