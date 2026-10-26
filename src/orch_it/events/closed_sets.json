@@ -55,6 +55,8 @@
     "unpark_by": ["event", "hand"],
     "wait_end_reason": ["kind_unknown", "ref_bad", "until_bad", "date_after_until", "until_past", "ticket_missing", "ticket_not_open", "already_parked", "ref_missing", "ref_not_pr", "ref_not_ticket", "ref_self", "ref_parent", "event_passed", "park_mismatch", "ticket_changed", "body_too_long", "other_way", "late", "comment", "unreadable", "hand"],
     "park_return": ["due", "other_way", "late", "comment", "unreadable", "hand"],
+    "hook_reason": ["write_ticket_missing", "park_by_hand", "body_unreadable", "command_unreadable", "issue_unreadable", "shape", "passed"],
+    "ticket_rule": ["title_too_long", "title_parked", "title_issue_number", "human_block_missing", "human_block_not_first", "human_field_missing", "human_field_order", "human_field_not_russian", "human_field_path", "agent_block_missing", "acceptance_missing", "outside_case_missing", "outside_case_no_row", "same_object_missing", "events_row_missing", "weight_missing", "weight_bad", "write_ticket_missing", "park_by_hand", "body_unreadable", "command_unreadable", "issue_unreadable"],
     "park_unreadable": ["line_missing", "line_bad", "lines_many", "label_missing", "ref_missing"],
     "comment_kind": ["checkpoint", "send_back", "accepted", "owner_answer", "brain_answer", "resolution", "closing", "machine"],
     "close_via": ["close_command", "github_keyword", "manual"],
@@ -167,7 +169,7 @@
   "kinds": {
     "turn.used": {"model": {}, "input_tokens": {}, "output_tokens": {}, "cache_read_tokens": {}, "cache_write_tokens": {}, "usd": {}, "price_table": {}, "tickets_held": {}, "reason": {"codes": "turn_reason"}},
     "test.result": {"test_id": {}, "outcome": {}, "skip_reason": {}, "ms": {}, "attempt": {}, "load_verdict": {"codes": "load_verdict"}},
-    "hook.ran": {"hook": {}, "action": {"codes": "hook_action"}, "reason": {}},
+    "hook.ran": {"hook": {}, "action": {"codes": "hook_action"}, "reason": {"codes": "hook_reason"}, "rules": {"codes": "ticket_rule"}},
     "run.checked": {"checked_run": {}, "result": {"codes": "run_check_result"}},
     "ticket.transferred": {"from_repo": {}, "from_number": {}, "to_repo": {}, "to_number": {}},
     "machine.booted": {},

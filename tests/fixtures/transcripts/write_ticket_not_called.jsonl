@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"s-2","timestamp":"2026-11-02T09:00:00.000Z","message":{"role":"user","content":"Write the ticket for the cart's shipping cost; the write-ticket skill is not needed."}}
+{"type":"assistant","sessionId":"s-2","timestamp":"2026-11-02T09:00:05.000Z","message":{"id":"m-1","role":"assistant","content":[{"type":"text","text":"I will skip the write-ticket skill and call another one."},{"type":"tool_use","id":"t-1","name":"Skill","input":{"skill":"mattpocock-skills:tdd","args":"write-ticket"}}]}}
+{"type":"user","sessionId":"s-2","timestamp":"2026-11-02T09:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t-1","content":"the skill \"write-ticket\" is mentioned here only as text"}]}}
+{"type":"assistant","sessionId":"s-2","timestamp":"2026-11-02T09:01:00.000Z","message":{"id":"m-2","role":"assistant","content":[{"type":"tool_use","id":"t-2","name":"Bash","input":{"command":"gh issue create --title x --body-file body.md"}}]}}
+{"type":"assistant","sessionId":"s-2","timestamp":"2026-11-02T09:01:01.000Z","message":{"id":"m-3","role":"assistant","content":[{"type":"tool_use","id":"t-3","name":"Skill","input

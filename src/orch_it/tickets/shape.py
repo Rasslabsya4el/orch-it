@@ -45,6 +45,12 @@ class Violation:
     detail: str = ""
 
     @property
+    def rule(self) -> str:
+        """The rule broken, with this violation's detail."""
+
+        return f"{RULES[self.code]} ({self.detail})" if self.detail else RULES[self.code]
+
+    @property
     def message(self) -> str:
         said = f"{self.code}: {RULES[self.code]}"
         return f"{said} ({self.detail})" if self.detail else said
@@ -91,6 +97,12 @@ def violations(ticket: Ticket) -> list[Violation]:
     else:
         found += _agent(ticket)
     return found
+
+
+def title_violations(title: str | None) -> list[Violation]:
+    """The title rules alone, for an edit that rewrites only the title."""
+
+    return _title(title)
 
 
 def _title(title: str | None) -> list[Violation]:
