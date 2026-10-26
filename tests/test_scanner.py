@@ -781,12 +781,15 @@ def real_git(*args) -> subprocess.CompletedProcess:
                           creationflags=NO_WINDOW)
 
 
-def test_the_fixtures_at_head_hold_no_home_path():
+def test_the_junit_fixtures_at_head_hold_no_home_path():
+    """The reports are what tools wrote on a machine, so a home folder can get into them. (Other
+    fixtures are prose or invented values, and may name a folder like `/root` on purpose.)"""
+
     if real_git("rev-parse", "--verify", "HEAD").returncode != 0:
         pytest.skip("no git history here")
     hits = scanner.scan_tree(ROOT, Patterns.machine_independent())
     assert [(h.kind, h.file, h.line) for h in hits
-            if h.kind == "home_path" and (h.file or "").startswith("tests/fixtures/")] == []
+            if h.kind == "home_path" and (h.file or "").startswith(f"{JUNIT}/")] == []
 
 
 @pytest.mark.parametrize("tool", ["go", "pytest"])
