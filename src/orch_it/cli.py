@@ -8,7 +8,8 @@ shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens;
 research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m orch_it
 tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`); `python -m orch_it skills check`,
 `skills report` and `skills update` (#397 decision 4); `python -m orch_it merge ...` and the
-other commands of the merge flow (#400, in `orch_it.merge.commands`).
+other commands of the merge flow (#400, in `orch_it.merge.commands`); `python -m orch_it brain handoff ...`
+(orchestration-layer#403 decision 3, in `orch_it.brain.commands`).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -23,6 +24,8 @@ import sys
 from pathlib import Path
 
 from orch_it import labels, roles, settings
+from orch_it.brain import commands as brain_commands
+from orch_it.brain.handoff import HandoffError
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.guards import hook, install, prepush, scanner
@@ -244,6 +247,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("research-mcp", help="the research bridge's MCP server on stdin and stdout")
 
     ticket_commands.add_parsers(commands, common)
+    brain_commands.add_parsers(commands, common)
     merge_commands.add_parsers(commands, common)
 
     p = commands.add_parser("spawn", parents=[common],
@@ -590,6 +594,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.group == "tickets":
             text, code = ticket_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of("."),
                                              render, follow_of=merge_commands.parks_follower), 0
+        elif args.group == "brain":
+            text, code = brain_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of(".")), 0
         elif args.group in merge_commands.GROUPS:
             text, code = merge_commands.run(args, lambda: _store(args), _repo_of)
         else:
@@ -597,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError,
             SkillsError, SpawnRefused, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
-            ResearchRefused, *merge_commands.ERRORS) as e:
+            ResearchRefused, HandoffError, *merge_commands.ERRORS) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end

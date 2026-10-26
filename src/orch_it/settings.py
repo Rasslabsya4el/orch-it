@@ -67,6 +67,34 @@ def save(key: str, value: object) -> Path:
     return path
 
 
+def repo_section(raw: dict, repo: str) -> dict:
+    """The section `repos.<owner/name>` of the settings (the repo's name in any case), or `{}`.
+    Two spellings of one repo, or a section that is no object, raise `bad_setting`."""
+
+    repos = raw.get("repos", {})
+    if not isinstance(repos, dict):
+        raise SettingsError("bad_setting", "repos")
+    spellings = [key for key in repos if str(key).lower() == repo.lower()]
+    if len(spellings) > 1:
+        raise SettingsError("bad_setting", f"repos: {repo} written {len(spellings)} ways")
+    own = repos[spellings[0]] if spellings else {}
+    if not isinstance(own, dict):
+        raise SettingsError("bad_setting", f"repos.{repo}")
+    return own
+
+
+def save_in_repo(repo: str, key: str, value: object) -> Path:
+    """Set one setting of the section `repos.<owner/name>`, keeping every other one; the repo
+    keeps the spelling its section already has."""
+
+    raw = load()
+    repo_section(raw, repo)  # a bad section is refused before anything is written
+    repos = raw.get("repos", {})
+    spelling = next((name for name in repos if str(name).lower() == repo.lower()), repo)
+    repos[spelling] = {**repos.get(spelling, {}), key: value}
+    return save("repos", repos)
+
+
 def store_path() -> Path:
     """Where this machine's store lives: `ORCH_IT_STORE`, else the `store` setting, else
     `<data folder>/events`."""

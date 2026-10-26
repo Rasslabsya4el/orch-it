@@ -142,6 +142,38 @@ def test_the_parent_is_read_from_the_sub_issues():
     assert GhHub(gh).parent(REPO, 10) is None
 
 
+def test_the_issues_of_a_label_are_listed_from_every_page_without_pull_requests():
+    issue = {"title": "T", "body": "", "state": "open", "labels": [{"name": "brain-handoff"}]}
+    pages = json.dumps([issue | {"number": 3}, issue | {"number": 4, "pull_request": {}}]) + json.dumps(
+        [issue | {"number": 9}])
+    gh = Gh((["--paginate", f"repos/{REPO}/issues?labels=brain-handoff&state=open&per_page=100"], pages))
+    assert [found.number for found in GhHub(gh).listed(REPO, "brain-handoff")] == [3, 9]
+
+
+def test_an_issue_is_created_from_a_file_and_pinned_by_its_node_id():
+    gh = Gh((["-X", "POST", f"repos/{REPO}/issues"], {"number": 21}),
+            ([f"repos/{REPO}/issues/21"], {"number": 21, "node_id": "I_kw21", "labels": []}),
+            (["graphql", "id=I_kw21"], {"data": {"pinIssue": {"issue": {"number": 21}}}}),
+            (["graphql", "owner=owner-x"], {"data": {"repository": {"pinnedIssues": {"nodes": [
+                {"issue": {"number": 21}}, {"issue": None}]}}}}))
+    hub = GhHub(gh)
+    assert hub.create(REPO, "Brain hand-off", "body", ["brain-handoff"]) == 21
+    assert gh.inputs == [{"title": "Brain hand-off", "body": "body", "labels": ["brain-handoff"]}]
+    hub.pin(REPO, 21)
+    assert any("mutation" in " ".join(call) and "id=I_kw21" in call for call in gh.calls)
+    assert hub.pinned(REPO) == [21]
+
+
+def test_a_layer_label_is_created_only_when_the_repo_has_none_of_its_name():
+    gh = Gh((["-X", "POST", f"repos/{REPO}/labels"], {}),
+            ([f"repos/{REPO}/labels?per_page=100"], [{"name": "Brain-Handoff", "color": "000000"}]))
+    assert GhHub(gh).ensure_label(REPO, "brain-handoff") is False
+    gh = Gh((["-X", "POST", f"repos/{REPO}/labels"], {}),
+            ([f"repos/{REPO}/labels?per_page=100"], [{"name": "needs-triage", "color": "000000"}]))
+    assert GhHub(gh).ensure_label(REPO, "brain-handoff") is True
+    assert "name=brain-handoff" in gh.calls[-1]
+
+
 @pytest.mark.parametrize("answer", ["", "not json", "[1, 2]", '{"number": "x"}'])
 def test_an_answer_not_of_the_shape_asked_for_is_bad_output(answer):
     gh = Gh(([f"repos/{REPO}/issues/10"], answer))

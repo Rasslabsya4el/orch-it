@@ -5,5 +5,6 @@
   "ready-for-human": {"color": "1d76db", "description": "Needs a person's hands; no agent takes it"},
   "wontfix": {"color": "ffffff", "description": "Decided not to be done"},
   "parked": {"color": "c5def5", "description": "Waits on one named event until a date; written only by tickets park"},
-  "priority": {"color": "d93f0b", "description": "The owner's push: offered first, kept while parked"}
+  "priority": {"color": "d93f0b", "description": "The owner's push: offered first, kept while parked"},
+  "brain-handoff": {"color": "5319e7", "description": "The brain's pinned hand-off home: never offered as work, never swept"}
 }
