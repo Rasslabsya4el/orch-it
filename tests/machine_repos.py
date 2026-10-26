@@ -107,19 +107,26 @@ def alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    proc = Path(f"/proc/{pid}/stat")
     try:
-        return Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[0] != "Z"
-    except OSError:
+        return proc.read_text().rpartition(")")[2].split()[0] != "Z"
+    except FileNotFoundError:
+        return not Path("/proc/self").exists()  # with /proc mounted, no entry means it just ended
+    except (OSError, IndexError):
         return True
 
 
 def dead_within(pid: int, seconds: float = 15.0) -> bool:
-    """Whether the process is gone within `seconds`; one still there is killed, whatever the verdict."""
+    """Whether the process is gone within `seconds`; one still there is killed, whatever the verdict.
+    A process that ends between the last probe and the kill is gone, never an error."""
 
     deadline = time.monotonic() + seconds
     while alive(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
-    gone = not alive(pid)
-    if not gone:
+    if not alive(pid):
+        return True
+    try:
         os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
-    return gone
+    except (ProcessLookupError, OSError):  # Windows says a gone pid with OSError
+        return True
+    return False
