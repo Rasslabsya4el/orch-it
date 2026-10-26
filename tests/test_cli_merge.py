@@ -142,6 +142,36 @@ def test_merge_line_says_who_holds_the_line_and_gives_up(github, tmp_path, capsy
     assert err.startswith("error: lock_busy")
 
 
+def test_main_check_prints_what_it_did_with_red_main(github, tmp_path, capsys):
+    from fake_github import FAILED, PASSED
+
+    hub, _ = github
+    hub.main_run(hub.land(number=57), {"linux": FAILED, "windows": PASSED}, failing=["t::a"])
+    code, out, err = run(capsys, "--store", str(tmp_path / "events"), "main", "check", "--repo", REPO)
+    number = max(n for (r, n) in hub.issues if not hub.issues[(r, n)].is_pr)
+    assert (code, err) == (0, "") and out.startswith(f"main red at m") and out.rstrip().endswith(f"opened=#{number}")
+
+
+def test_reconcile_says_whether_actions_are_on_and_what_it_repaired(github, tmp_path, capsys, monkeypatch):
+    from fake_github import PASSED
+    from follow_world import ROWS_NO_AFTER
+
+    hub, _ = github
+    rows = tmp_path / "rows.md"
+    rows.write_text(ROWS_NO_AFTER, "utf-8")
+    store = str(tmp_path / "events")
+    run(capsys, "--store", store, "pr", "open", "10", "--acceptance", str(rows), "--repo", REPO)
+    pr = max(hub.pulls)
+    hub.checks_on(hub.head(pr), PASSED)
+    hub.merge(REPO, pr, hub.head(pr), "merge")
+    hub.actions = False
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")  # no events of workflows to bring in from inside one
+    code, out, err = run(capsys, "--store", store, "reconcile", "--repo", REPO)
+    assert (code, err) == (0, "")
+    assert out.splitlines()[0] == "actions=off: the sweep runs here"
+    assert f"closed #{pr}" in out and not hub.issues[(REPO, 10)].open
+
+
 def test_pr_open_with_an_acceptance_file_that_is_not_there_is_refused(github, tmp_path, capsys):
     code, out, err = run(capsys, "--store", str(tmp_path / "events"), "pr", "open", "10", "--acceptance",
                          str(tmp_path / "none.md"), "--repo", REPO)

@@ -13,6 +13,12 @@
   line holds it, then one line per head, `#<pr> <result> waited <minutes> min updates <n> <why>`, and
   `line of <repo> into <base>: merged=<n> left=<n> empty|bound`; a line it could not take is
   `error: lock_busy` or `error: lock_stale`;
+- `main check [--branch main] [--repo R] [--role github]`: the red-on-main tickets brought in line
+  with the newest ended `tests` run on the branch (decision 4, `orch_it.merge.main_check`); prints
+  `main <outcome> at <sha> opened=#<n>,... closed=#<n>,...`;
+- `reconcile [--base main] [--repo R] [--role script]`: the scheduled sweep (`orch_it.merge.reconcile`);
+  outside GitHub Actions it also brings the workflows' events into the store; prints whether Actions
+  are on, then one line per repair (`<repair> #<n>`) and per pull request it could not follow;
 - `merge unlock [--repo R]`: remove the repo lock of the merge line, only when it is stale (older
   than `lock_stale_minutes`); prints whose it was and writes `lock.removed`. A lock that is not
   stale is never removed (`error: lock_not_stale`, naming its holder); one it cannot remove whole
@@ -37,6 +43,10 @@ from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_even
 from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitError
 from orch_it.merge.line import holder_of, run_line
+from orch_it.merge.main_check import ROLE as MAIN_ROLE
+from orch_it.merge.main_check import check_main
+from orch_it.merge.reconcile import ROLE as SWEEP_ROLE
+from orch_it.merge.reconcile import reconcile
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr
 from orch_it.merge.settings import MergeSettings
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, REQUIRED_JOBS_SETTING
@@ -44,7 +54,7 @@ from orch_it.tickets.commands import OWNER_SETTING
 from orch_it.tickets.gh_check import read_event
 from orch_it.tickets.park import ROLE as SCRIPT
 
-GROUPS = ("merge", "pr", "follow")
+GROUPS = ("merge", "pr", "follow", "main", "reconcile")
 ERRORS = (lock.LockError, PrError, FollowError)
 
 
@@ -67,6 +77,15 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p.add_argument("--role", default=ORCH)
 
+    group = commands.add_parser("main", help="the main line's tests").add_subparsers(dest="command", required=True)
+    p = group.add_parser("check", parents=[repo], help="open, keep or close the red-on-main tickets")
+    p.add_argument("--branch", default="main", help="the branch whose tests runs are read (default: main)")
+    p.add_argument("--role", default=MAIN_ROLE)
+
+    p = commands.add_parser("reconcile", parents=[repo], help="the scheduled repair of every mismatch")
+    p.add_argument("--base", default="main", help="the branch of the merge line (default: main)")
+    p.add_argument("--role", default=SWEEP_ROLE)
+
     p = commands.add_parser("follow", parents=[repo], help="move a ticket as its pull request stands")
     p.add_argument("pr", nargs="?", type=int, help="the pull request (or give --event)")
     p.add_argument("--event", metavar="PATH", help="a GitHub event payload ($GITHUB_EVENT_PATH)")
@@ -80,6 +99,10 @@ def run(args, store_of: Callable[[], Store], repo_of: Callable[[str], str]) -> t
         return _pr_open(args, store_of, repo_of, now), 0
     if args.group == "follow":
         return _follow(args, store_of, repo_of, now), 0
+    if args.group == "main":
+        return _main_check(args, store_of, repo_of, now), 0
+    if args.group == "reconcile":
+        return _reconcile(args, store_of, repo_of, now), 0
     if args.command == "line":
         return _line(args, store_of, repo_of), 0
     return _unlock(args, store_of, repo_of, now), 0
@@ -131,6 +154,29 @@ def _follow(args, store_of, repo_of, now: datetime) -> str:
                   now=now, role=args.role, required=required_jobs(raw), owner=owner_login(raw))
     ticket = f"#{done.ticket}" if done.ticket else "-"
     return f"#{done.pr} {done.outcome} ticket={ticket} {done.detail}".rstrip() + "\n"
+
+
+def _main_check(args, store_of, repo_of, now: datetime) -> str:
+    repo = args.repo or repo_of(".")
+    done = check_main(GhPullHub(), store_of(), repo, args.branch,
+                      settings=MergeSettings.from_settings(settings.load(), repo), now=now, role=args.role)
+    opened = ",".join(f"#{n}" for n in done.opened) or "-"
+    closed = ",".join(f"#{n}" for n in done.closed) or "-"
+    return f"main {done.outcome} at {(done.sha or '-')[:12]} closed={closed} opened={opened}\n"
+
+
+def _reconcile(args, store_of, repo_of, now: datetime) -> str:
+    repo = args.repo or repo_of(".")
+    raw = settings.load()
+    done = reconcile(GhPullHub(), store_of(), repo, args.base, settings=MergeSettings.from_settings(raw, repo), now=now,
+                     role=args.role, required=required_jobs(raw), owner=owner_login(raw),
+                     bring_events=os.environ.get("GITHUB_ACTIONS") != "true")
+    lines = ["actions=on" if done.actions else "actions=off: the sweep runs here"]
+    lines += [f"{code} {what}" for code, what in done.repairs]
+    lines += [f"not followed {why}" for why in done.failed]
+    if done.imported:
+        lines.append(f"brought in {done.imported} events files of the workflows")
+    return "".join(f"{line}\n" for line in lines)
 
 
 def _line(args, store_of, repo_of) -> str:
