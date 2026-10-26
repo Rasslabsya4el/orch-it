@@ -2,7 +2,7 @@
 
 Date: 2026-10-25. Platform: Windows 10 (win32), amd64.
 
-The reports in `pytest/`, `jest/` and `go/` are unedited tool output: each was written by the tool named below and not touched by hand afterwards (not even whitespace, hostnames or timestamps). Their only post-processing is git's text normalisation to LF on commit.
+The reports in `pytest/`, `jest/` and `go/` are tool output: each was written by the tool named below and not touched by hand afterwards (not even whitespace or timestamps), with one exception: the machine's host name in every `hostname="..."` attribute of the `go/` and `pytest/` reports was replaced with `fixture-host`, and the machine's home-folder prefix in the paths of `jest/red.xml`, `pytest/red.xml` and `pytest/green.xml` (stack frames and skip locations) was replaced with `C:\fixtures\` (#395: the first commit of these files carried both). Nothing else was edited. Their other post-processing is git's text normalisation to LF on commit.
 
 The sources the reports were produced from are in `sources/<tool>/<scenario>/`. Each scenario has the same three results:
 
