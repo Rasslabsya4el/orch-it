@@ -425,7 +425,6 @@ def main(argv: list[str] | None = None) -> int:
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, ParkError, CommandError, RunError,
             scanner.ScanError, hook.ReverseError, ResearchRefused) as e:
-            scanner.ScanError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end
