@@ -11,6 +11,10 @@ def act(command, tool="Bash", cwd="/work/self", windows=False):
     return actions(command, tool=tool, cwd=cwd, env={}, windows=windows)
 
 
+def deletes(command, **kw):
+    return [a for a in act(command, **kw) if isinstance(a, Delete)]
+
+
 def guarded(command, **kw):
     return [a for a in act(command, **kw) if isinstance(a, (Delete, Move, Stop))]
 
@@ -74,3 +78,12 @@ def test_a_raw_string_literal_path_in_a_code_body_is_read():
 def test_busybox_and_ifs_spliced_deletes_are_read():
     assert [a for a in act("busybox rm -rf ../tickets") if isinstance(a, Delete)][0].targets == ("../tickets",)
     assert [a for a in act("rm${IFS}-rf${IFS}../tickets") if isinstance(a, Delete)][0].targets == ("../tickets",)
+
+
+def test_a_cd_to_a_windows_drive_path_in_git_bash_replaces_the_cwd():
+    # Git Bash on Windows: `cd 'C:/x' && rm -rf junk` must track the drive path as the new cwd,
+    # not glue it onto the old one (which lost the dir and refused the relative delete)
+    for drive in ("C:/work/other", r"C:\work\other"):
+        d = deletes(f"cd '{drive}' && rm -rf junk", windows=True, cwd="C:/work/self")[0]
+        assert d.cwd is not None and d.cwd.replace("\\", "/").lower() == "c:/work/other", drive
+        assert d.targets == ("junk",)
