@@ -107,9 +107,16 @@ def test_a_perl_or_ruby_delete_names_its_path(command, rule):
     assert any(t is not None and t.startswith(OTHER) for t in found.targets), found
 
 
-def test_a_perl_or_ruby_delete_with_a_computed_path_is_unreadable():
-    assert None in named("perl -e 'unlink $f'", "perl-e").targets
-    assert None in named("ruby -e \"FileUtils.rm_rf(path)\"", "ruby-e").targets
+def test_a_perl_or_ruby_delete_with_a_computed_path_is_not_refused():
+    # a computed path (a variable) is unreadable, so it is not guessed at — like `os.rmdir(p)`,
+    # it passes rather than blocking ordinary code; only a literal path is judged
+    assert [a for a in act("perl -e 'unlink $f'") if a.rule_id == "perl-e"] == []
+    assert [a for a in act("ruby -e \"FileUtils.rm_rf(path)\"") if a.rule_id == "ruby-e"] == []
+
+
+def test_a_perl_or_ruby_delete_with_a_literal_path_is_caught():
+    assert named("perl -e 'unlink \"/work/other\"'", "perl-e").targets == ("/work/other",)
+    assert named("ruby -e 'FileUtils.rm_rf(\"/work/other\")'", "ruby-e").targets == ("/work/other",)
 
 
 @pytest.mark.parametrize("command", [
