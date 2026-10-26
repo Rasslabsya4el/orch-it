@@ -38,15 +38,14 @@ def test_an_existing_label_is_only_added():
     assert [c[:2] for c in gh.calls] == [["label", "list"], ["pr", "edit"]]
 
 
-def test_the_update_prs_are_the_skills_update_branches_of_any_state():
-    gh = FakeGh({("pr", "list"): json.dumps([
-        {"url": "u/1", "headRefName": "skills-update/abc-123", "state": "OPEN"},
-        {"url": "u/2", "headRefName": "feature", "state": "OPEN"},
-        {"url": "u/3", "headRefName": "skills-update/def-456", "state": "CLOSED"}])})
-    assert GithubForge("o/r", gh=gh).update_prs() == [
-        {"url": "u/1", "branch": "skills-update/abc-123", "state": "OPEN"},
-        {"url": "u/3", "branch": "skills-update/def-456", "state": "CLOSED"}]
-    assert gh.calls[0][:4] == ["pr", "list", "--state", "all"]
+def test_the_update_prs_are_read_from_every_page_and_filtered_by_branch():
+    lines = [{"url": "u/1", "branch": "skills-update/abc-123", "state": "OPEN"},
+             {"url": "u/3", "branch": "skills-update/def-456", "state": "MERGED"}]
+    gh = FakeGh({("api", "--paginate"): "\n".join(json.dumps(line) for line in lines) + "\n"})
+    assert GithubForge("o/r", gh=gh).update_prs() == lines
+    [call] = gh.calls
+    assert call[:3] == ["api", "--paginate", "repos/o/r/pulls?state=all&per_page=100"]
+    assert 'startswith("skills-update/")' in call[call.index("--jq") + 1] and "--repo" not in call
 
 
 def test_the_body_goes_by_file_and_the_rest_are_plain_calls():
@@ -65,5 +64,8 @@ def test_the_body_goes_by_file_and_the_rest_are_plain_calls():
 
 def test_a_refusal_is_its_own_error():
     with pytest.raises(SkillsError) as e:
-        GithubForge("o/r", gh=FakeGh(fail={("pr", "list")})).update_prs()
+        GithubForge("o/r", gh=FakeGh(fail={("api", "--paginate")})).update_prs()
+    assert e.value.code == "forge_failed"
+    with pytest.raises(SkillsError) as e:
+        GithubForge("o/r", gh=FakeGh(fail={("pr", "merge")})).merge_when_green("u/1")
     assert e.value.code == "forge_failed"

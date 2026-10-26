@@ -17,7 +17,6 @@ from orch_it.skills.copies import SkillsError
 from orch_it.skills.update import BRANCH_PREFIX
 from orch_it.testruns.github import Gh, GithubError, run_gh
 
-PR_LIST_LIMIT = "200"  # the skills-update pull requests of any state, newest first
 LABEL_LIST_LIMIT = "500"
 TESTS_WORKFLOW = "tests.yml"
 
@@ -35,10 +34,19 @@ class GithubForge:
             raise SkillsError("forge_failed", str(e)) from None
 
     def update_prs(self) -> list[dict]:
-        found = json.loads(self._gh("pr", "list", "--state", "all", "--limit", PR_LIST_LIMIT,
-                                    "--json", "url,headRefName,state") or "[]")
-        return [{"url": pr["url"], "branch": pr["headRefName"], "state": pr["state"]}
-                for pr in found if pr["headRefName"].startswith(BRANCH_PREFIX)]
+        """Every pull request of a skills-update branch, of any state and age: every page of the
+        repo's pull requests, newest first, filtered by branch."""
+
+        pick = (f'.[] | select(.head.ref | startswith("{BRANCH_PREFIX}")) | {{url: .html_url, branch: .head.ref,'
+                ' state: (if .merged_at then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end)}')
+        try:
+            said = self._run(["api", "--paginate", f"repos/{self.repo}/pulls?state=all&per_page=100", "--jq", pick])
+        except GithubError as e:
+            raise SkillsError("forge_failed", str(e)) from None
+        try:
+            return [json.loads(line) for line in said.splitlines() if line.strip()]
+        except ValueError as e:
+            raise SkillsError("forge_failed", f"gh api pulls: {e}") from None
 
     def create_pr(self, branch: str, title: str, body: str) -> str:
         with tempfile.TemporaryDirectory() as folder:

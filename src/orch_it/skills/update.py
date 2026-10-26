@@ -245,8 +245,11 @@ def _export(repo: Path, commit: str, into: Path) -> None:
                           timeout=GIT_TIMEOUT_SECONDS, creationflags=NO_WINDOW)
     if data.returncode != 0:
         raise SkillsError("git_failed", f"git archive: {data.stderr.decode('utf-8', 'replace').strip()[:300]}")
-    with tarfile.open(fileobj=io.BytesIO(data.stdout)) as archive:
-        archive.extractall(into, filter="data")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data.stdout)) as archive:
+            archive.extractall(into, filter="data")
+    except (tarfile.TarError, OSError) as e:
+        raise SkillsError("git_failed", f"the tree of {commit[:12]} could not be laid out: {e}") from None
 
 
 def _commit_skills(repo: Path, base: str, scratch: Path, message: str) -> str:
@@ -256,14 +259,18 @@ def _commit_skills(repo: Path, base: str, scratch: Path, message: str) -> str:
     with tempfile.TemporaryDirectory() as index_dir:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(index_dir) / "index")}
         _run(repo, "read-tree", base, env=env)
-        before = set(_run(repo, "ls-tree", "-r", "--name-only", base, "--", folder).splitlines())
+        modes = {}  # path -> mode on base, read NUL-separated so no path comes back quoted
+        for entry in _run(repo, "ls-tree", "-r", "-z", base, "--", folder).split("\0"):
+            if entry:
+                meta, _, path = entry.partition("\t")
+                modes[path] = meta.split()[0]
         files = sorted(p for p in (scratch / folder).rglob("*") if p.is_file())
         rels = [p.relative_to(scratch).as_posix() for p in files]
         shas = _run(repo, "hash-object", "-w", "--no-filters", "--stdin-paths",
                     stdin="".join(f"{p}\n" for p in files).encode()).splitlines()
-        info = [f"100644 {sha}\t{rel}" for sha, rel in zip(shas, rels)]
-        info += [f"0 {_EMPTY_BLOB}\t{rel}" for rel in sorted(before - set(rels))]
-        _run(repo, "update-index", "--index-info", env=env, stdin=("\n".join(info) + "\n").encode())
+        info = [f"{modes.get(rel, '100644')} {sha}\t{rel}" for sha, rel in zip(shas, rels)]
+        info += [f"0 {_EMPTY_BLOB}\t{rel}" for rel in sorted(modes.keys() - set(rels))]
+        _run(repo, "update-index", "-z", "--index-info", env=env, stdin="".join(f"{line}\0" for line in info).encode())
         tree = _run(repo, "write-tree", env=env)
     return _run(repo, "commit-tree", tree, "-p", base, "-m", message)
 
@@ -305,14 +312,20 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
             return Done("no_change", found.new_commit)
         prefix = f"{BRANCH_PREFIX}{found.new_commit[:12]}-"
         prs = forge.update_prs()
-        mine = [p for p in prs if p["branch"].startswith(prefix)]
-        if any(p["state"] == "OPEN" for p in mine):
-            pr = next(p for p in mine if p["state"] == "OPEN")
-            forge.update_branch(pr["url"])
-            return Done("already_open", found.new_commit, pr["url"],
-                        _settle(forge, found, pr["url"], pr["branch"], dispatch_tests))
-        if mine:
-            return Done("declined", found.new_commit, mine[0]["url"])
+        older = [p["url"] for p in prs if p["state"] == "OPEN" and not p["branch"].startswith(prefix)]
+        mine_open = [p for p in prs if p["state"] == "OPEN" and p["branch"].startswith(prefix)]
+        mine_closed = [p for p in prs if p["state"] == "CLOSED" and p["branch"].startswith(prefix)]
+        if mine_open:
+            pr = mine_open[0]
+            failed = _attempt(lambda: forge.update_branch(pr["url"]))
+            failed += _attempt(lambda: _supersede(forge, older, pr["url"]))
+            labels = _settle(forge, found, pr["url"], pr["branch"], dispatch_tests)
+            if failed:
+                raise failed[0]
+            return Done("already_open", found.new_commit, pr["url"], labels)
+        if mine_closed:
+            _supersede(forge, older, mine_closed[0]["url"])
+            return Done("declined", found.new_commit, mine_closed[0]["url"])
         branch = prefix + base[:8]
         copies.write(scratch, found.new_tree, new_manifest(found))
         refs = references.check(scratch)
@@ -323,7 +336,24 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
     title = f"His skills move to {found.new_commit[:12]}: " + ", ".join(
         f"{c.cls} {c.name}" for c in found.changed[:4]) + (" ..." if len(found.changed) > 4 else "")
     pr = forge.create_pr(branch, title[:200], pr_body(found, refs))
-    for older in prs:
-        if older["state"] == "OPEN" and older["branch"].startswith(BRANCH_PREFIX):
-            forge.close_pr(older["url"], f"Superseded by {pr}: his upstream moved on.")
-    return Done("opened", found.new_commit, pr, _settle(forge, found, pr, branch, dispatch_tests))
+    failed = _attempt(lambda: _supersede(forge, older, pr))
+    labels = _settle(forge, found, pr, branch, dispatch_tests)
+    if failed:
+        raise failed[0]
+    return Done("opened", found.new_commit, pr, labels)
+
+
+def _attempt(step) -> list[SkillsError]:
+    try:
+        step()
+        return []
+    except SkillsError as e:
+        return [e]
+
+
+def _supersede(forge: Forge, older: list[str], by: str) -> None:
+    """Close each open pull request of an older upstream commit; a refusal is raised after the rest."""
+
+    failed = [e for url in older for e in _attempt(lambda: forge.close_pr(url, f"Superseded by {by}: his upstream moved on."))]
+    if failed:
+        raise failed[0]

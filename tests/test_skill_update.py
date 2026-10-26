@@ -99,9 +99,11 @@ class FakeForge:
         self.auto.append(pr)
 
     def update_branch(self, pr):
+        self._maybe_fail("update_branch")
         self.updated.append(pr)
 
     def close_pr(self, pr, comment):
+        self._maybe_fail("close_pr")
         self.closed.append((pr, comment))
 
     def dispatch_tests(self, branch):
@@ -238,6 +240,48 @@ def test_a_branch_an_earlier_run_pushed_without_its_pr_gets_its_pr(world):
     forge.fail.clear()
     done = run_update(world, forge)
     assert done.status == "opened" and len(forge.created) == 1
+
+
+def test_our_files_beside_the_copies_keep_their_names_and_modes(world):
+    ours = world["repo"] / ".claude" / "skills" / "write-ticket"
+    ours.mkdir()
+    (ours / "SKILL.md").write_bytes(b"---\nname: write-ticket\n---\n")
+    (ours / "référence.md").write_bytes("é\n".encode())
+    (ours / "run.sh").write_bytes(b"#!/bin/sh\n")
+    git(world["repo"], "add", "-A")
+    git(world["repo"], "update-index", "--chmod=+x", ".claude/skills/write-ticket/run.sh")
+    git(world["repo"], "commit", "-q", "-m", "ours")
+    git(world["repo"], "push", "-q", "origin", "HEAD:main")
+    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge()
+    run_update(world, forge)
+    [(branch, _, _)] = forge.created
+    git(world["repo"], "fetch", "-q", "origin", branch)
+    changed = git(world["repo"], "-c", "core.quotePath=false", "diff", "--summary", "--name-status", "origin/main",
+                  "FETCH_HEAD")
+    assert "write-ticket" not in changed
+    assert set(changed.split()) >= {"A", ".claude/skills/wizard/SKILL.md", "M", ".claude/skills/pocock.json"}
+
+
+def test_older_open_prs_are_superseded_on_every_run_that_finds_a_change(world):
+    up = newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    old = {"url": "u/3", "branch": "skills-update/aaaaaaaaaaaa-11111111", "state": "OPEN"}
+    current = {"url": "u/4", "branch": f"skills-update/{up[:12]}-22222222", "state": "OPEN"}
+    forge = FakeForge(prs=[old, current])
+    assert run_update(world, forge).status == "already_open"
+    assert forge.closed == [("u/3", "Superseded by u/4: his upstream moved on.")]
+    declined = FakeForge(prs=[old, dict(current, state="CLOSED")])
+    assert run_update(world, declined).status == "declined"
+    assert declined.closed == [("u/3", "Superseded by u/4: his upstream moved on.")]
+
+
+def test_a_branch_that_cannot_be_brought_up_to_date_still_gets_its_tests_and_label(world):
+    up = newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
+    current = {"url": "u/4", "branch": f"skills-update/{up[:12]}-22222222", "state": "OPEN"}
+    forge = FakeForge(prs=[current], fail={"update_branch"})
+    with pytest.raises(SkillsError):
+        run_update(world, forge, dispatch_tests=True)
+    assert forge.dispatched == [current["branch"]] and forge.labels == [("u/4", "needs-triage")]
 
 
 def test_the_update_starts_from_origin_main_whatever_the_work_tree_holds(world):
