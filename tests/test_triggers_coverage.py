@@ -4,12 +4,10 @@ cases yield an action naming the path ("/work/other", another worktree) or an op
 cases yield nothing, or a Delete whose only target is not a protected path ("/work/self" is the
 session's own worktree)."""
 
-import base64
-
 import pytest
 
-from orch_it.guards import shell, triggers
-from orch_it.guards.triggers import Delete, Move, Stop, actions
+from orch_it.guards import shell
+from orch_it.guards.triggers import Delete, Stop, actions
 
 OTHER = "/work/other"
 
@@ -24,22 +22,6 @@ def deletes(command, **kw):
 
 def stops(command, **kw):
     return [a for a in act(command, **kw) if isinstance(a, Stop)]
-
-
-def moves(command, **kw):
-    return [a for a in act(command, **kw) if isinstance(a, Move)]
-
-
-def named(command, rule, **kw):
-    """The Delete or Move of `rule` that `command` yields, with its objects."""
-    for a in act(command, **kw):
-        if getattr(a, "rule_id", None) == rule:
-            return a
-    raise AssertionError(f"no {rule} from {command!r}: {act(command, **kw)}")
-
-
-def objects(action):
-    return action.sources if isinstance(action, Move) else action.targets
 
 
 # --- 1. an unreadable head is opaque, never silent -------------------------------------------
