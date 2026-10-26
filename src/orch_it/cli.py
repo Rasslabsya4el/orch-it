@@ -1,5 +1,6 @@
 """The command line: `python -m orch_it events <command>` (#393 decisions 8 and 9; #394 decisions
-7 and 9 for `import-github` and `test-places`) and `python -m orch_it tests run` (#394 decision 9).
+7 and 9 for `import-github` and `test-places`), `python -m orch_it tests run` (#394 decision 9) and
+`python -m orch_it research <brief>` (#396 decision 1, the bridge's command-line front).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -16,6 +17,8 @@ from pathlib import Path
 from orch_it import settings
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
+from orch_it.research import run as research_run
+from orch_it.research.settings import ResearchRefused, ResearchSettings
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
@@ -27,6 +30,8 @@ EXIT_INTERRUPTED = 130
 # stopped): a script tells "red" from "no answer" without reading the line
 TESTS_EXIT = {"passed": 0, "failed": 1}
 TESTS_EXIT_OTHER = 3
+# `research` exits the same way: 0 passed, 1 failed (a reply that is no report), 3 no result
+RESEARCH_EXIT = TESTS_EXIT
 
 
 _INTEGER = re.compile(r"-?(0|[1-9][0-9]*)")
@@ -124,6 +129,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
     p.add_argument("--ticket", type=int)
     p.add_argument("--role", default="script")
+
+    p = commands.add_parser("research", parents=[common], help="run a brief through the research bridge")
+    p.add_argument("brief", help="the brief file (Markdown); the report goes to the path it names")
+    p.add_argument("--model", help="a model alias of the setting research.models (default: by brief size)")
+    p.add_argument("--no-reddit", action="store_true", help="primary sources: no Reddit link required")
+    p.add_argument("--report", metavar="PATH", help="write the report here instead of the brief's path")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
+    p.add_argument("--repo", help="owner/name (default: from the work tree's origin)")
+    p.add_argument("--ticket", type=int)
+    p.add_argument("--result-file", metavar="PATH", help=argparse.SUPPRESS)  # the MCP front's job file
     return root
 
 
@@ -163,6 +178,27 @@ def _tests_run(args) -> tuple[str, int]:
     line = (f"run={done.run} place={done.place} outcome={done.outcome} reason={done.reason or '-'}"
             f" collected={done.collected} failed={done.failed}\n")
     return line, TESTS_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
+
+
+def _research(args) -> tuple[str, int]:
+    try:
+        brief = Path(args.brief).read_text("utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        raise ResearchRefused("brief_unreadable", f"{args.brief}: {e}") from None
+    repo = args.repo or _repo_of(args.work_tree)
+    done = research_run.research(
+        brief, settings=ResearchSettings.from_settings(settings.load()), store=_store(args), repo=repo,
+        work_tree=Path(args.work_tree), brief_name=Path(args.brief).stem, model=args.model,
+        no_reddit=args.no_reddit, report_to=args.report, ticket=args.ticket)
+    if args.result_file:
+        research_run.write_result(Path(args.result_file), done)
+    tokens = done.tokens
+    line = (f"run={done.run} outcome={done.outcome} reason={done.reason or '-'} model={done.model_alias}"
+            f" report={done.report_path or done.partial_path or '-'} report_from={done.report_from or '-'}"
+            f" chars={done.report_chars} links={done.links} reddit_urls={done.reddit_urls}"
+            f" compactions={done.compactions} minutes={done.minutes}"
+            f" tokens_in={tokens.get('tokens_in', 0)} helper_tokens_in={tokens.get('helper_tokens_in', 0)}\n")
+    return line, RESEARCH_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
 
 
 def _run(args) -> str:
@@ -219,10 +255,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.group == "tests":
             text, code = _tests_run(args)
+        elif args.group == "research":
+            text, code = _research(args)
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, CommandError, RunError) as e:
+            queries.QueryError, github.GithubError, CommandError, RunError, ResearchRefused) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end

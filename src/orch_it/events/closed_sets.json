@@ -105,8 +105,8 @@
       "ended": {"files_copied": {}, "stubs_written": {}, "labels_created": {}}
     },
     "research_run": {
-      "started": {"brief": {}, "model_alias": {}, "no_reddit": {}},
-      "ended": {"tokens_in": {}, "tokens_out": {}, "helper_tokens_in": {}, "helper_tokens_out": {}, "reddit_urls": {}, "search_429": {}, "compactions": {}, "report_path": {}, "report_chars": {}, "reason": {"codes": "research_run_reason"}, "report_from": {"codes": "report_from"}, "links": {}, "last_chars": {}, "tokens_reasoning": {}, "tokens_cache_read": {}, "tokens_cache_write": {}, "helper_tokens_reasoning": {}, "helper_tokens_cache_read": {}, "helper_tokens_cache_write": {}, "helper_sessions": {}, "helper_depth": {}, "unread_sessions": {}}
+      "started": {"brief": {}, "model_alias": {}, "no_reddit": {}, "brief_chars": {}, "brief_sha": {}, "model": {}, "helpers": {}},
+      "ended": {"tokens_in": {}, "tokens_out": {}, "helper_tokens_in": {}, "helper_tokens_out": {}, "reddit_urls": {}, "search_429": {}, "compactions": {}, "report_path": {}, "report_chars": {}, "reason": {"codes": "research_run_reason"}, "report_from": {"codes": "report_from"}, "links": {}, "last_chars": {}, "tokens_reasoning": {}, "tokens_cache_read": {}, "tokens_cache_write": {}, "helper_tokens_reasoning": {}, "helper_tokens_cache_read": {}, "helper_tokens_cache_write": {}, "helper_sessions": {}, "helper_depth": {}, "unread_sessions": {}, "partial_path": {}, "minutes": {}, "opencode_session": {}, "server_error": {}}
     },
     "process": {
       "started": {"program": {}, "pid": {}, "argv0": {}, "hidden": {}, "launched_by": {}, "mechanism": {}},
