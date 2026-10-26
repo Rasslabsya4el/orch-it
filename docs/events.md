@@ -84,6 +84,8 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `setting_source` | `repo`, `machine`, `default` |
 | `resume_cause` | `suspend`, `hibernate` |
 | `attempt_reason` | `red`, `red_on_main`, `no_result`, `conflict` |
+| `line_reason` | `empty`, `bound`, `lock_busy`, `lock_stale` |
+| `line_result` | `merged`, `left`, `starved`, `bound`, `refused` |
 
 ## Step ids
 
@@ -114,6 +116,7 @@ Each step id is written as `step.started` and `step.ended` with the envelope `st
 | `plan` | `ticket` | `units`, `self_done`, `reason` (`plan_reason`) | ORCH's split of a ticket, re-run when the ticket changes |
 | `close` | `ticket`, `pr` | `reason` (`close_reason`) | the workflow that closes a ticket after its PR merges |
 | `reconcile` | `run` | `repairs` (`repair`) | the scheduled repair of every mismatch |
+| `line` | `base`, `prs` | `merged`, `left`, `reason` (`line_reason`) | one run of a repo's merge line |
 
 Every `step.ended` also carries `outcome` (from `outcome`) and may carry `reason`, from the step's own list plus
 `step_ended_any` (`suspended` only with `no_result`, `lease_lost` only with `lost`). A `reason` is always a code (the
@@ -134,6 +137,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `skill.called` | `skill`, `called_at_step`, `before_first_edit` | is each skill called at its step |
 | `skill.shadowed` | `skill`, `copy`, `same_text` | a personal skill of a repo skill's name that replaces it in every session |
 | `lock.removed` | `holder`, `since`, `held_minutes` | a stale merge-line lock removed by hand, and whose it was |
+| `line.served` | `pr`, `result` (`line_result`), `followed`, `waited_minutes`, `updates` | each head of the merge line: how long it waited and how often it was brought up to date |
 | `report_line.checked` | `label` (`report_label`), `claimed`, `verified`, `accepted`, `first_edit_path` | false report lines; a stop held for a missing call |
 | `rule_file.read` | `path`, `sha`, `lines_read`, `lines_total` | does a role read its rules and the glossary in full |
 | `context.crossed` | `threshold` (`context_threshold`), `tokens`, `action_after` (`context_action`) | sessions running past their context line |
