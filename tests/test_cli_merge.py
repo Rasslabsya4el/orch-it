@@ -91,6 +91,30 @@ def test_pr_open_prints_the_pull_request_and_the_park(github, tmp_path, capsys):
     assert ["rev-parse", "--abbrev-ref", "HEAD"] in calls
 
 
+def test_follow_prints_what_it_did_and_an_event_with_no_pull_request_is_skipped(github, tmp_path, capsys):
+    import json
+
+    from fake_github import FAILED
+    from follow_world import ROWS_NO_AFTER
+
+    hub, _ = github
+    rows = tmp_path / "rows.md"
+    rows.write_text(ROWS_NO_AFTER, "utf-8")
+    store = str(tmp_path / "events")
+    run(capsys, "--store", store, "pr", "open", "10", "--acceptance", str(rows), "--repo", REPO)
+    pr = max(hub.pulls)
+    hub.checks_on(hub.head(pr), FAILED, failing=["t::a"])
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"number": pr}}), "utf-8")
+    assert run(capsys, "--store", store, "follow", "--event", str(event), "--repo", REPO) == (
+        0, f"#{pr} red ticket=#10 1 tests\n", "")
+    event.write_text(json.dumps({"issue": {"number": 999}}), "utf-8")
+    code, out, _ = run(capsys, "--store", store, "follow", "--event", str(event), "--repo", REPO)
+    assert (code, out) == (0, "skipped: #999 waits on no pull request of owner-x/repo-y\n")
+    code, _, err = run(capsys, "--store", store, "follow", str(pr), "--event", str(event), "--repo", REPO)
+    assert code == 2 and err.startswith("error: bad_options")
+
+
 def test_pr_open_with_an_acceptance_file_that_is_not_there_is_refused(github, tmp_path, capsys):
     code, out, err = run(capsys, "--store", str(tmp_path / "events"), "pr", "open", "10", "--acceptance",
                          str(tmp_path / "none.md"), "--repo", REPO)

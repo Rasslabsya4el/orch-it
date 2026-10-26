@@ -45,9 +45,11 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p.add_argument("--event", required=True, metavar="PATH", help="the event payload ($GITHUB_EVENT_PATH)")
 
 
-def run(args, store_of: Callable[[], Store], repo_of: Callable[[], str], render) -> str:
+def run(args, store_of: Callable[[], Store], repo_of: Callable[[], str], render,
+        follow_of: Callable[[Store, str, datetime, str], Callable[[int], str]] | None = None) -> str:
     """The command's printed result; the store and the repo are opened only by the commands
-    that need them."""
+    that need them. `follow_of(store, repo, now, role)` gives the reader the follow of a pull
+    request (#400), for its `pr_ended` parks."""
 
     now = datetime.now(UTC)
     if args.command == "check-github":
@@ -59,8 +61,10 @@ def run(args, store_of: Callable[[], Store], repo_of: Callable[[], str], render)
     if args.command == "unpark":
         taken = unpark(GhHub(), store_of(), repo_of(), args.number, now=now, role=args.role)
         return f"unparked: {taken.line if taken else 'a park that could not be read'}\n"
-    owner = settings.load().get(OWNER_SETTING)
-    reports = read_parks(GhHub(), store_of(), repo_of(), now=now, owner=owner if isinstance(owner, str) else None,
-                         role=args.role)
+    raw = settings.load()
+    owner = raw.get(OWNER_SETTING)
+    hub, store, repo = GhHub(), store_of(), repo_of()
+    reports = read_parks(hub, store, repo, now=now, owner=owner if isinstance(owner, str) else None, role=args.role,
+                         follow=follow_of(store, repo, now, args.role) if follow_of else None)
     return render(QueryResult(["ticket", "outcome", "park", "detail"],
                               [(r.number, r.outcome, r.line, r.detail) for r in reports]))

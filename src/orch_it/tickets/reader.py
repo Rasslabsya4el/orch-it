@@ -13,7 +13,10 @@ that holds a park, the `parked` label or a `Parked:` line, from GitHub alone, an
   a ref that is not there;
 - `waiting`: none of these; nothing is changed;
 - `failed`: a `gh` call about it failed, or it changed while it was read; nothing is written
-  and the next run reads it again (PARK-6).
+  and the next run reads it again (PARK-6);
+- `followed`: given `follow` (#400 decision 3), a `pr_ended` park whose pull request of the same
+  repo has ended is the follow's: the ticket follows its pull request (closed with its rows on a
+  merge, never sent back to ready by the reader) and the report holds the follow's outcome.
 
 `other_way`, `comment`, `late` and `unreadable` go to the brain: the park comes off,
 `needs-triage` goes on, `ready-for-agent` and `ready-for-human` come off (so no agent takes it
@@ -32,6 +35,7 @@ waiting park writes a `step.progressed` of its `wait`; a failed one an `error.ra
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -62,15 +66,16 @@ class ParkReport:
 
 
 def read_parks(hub: Hub, store: Store, repo: str, *, now: datetime, owner: str | None = None,
-               role: str = ROLE) -> list[ParkReport]:
+               role: str = ROLE, follow: Callable[[int], str] | None = None) -> list[ParkReport]:
     """Read, act on and record every parked ticket of `repo`, in number order. `owner`: the
-    login whose comment answers an `owner_answer` park (default: the repo's owner)."""
+    login whose comment answers an `owner_answer` park (default: the repo's owner). `follow`: given a
+    pull request number, moves its ticket and returns the outcome."""
 
     answerer = (owner or repo.split("/")[0]).lower()
     reports = []
     for number in hub.parked(repo):
         try:
-            report = _read_one(hub, store, repo, number, now, answerer, role)
+            report = _read_one(hub, store, repo, number, now, answerer, role, follow)
         except (GithubError, ParkError) as e:
             write_events(store, repo, number, role, None, [
                 ("error.raised", {"component": "tickets_parks", "error_code": e.code, "failed_open": False})])
@@ -81,7 +86,7 @@ def read_parks(hub: Hub, store: Store, repo: str, *, now: datetime, owner: str |
 
 
 def _read_one(hub: Hub, store: Store, repo: str, number: int, now: datetime, answerer: str,
-              role: str) -> ParkReport | None:
+              role: str, follow: Callable[[int], str] | None = None) -> ParkReport | None:
     issue = hub.issue(repo, number)
     if issue is None or not issue.open or issue.is_pr:
         return None  # gone since the list was read
@@ -96,6 +101,11 @@ def _read_one(hub: Hub, store: Store, repo: str, number: int, now: datetime, ans
         reason = ("label_missing" if not held.parked else "line_missing" if not held.park_lines
                   else "lines_many" if len(held.park_lines) > 1 else "line_bad")
         return _to_the_brain(hub, store, issue, run, role, "unreadable", shown, found, now, reason)
+    if follow is not None and found.kind == "pr_ended":
+        target = found.ticket.in_repo(repo)
+        pull = hub.issue(*target) if target[0].lower() == repo.lower() else None
+        if pull is not None and pull.is_pr and not pull.open:
+            return ParkReport(number, "followed", found.line, follow(pull.number))
     outcome, detail = _event(hub, store, repo, found, parked_at, now, answerer)
     if outcome == "waiting" and _a_person_commented(hub, repo, number, parked_at):
         outcome, detail = "comment", "a person commented"

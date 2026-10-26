@@ -120,7 +120,7 @@ def read_results(text: str) -> list[ResultRow] | None:
 def acceptance_comment(pr: int, head: str, body: str, rows: Iterable[ResultRow]) -> str:
     rows = list(rows)
     later = [row.id for row in rows if row.result == "after merge"]
-    table = "".join(f"| {row.id} | {row.result} | {_cell(row.evidence)} |\n" for row in rows)
+    table = "".join(f"| {row.id} | {row.result} | {cell(row.evidence)} |\n" for row in rows)
     tail = (f"\nAfter merge: row{'s' if len(later) > 1 else ''} {', '.join(later)} "
             f"run{'' if len(later) > 1 else 's'} on main once #{pr} merges.\n" if later else "")
     return (f"{LAYER_MARK}\n<!-- orch-it acceptance pr={pr} head={head} body={body} -->\n"
@@ -214,5 +214,7 @@ def _cells(line: str) -> list[str]:
     return [cell.strip() for cell in re.split(r"(?<!\\)\|", inner)]
 
 
-def _cell(text: str) -> str:
+def cell(text: str) -> str:
+    """Text made fit for one cell of a Markdown table: one line, pipes escaped, at most 500 characters."""
+
     return " ".join(text.split()).replace("|", "\\|")[:500]
