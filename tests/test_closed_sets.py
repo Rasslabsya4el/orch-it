@@ -35,6 +35,8 @@ POINT_KINDS = [
     "step.progressed", "machine.resumed",
     # #397 decision 3
     "skill.shadowed",
+    # #400 decision 2
+    "lock.removed",
 ]
 
 OUTCOMES = ["passed", "failed", "no_result", "refused", "lost", "stopped"]
@@ -146,7 +148,7 @@ def test_every_step_id_of_the_list_and_no_other():
 
 def test_every_point_kind_of_the_list_and_no_other():
     assert sorted(schema.point_kinds()) == sorted(POINT_KINDS)
-    assert len(POINT_KINDS) == 48  # 47 of the list, + skill.shadowed (#397)
+    assert len(POINT_KINDS) == 49  # 47 of the list, + skill.shadowed (#397), lock.removed (#400)
 
 
 def test_kinds_are_the_point_kinds_and_the_pair():

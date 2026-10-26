@@ -160,6 +160,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `pr.conflict_resolved` | `pr`, `files` | a PR conflict resolved |
 | `pr.commented` | `pr`, `author_role` (`role`), `answered` | review comments with no reader |
 | `main.red` | `sha`, `test_ids`, `introduced_by_pr` | red on main, its own ticket |
+| `lock.removed` | `lock`, `holder`, `since`, `held_minutes`, `by` | a stale lock removed by hand, and whose it was |
 | `main.reverted` | `sha`, `reverted_sha`, `reason` | main reverted to a sha and why |
 | `doc.edited` | `path`, `doc_kind` (`doc_kind`), `commit`, `required_skill_called`, `term_or_number` | record edits and the skill each needs |
 | `term.missing` | `term`, `where` | a report word not in the glossary |
@@ -248,3 +249,5 @@ the run's latest progress), `ended` (the run's end as the command line's `--done
 and its path) or `gone` (`worker_died`, `worker_lost`: the job's process ended with no answer).
 
 `python -m orch_it tickets check-github --event <file>`: the shape check of the workflow `ticket-shape` on an `issues` event: a ticket that got `ready-for-agent`, or a ready ticket that was edited, is read again and judged by the shape rules; with violations the label comes off, then a comment lists them (the body is never edited); prints `#<n> kept`, `#<n> removed: <codes>` or `skipped`; an event file that is no JSON object is `error: event_unreadable`.
+
+`python -m orch_it [--store PATH] merge unlock [--repo R]`: remove the repo lock of the merge line (the folder `merge-lock/<owner>__<name>` in the per-user data folder) only when it is stale, older than the setting `merge.lock_stale_minutes`; prints `removed the stale lock of <repo>: <holder> since <time>` and writes `lock.removed`. A lock that is not stale is never removed: `error: lock_not_stale` names its holder; no lock is `error: lock_missing`.
