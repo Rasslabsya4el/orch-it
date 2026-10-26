@@ -15,14 +15,17 @@ For the brain:
 
 For an interactive chat (no subagent: no `agent_id`, no `agent_type` other than `brain`; no
 background session: no `sessionKind` `bg` in its transcript's head) whose title starts with
-"brain" (any case, then a colon, a dash, a space or nothing) or equals another repo's brain title,
+"brain" (any case, whatever follows) or equals another repo's brain title,
 and is not exactly this repo's: one line asking the owner, in Russian, to rename the chat to
 exactly this repo's brain title, and what breaks otherwise.
 
 It never stops a prompt or a start. A payload that is no object, a transcript that cannot be read
-(a payload without one included), rules missing on the default branch, a hand-off that cannot be
-read or any error of the hook lets it through, with what could be said, and writes `error.raised`
-(component `brain_hook`, `failed_open`).
+(a payload without one included), settings that cannot be read (the default brain title is used),
+rules missing on the default branch, a hand-off that cannot be read or any error of the hook lets
+it through, with what could be said, and writes `error.raised` (component `brain_hook`,
+`failed_open`). A start whose transcript is not written yet is no error: the first prompt reads it.
+The rules are given once per session: the session's mark is made atomically before they are read,
+and taken back when the hand-off could not be read, so the next prompt tries again.
 """
 
 from __future__ import annotations
@@ -45,8 +48,9 @@ RULES_CHARS = 30_000  # past this the rules are cut, and the cut is said
 COMPONENT = "brain_hook"
 EVENTS = ("SessionStart", "UserPromptSubmit")
 MARK_DAYS = 7  # a session's "rules given" mark older than this is removed
-GIT_SECONDS = 15
-_BRAIN_LIKE = re.compile(r"^\s*brain(?:\s*[:\-–—]|\s|$)", re.IGNORECASE)
+GIT_SECONDS = 5  # at most four reads of origin: the hook's 60 s bound in the settings is never reached
+TITLE_SHOWN = 100  # a title quoted back is cut to this
+_BRAIN_LIKE = re.compile(r"^\s*brain", re.IGNORECASE)
 _SAFE = re.compile(r"[^A-Za-z0-9_-]")
 RENAME = ("This chat's title is {title!r}, not this repo's brain title. Ask the owner, in Russian, to rename this chat "
           "to exactly `{wanted}`; until then it gets no brain rules, no hand-off, no context reminder, and notices "
@@ -73,6 +77,8 @@ def run(raw: str, *, store=None, open_store: Callable | None = None, repo: str |
         payload = None
         error("payload_unreadable")
         return "", 0
+    if payload.get("session_id") == "":
+        del payload["session_id"]  # an empty id is no session: the events carry none
     try:
         event = payload.get("hook_event_name")
         if event not in EVENTS:
@@ -81,19 +87,27 @@ def run(raw: str, *, store=None, open_store: Callable | None = None, repo: str |
         if repo is None:  # not a GitHub repo: no brain of the layer here
             return "", 0
         events["repo"] = repo
-        raw_settings = settings.load()
-        wanted = BrainSettings.of(raw_settings, repo).chat_title
+        said = []
+        try:
+            raw_settings = settings.load()
+            wanted = BrainSettings.of(raw_settings, repo).chat_title
+        except settings.SettingsError as e:
+            error("settings_unreadable")
+            raw_settings, wanted = {}, default_title(repo)
+            said.append(f"orch-it's settings cannot be read ({e.code}); the default brain title `{wanted}` is used.")
         if _subagent(payload):
             return "", 0
         try:
             if session.is_brain(payload, wanted):
-                said = _brain(payload, event, repo, raw_settings, hub, rules or rules_from_origin,
-                              marks or settings.data_folder() / "brain-hook", error, events)
+                said += _brain(payload, event, repo, raw_settings, hub, rules or rules_from_origin,
+                               marks or settings.data_folder() / "brain-hook", error, events)
             elif event == "UserPromptSubmit":
-                said = _rename(payload, repo, raw_settings, wanted)
+                said += _rename(payload, repo, raw_settings, wanted)
             else:
                 said = []
         except session.TranscriptUnreadable:
+            if event == "SessionStart" and _not_written_yet(payload):
+                return "", 0
             error("transcript_unreadable")
             return "", 0
     except Exception as e:  # noqa: BLE001 - a broken hook never stops a prompt, and says so
@@ -109,12 +123,17 @@ def _brain(payload: dict, event: str, repo: str, raw_settings: dict, hub, rules,
            events: dict) -> list[str]:
     said = []
     mark = marks / _mark_name(payload)
-    if event == "SessionStart" or not mark.exists():
+    if _take_mark(marks, mark) or event == "SessionStart":
         said += _rules(payload, rules, error)
-        said += _handoff(payload, repo, raw_settings, hub, error, events)
-        _set_mark(marks, mark)
+        handed, ok = _handoff(payload, repo, raw_settings, hub, error, events)
+        said += handed
+        if not ok:
+            mark.unlink(missing_ok=True)
     if event == "UserPromptSubmit":
-        said += _context(payload, repo, error, events)
+        try:
+            said += _context(payload, repo, error, events)
+        except Exception as e:  # noqa: BLE001 - what is said already stands
+            error(type(e).__name__)
     return said
 
 
@@ -130,7 +149,9 @@ def _rules(payload: dict, rules, error) -> list[str]:
     return [f"The brain's rules (`{RULES_FILE}` on the default branch):\n\n{text}"]
 
 
-def _handoff(payload: dict, repo: str, raw_settings: dict, hub, error, events: dict) -> list[str]:
+def _handoff(payload: dict, repo: str, raw_settings: dict, hub, error, events: dict) -> tuple[list[str], bool]:
+    """What the hand-off adds, and whether it was read (or there is none to read)."""
+
     number = handoff_issue_of(raw_settings, repo)
     found = None
     if number is not None:
@@ -142,16 +163,14 @@ def _handoff(payload: dict, repo: str, raw_settings: dict, hub, error, events: d
             found = handoff.latest(hub, repo, number)
         except Exception:  # noqa: BLE001 - the rules still go in
             error("handoff_unreadable")
-            return [f"The newest hand-off (issue #{number}) could not be read: read it on GitHub."]
-    detail = {"entry_ref": f"{repo}#{number}" if number else None, "found": found is not None,
-              "source": "hand-off issue"}
-    write_events(payload, lambda writer, repo_: writer.write(_envelope(payload, repo_) | {
-        "kind": "handoff.read", "detail": detail}), **events)
+            return [f"The newest hand-off (issue #{number}) could not be read: read it on GitHub."], False
+    _write(payload, events, "handoff.read", {"entry_ref": f"{repo}#{number}" if number else None,
+                                             "found": found is not None, "source": "hand-off issue"})
     if number is None:
-        return ["No hand-off issue is set for this repo: run `python -m orch_it brain handoff ensure`."]
+        return ["No hand-off issue is set for this repo: run `python -m orch_it brain handoff ensure`."], True
     if found is None:
-        return [f"The hand-off issue #{number} holds no hand-off yet."]
-    return [f"The newest hand-off (issue #{number}, {found.at:%Y-%m-%d %H:%M} UTC):\n\n{found.body}"]
+        return [f"The hand-off issue #{number} holds no hand-off yet."], True
+    return [f"The newest hand-off (issue #{number}, {found.at:%Y-%m-%d %H:%M} UTC):\n\n{found.body}"], True
 
 
 def _context(payload: dict, repo: str, error, events: dict) -> list[str]:
@@ -168,9 +187,8 @@ def _context(payload: dict, repo: str, error, events: dict) -> list[str]:
     if past is None:
         return []
     if past.crossed:
-        write_events(payload, lambda writer, repo_: writer.write(_envelope(payload, repo_) | {
-            "kind": "context.crossed",
-            "detail": {"threshold": "context_line", "tokens": past.tokens, "action_after": "told"}}), **events)
+        _write(payload, events, "context.crossed",
+               {"threshold": "context_line", "tokens": past.tokens, "action_after": "told"})
     return [past.said]
 
 
@@ -179,7 +197,8 @@ def _rename(payload: dict, repo: str, raw_settings: dict, wanted: str) -> list[s
     if title is None or title == wanted or session.is_background(payload):
         return []
     if _BRAIN_LIKE.match(title) or title in _other_titles(raw_settings, repo):
-        return [RENAME.format(title=title, wanted=wanted)]
+        shown = title if len(title) <= TITLE_SHOWN else title[:TITLE_SHOWN] + "..."
+        return [RENAME.format(title=" ".join(shown.split()), wanted=wanted)]
     return []
 
 
@@ -199,7 +218,12 @@ def _other_titles(raw_settings: dict, repo: str) -> set[str]:
 def _subagent(payload: dict) -> bool:
     agent = payload.get("agent_type")
     return bool(payload.get("agent_id")) or (
-        isinstance(agent, str) and bool(agent) and agent.rsplit(":", 1)[-1] != session.BRAIN)
+        isinstance(agent, str) and bool(agent) and not session.brain_by(None, agent, ""))
+
+
+def _not_written_yet(payload: dict) -> bool:
+    path = payload.get("transcript_path")
+    return isinstance(path, str) and bool(path) and not Path(path).exists()
 
 
 def _mark_name(payload: dict) -> str:
@@ -210,16 +234,32 @@ def _mark_name(payload: dict) -> str:
     return cleaned if cleaned == key and cleaned else hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()[:32]
 
 
-def _set_mark(marks: Path, mark: Path) -> None:
+def _take_mark(marks: Path, mark: Path) -> bool:
+    """Make the session's mark, atomically: True for the one call that made it (two prompts at once
+    give the rules once). A mark that cannot be made at all is taken as made: the rules are given
+    once more, never fewer."""
+
     try:
         marks.mkdir(parents=True, exist_ok=True)
-        mark.touch()
+        with open(mark, "x"):
+            pass
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+    try:
         old = time.time() - MARK_DAYS * 86400
         for found in marks.iterdir():
             if found.is_file() and found.stat().st_mtime < old:
                 found.unlink(missing_ok=True)
     except OSError:
-        pass  # no mark: the next prompt is given the rules once more, never fewer
+        pass
+    return True
+
+
+def _write(payload: dict, events: dict, kind: str, detail: dict) -> None:
+    write_events(payload, lambda writer, repo: writer.write(_envelope(payload, repo) | {"kind": kind, "detail": detail}),
+                 **events)
 
 
 def _envelope(payload: dict, repo: str) -> dict:

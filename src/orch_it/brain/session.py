@@ -113,8 +113,9 @@ def is_background(payload: dict) -> bool:
 
 
 def _agent_setting(path: str) -> str | None:
-    for number, record in enumerate(_head(path, b"agentSetting")):
-        if value := agent_setting_in_head(0, record):
+    for record in _head(path, b"agentSetting"):
+        value = record.get("agentSetting")
+        if isinstance(value, str) and value:
             return value
     return None
 

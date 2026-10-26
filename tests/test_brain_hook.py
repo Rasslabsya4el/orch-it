@@ -106,7 +106,8 @@ def test_no_hand_off_issue_set_says_how_to_make_one(world, tmp_path):
     assert json.loads(detail)["found"] is False
 
 
-@pytest.mark.parametrize("title", ["brain: orch it", "Brain:orch-it", "BRAIN - orch-it", "Brain: uECP"])
+@pytest.mark.parametrize("title", ["brain: orch it", "Brain:orch-it", "BRAIN - orch-it", "Brain: uECP",
+                                   "Brainstorm the pricing page"])
 def test_a_brain_like_title_that_is_not_this_repo_s_asks_for_the_rename(world, title):
     out, code = run(world, payload(transcript(world["tmp"] / "a.jsonl", title)))
     text = said(out)
@@ -118,7 +119,7 @@ def test_a_brain_like_title_that_is_not_this_repo_s_asks_for_the_rename(world, t
     ("Fix the parser", {}, None),
     ("brain: orch it", {"agent_id": "a1", "agent_type": "worker"}, None),
     ("brain: orch it", {}, {"type": "summary", "sessionKind": "bg"}),
-    ("Brainstorm the pricing page", {}, None),
+    ("Brain: orch-it", {"agent_id": "a1", "agent_type": "worker"}, None),
 ])
 def test_another_title_a_subagent_or_a_background_session_gets_nothing(world, title, extra, head):
     path = transcript(world["tmp"] / "a.jsonl", title, head=head)
@@ -168,3 +169,57 @@ def test_the_repo_s_settings_run_one_hook_at_session_start_and_on_every_prompt()
                 for event in ("SessionStart", "UserPromptSubmit")}
     assert commands["UserPromptSubmit"] == ["python -m orch_it hook brain"]
     assert "python -m orch_it hook brain" in commands["SessionStart"]
+
+
+def test_two_prompts_of_one_session_at_once_give_the_rules_once(world):
+    import threading
+
+    path = transcript(world["tmp"] / "a.jsonl", "Brain: orch-it")
+    outs = []
+    threads = [threading.Thread(target=lambda: outs.append(said(run(world, payload(path))[0]))) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert sum("# The brain: the owner's chat" in out for out in outs) == 1
+
+
+def test_a_hand_off_that_could_not_be_read_is_tried_again_at_the_next_prompt(world):
+    path = transcript(world["tmp"] / "a.jsonl", "Brain: orch-it")
+    world["hub"].failing.add((REPO, 5))
+    run(world, payload(path))
+    world["hub"].failing.clear()
+    assert "Done: the hook." in said(run(world, payload(path))[0])
+
+
+def test_broken_settings_still_find_the_brain_by_the_default_title_and_say_so(world, tmp_path):
+    (tmp_path / "settings.json").write_text("{not json", "utf-8")
+    text = said(run(world, payload(transcript(tmp_path / "a.jsonl", "Brain: orch-it")))[0])
+    assert "# The brain: the owner's chat" in text and "settings cannot be read" in text
+    assert ("brain_hook", "settings_unreadable", True) in errors(world)
+
+
+def test_a_start_before_the_transcript_is_written_is_no_error(world, tmp_path):
+    assert run(world, payload(tmp_path / "not-yet.jsonl", event="SessionStart", source="startup")) == ("", 0)
+    assert errors(world) == []
+
+
+def test_a_huge_title_is_cut_when_quoted_back(world):
+    text = said(run(world, payload(transcript(world["tmp"] / "a.jsonl", "Brain " + "x" * 100_000)))[0])
+    assert len(text) < 1000 and "`Brain: orch-it`" in text
+
+
+def test_an_empty_session_id_still_writes_the_events(world):
+    run(world, payload(transcript(world["tmp"] / "a.jsonl", "Brain: orch-it"), session=""))
+    assert world["store"].query("select count(*) from events where kind = 'handoff.read'").rows == [(1,)]
+
+
+def test_a_broken_context_check_keeps_the_rules_already_given(world, monkeypatch):
+    from orch_it.roles import context
+
+    def broken(*_args):
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr(context, "reminder", broken)
+    text = said(run(world, payload(transcript(world["tmp"] / "a.jsonl", "Brain: orch-it")))[0])
+    assert "# The brain: the owner's chat" in text and ("brain_hook", "RuntimeError", True) in errors(world)

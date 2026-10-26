@@ -80,12 +80,6 @@ class Role:
     inputs: tuple[str, ...] = ()
     report: Report | None = None  # None: the stop hold reads nothing of this role
 
-    @property
-    def is_session(self) -> bool:
-        """A role with no inputs runs as its own session (the brain), never as a spawned subagent."""
-
-        return not self.inputs
-
 
 @dataclass(frozen=True)
 class RoleSet:

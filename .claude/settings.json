@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "deny": [
+      "mcp__ccd_session_mgmt__clear_session",
+      "mcp__ccd_session_mgmt__set_session_title"
+    ]
+  },
   "enabledPlugins": {
     "mattpocock-skills@claude-plugins-official": false,
     "mattpocock-skills@mattpocock": false
@@ -28,7 +34,7 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          {"type": "command", "command": "python -m orch_it hook brain", "timeout": 30}
+          {"type": "command", "command": "python -m orch_it hook brain", "timeout": 60}
         ]
       }
     ],
@@ -47,7 +53,7 @@
       },
       {
         "hooks": [
-          {"type": "command", "command": "python -m orch_it hook brain", "timeout": 30}
+          {"type": "command", "command": "python -m orch_it hook brain", "timeout": 60}
         ]
       }
     ]

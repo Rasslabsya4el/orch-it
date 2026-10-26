@@ -12,6 +12,8 @@ import json
 import os
 from dataclasses import dataclass
 
+from orch_it.roles.hold import prompt_tokens
+
 TAIL_BYTES = 4 * 1024 * 1024  # the end of the transcript read for its last turns
 REMINDER = ("Your context is past your context line ({tokens} of {line} tokens). Answer the owner in full and finish"
             " the step in hand; then write the hand-off comment and leave the next ticket work to the next chat.")
@@ -61,8 +63,6 @@ def prompt_sizes(path: str) -> list[int]:
         except (ValueError, RecursionError):
             continue
         message = record.get("message") if isinstance(record, dict) else None
-        usage = message.get("usage") if isinstance(message, dict) else None
-        if isinstance(usage, dict):
-            parts = [usage.get(k) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
-            sizes.append(sum(p for p in parts if type(p) is int and p > 0))
+        if isinstance(message, dict) and isinstance(message.get("usage"), dict):
+            sizes.append(prompt_tokens(record))
     return sizes

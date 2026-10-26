@@ -191,14 +191,19 @@ def _report_lines(text: str) -> list[str]:
 
 
 def largest_prompt(records: list[dict]) -> int:
-    largest = 0
-    for record in records:
-        message = record.get("message")
-        usage = message.get("usage") if isinstance(message, dict) else None
-        if isinstance(usage, dict):
-            parts = [usage.get(k) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
-            largest = max(largest, sum(p for p in parts if type(p) is int and p > 0))
-    return largest
+    return max((prompt_tokens(record) for record in records), default=0)
+
+
+def prompt_tokens(record: object) -> int:
+    """The prompt size of one transcript record: input, cache read and cache write tokens of its
+    usage (0 for a record that carries none)."""
+
+    message = record.get("message") if isinstance(record, dict) else None
+    usage = message.get("usage") if isinstance(message, dict) else None
+    if not isinstance(usage, dict):
+        return 0
+    parts = [usage.get(k) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
+    return sum(p for p in parts if type(p) is int and p > 0)
 
 
 def _spawn_run(records: list[dict]) -> str | None:
@@ -232,7 +237,8 @@ def judge(payload: dict, roles: RoleSet, *, work_tree: str | Path | None = None)
     that cannot be read raises `TranscriptUnreadable`."""
 
     role_settings = role_of(payload, roles)
-    if role_settings is None or role_settings.report is None or role_settings.is_session:
+    # a role with no inputs is never spawned (the brain): its `report` holds only its context line
+    if role_settings is None or role_settings.report is None or not role_settings.inputs:
         return None
     role = role_settings.name
     path = payload.get("agent_transcript_path")
