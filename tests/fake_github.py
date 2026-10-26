@@ -35,6 +35,7 @@ class FakePull:
     merged_at: datetime | None = None
     merge_sha: str | None = None
     closed_at: datetime | None = None
+    head_repo: str = REPO
 
 
 @dataclass
@@ -128,7 +129,7 @@ class FakeGitHub(FakeHub):
         behind = len([sha for sha in base if sha not in branch])
         return Pull(repo, number, found.title, found.body, found.branch, branch[-1], found.base, found.state,
                     found.draft, found.auto_merge, "conflicting" if found.conflict else "mergeable", behind,
-                    found.created_at, found.merged_at, found.merge_sha, found.closed_at)
+                    found.created_at, found.merged_at, found.merge_sha, found.closed_at, found.head_repo)
 
     def open_pulls(self, repo, base):
         return [self.pull(repo, n) for n, p in sorted(self.pulls.items(), key=lambda item: item[1].created_at)
@@ -143,6 +144,11 @@ class FakeGitHub(FakeHub):
 
     def notes_of(self, number):
         return self.comments(REPO, number)
+
+    def comment(self, repo, number, body):
+        # the layer writes under the owner's `gh`: its comments carry the owner's login
+        self._check(repo, number)
+        self.say(number, body, author=repo.split("/")[0], repo=repo)
 
     def create_pull(self, repo, base, branch, title, body):
         self.calls.append(("create_pull", branch))
@@ -184,7 +190,9 @@ class FakeGitHub(FakeHub):
             hook(number)
         return sha
 
-    def close_pull(self, number):
+    def close_pull(self, repo_or_number, number=None):
+        number = repo_or_number if number is None else number
+        self.calls.append(("close_pull", number))
         found = self.pulls[number]
         found.state, found.closed_at, found.auto_merge = "closed", self.now, None
         self.close(number, reason=None)

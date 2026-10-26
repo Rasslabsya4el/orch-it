@@ -25,12 +25,13 @@ ROWS_NO_AFTER = "\n".join(line for line in ROWS.splitlines() if not line.startsw
 
 
 class Git:
-    def __init__(self):
+    def __init__(self, hub):
         self.calls = []
+        self.hub = hub
 
     def __call__(self, args):
         self.calls.append(args)
-        return ""
+        return f"{self.hub.branches[args[-1].removesuffix('^{commit}')][-1]}\n" if args[0] == "rev-parse" else ""
 
 
 def world(tmp_path, *, body=NO_AFTER_MERGE, rows=ROWS_NO_AFTER, tickets=(10,), now=NOW):
@@ -44,7 +45,7 @@ def world(tmp_path, *, body=NO_AFTER_MERGE, rows=ROWS_NO_AFTER, tickets=(10,), n
         hub.add(number, body, ["ready-for-agent"], title=TITLE)
         branch = f"ticket-{number}"
         hub.branches[branch] = [*hub.branches["main"], hub.sha(f"t{number}-")]
-        prs[number] = open_pr(hub, store, REPO, number, acceptance=rows, branch=branch, base="main", git=Git(),
+        prs[number] = open_pr(hub, store, REPO, number, acceptance=rows, branch=branch, base="main", git=Git(hub),
                               settings=MergeSettings(), now=hub.now).pr
     return hub, store, prs
 

@@ -9,8 +9,9 @@ machine reads the same thing: hidden HTML lines after the layer's own `LAYER_MAR
 - the follow mark on a ticket: what the follow did with it (`red`, `conflict`, ...), so the red
   returns in a row are counted from GitHub alone.
 
-A mark counts only in a comment that carries `LAYER_MARK` and is not a person's: a person who
-pastes one is no layer. Closing keywords are found here too: a pull request says `Refs #N` and no
+A mark counts only in a comment that carries `LAYER_MARK`, written by the layer: a bot (the
+workflows' token) or the owner's own login (the layer's commands run under the owner's `gh`), which
+`of_layer` keeps; a person who pastes a mark is no layer. Closing keywords are found here too: a pull request says `Refs #N` and no
 text the layer pushes may close an issue on merge (MERGE-10).
 """
 
@@ -31,7 +32,7 @@ _FIELD = re.compile(r"([a-z_]+)=(\S*)")
 # GitHub's closing keywords before an issue, `#N`, `owner/repo#N` or an issue link
 _CLOSING = re.compile(
     r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s*"
-    r"(?:[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+#\d+|#\d+|https://github\.com/[^\s/]+/[^\s/]+/issues/\d+)",
+    r"(?:[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+#\d+|#\d+|GH-\d+|https://github\.com/[^\s/]+/[^\s/]+/issues/\d+)",
     re.IGNORECASE)
 
 
@@ -62,6 +63,21 @@ class Ready:
 class Followed:
     outcome: str
     at: datetime
+
+
+def of_layer(comments: Iterable[Comment], owner: str) -> list[Comment]:
+    """The comments the layer may have written: a bot's, or the owner's (`owner`, any case)."""
+
+    return [c for c in comments if c.bot or c.author.lower() == owner.lower()]
+
+
+def is_person(comment: Comment, owner: str) -> bool:
+    """A comment by a person: no bot, and not the layer's own (the owner's login with `LAYER_MARK`);
+    a stranger's comment is a person's whatever it holds."""
+
+    if comment.bot:
+        return False
+    return comment.author.lower() != owner.lower() or LAYER_MARK not in comment.body
 
 
 def closing_keywords(text: str) -> list[str]:

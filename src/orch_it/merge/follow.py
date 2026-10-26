@@ -111,7 +111,7 @@ class _Follow:
         self.hub, self.store, self.repo, self.pull, self.issue = hub, store, repo, pull, issue
         self.settings, self.now, self.role, self.owner, self.required = settings, now, role, owner, required
         self.said = hub.pull_comments(repo, pull.number)
-        started = marks.last_ready(self.said)
+        started = marks.last_ready(marks.of_layer(self.said, owner))
         self.run = record.pr_run(repo, pull.number, started.at if started else None)
 
     @property
@@ -134,7 +134,7 @@ class _Follow:
             return self.report("already_closed")
         ticket = parse(self.issue.body, title=self.issue.title, labels=self.issue.labels)
         said = self.hub.comments(self.repo, self.issue.number)
-        accepted = marks.acceptance(said)
+        accepted = marks.acceptance(marks.of_layer(said, self.owner))
         why = None
         if accepted is None or accepted.pr != self.pull.number:
             why = "acceptance_missing", f"no acceptance comment for #{self.pull.number}"
@@ -190,7 +190,7 @@ class _Follow:
     # open
 
     def open(self) -> FollowReport:
-        ready = marks.ready_since(self.said)
+        ready = marks.ready_since(marks.of_layer(self.said, self.owner))
         if ready is None and self.pull.auto_merge is None:
             return self.report("idle", "not in the merge line")
         since = ready.at if ready else self.pull.created_at
@@ -200,7 +200,7 @@ class _Follow:
             return self.report("withdrawn")
         if self.issue is not None:
             said = self.hub.comments(self.repo, self.issue.number)
-            accepted = marks.acceptance(said)
+            accepted = marks.acceptance(marks.of_layer(said, self.owner))
             if accepted is not None and accepted.pr == self.pull.number:
                 if accepted.body != marks.body_hash(self.issue.body):
                     self._leave("edited", f"its ticket #{self.issue.number} was edited after its rows were checked")
@@ -214,7 +214,7 @@ class _Follow:
                                    "merge: it is out of the merge line until the brain answers.", "comment")
                     self._end_pr("stopped", "withdrawn")
                     return self.report("unanswered")
-        people = [c for c in self.said if c.by_a_person and c.at > since]
+        people = [c for c in self.said if marks.is_person(c, self.owner) and c.at > since]
         if people:
             return self._commented(people[0])
         if self.pull.mergeable == "conflicting":
@@ -280,7 +280,8 @@ class _Follow:
             self._end_pr("failed", "red")
             return self.report("red_on_main", f"#{covering[0]}")
         reds = 0
-        for mark in reversed(marks.follows(self.hub.comments(self.repo, self.issue.number))):
+        for mark in reversed(marks.follows(marks.of_layer(self.hub.comments(self.repo, self.issue.number),
+                                                            self.owner))):
             if mark.outcome != "red":
                 break
             reds += 1
@@ -385,7 +386,7 @@ class _Follow:
         self.hub.comment(self.repo, self.pull.number, marks.left_comment(reason, text))
 
     def _a_person_said(self, said, after: datetime) -> bool:
-        return any(c.by_a_person and c.at > after for c in said)
+        return any(marks.is_person(c, self.owner) and c.at > after for c in said)
 
     # the store
 

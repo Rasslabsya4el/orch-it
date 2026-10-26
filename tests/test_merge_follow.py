@@ -174,7 +174,7 @@ def test_the_third_red_in_a_row_goes_to_the_brain(tmp_path):
             from orch_it.merge.pr_open import open_pr
             hub.push(pr)
             hub.later(minutes=10)
-            open_pr(hub, store, REPO, 10, acceptance=ROWS_NO_AFTER, branch=f"ticket-10", base="main", git=Git(),
+            open_pr(hub, store, REPO, 10, acceptance=ROWS_NO_AFTER, branch=f"ticket-10", base="main", git=Git(hub),
                     settings=MergeSettings(), now=hub.now)
         hub.checks_on(hub.head(pr), FAILED, failing=["t::mine"])
         done = run(hub, store, pr)
@@ -256,6 +256,13 @@ def test_a_bot_s_or_the_layer_s_comment_is_no_person_s(tmp_path, author, bot, bo
     hub.later(minutes=1)
     hub.note(prs[10], body, author=author, bot=bot)
     assert run(hub, store, prs[10]).outcome == "waiting"
+
+
+def test_a_stranger_who_pastes_the_layer_s_mark_is_still_a_person(tmp_path):
+    hub, store, prs = world(tmp_path)
+    hub.later(minutes=1)
+    hub.note(prs[10], marks.left_comment("red", "not really"), author="a-stranger")
+    assert run(hub, store, prs[10]).outcome == "commented"
 
 
 def test_a_comment_from_before_the_ready_mark_was_answered_by_it(tmp_path):

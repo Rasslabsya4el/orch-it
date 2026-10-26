@@ -11,7 +11,8 @@ import pytest
 
 from orch_it import settings
 from orch_it.merge import hub as hub_mod
-from orch_it.merge.gh import GhPullHub, GitDone
+from orch_it.merge.gh import GhPullHub
+from orch_it.merge.git import GitDone
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING
 from orch_it.testruns.github import GithubError
 
@@ -85,6 +86,28 @@ def test_an_open_pull_request_is_read_with_its_auto_merge_mergeable_and_behind()
         repo=REPO, number=5, title="T", body="B", branch="feature", head_sha="h" * 7, base="main",
         state="open", draft=True, auto_merge="squash", mergeable="mergeable", behind=3,
         created_at=datetime(2026, 11, 2, 10, tzinfo=UTC))
+
+
+def test_the_head_repo_tells_a_fork_from_the_repo_itself():
+    gh = Gh(([pull_url(5)], pull_json(5, head={"ref": "x", "sha": "h" * 7, "repo": {"full_name": REPO}})),
+            ([pull_url(6)], pull_json(6, head={"ref": "x", "sha": "h" * 7, "repo": {"full_name": "stranger/fork"}})),
+            ([pull_url(7)], pull_json(7, head={"ref": "x", "sha": "h" * 7, "repo": None})),
+            ([compare_url()], {"behind_by": 0}))
+    hub = GhPullHub(gh)
+    assert [hub.pull(REPO, n).head_repo for n in (5, 6, 7)] == [REPO, "stranger/fork", None]
+
+
+def test_a_pull_request_that_merged_between_the_list_and_its_read_is_not_listed_open():
+    gh = Gh((["--paginate", f"repos/{REPO}/pulls?state=open&base=main&per_page=100"], [{"number": 5}, {"number": 6}]),
+            ([pull_url(5)], pull_json(5)), ([pull_url(6)], pull_json(6, state="closed", merged_at="2026-11-03T10:00:00Z")),
+            ([compare_url()], {"behind_by": 0}))
+    assert [p.number for p in GhPullHub(gh).open_pulls(REPO, "main")] == [5]
+
+
+def test_a_pull_request_is_closed_by_its_state():
+    gh = Gh(([f"repos/{REPO}/pulls/5", "PATCH"], {}))
+    GhPullHub(gh).close_pull(REPO, 5)
+    assert gh.inputs == [{"state": "closed"}]
 
 
 def test_a_merged_and_a_closed_pull_request_carry_their_end_and_are_not_compared():
@@ -569,7 +592,7 @@ def cache_of(tmp_path):
 def test_the_conflicting_files_are_read_from_merge_tree_after_a_fetch_into_a_cache_repo(tmp_path):
     cache = cache_of(tmp_path)
     git = Git(GitDone(0, "", ""), GitDone(0, "", ""),
-              GitDone(1, "tree-id\nb/two.py\na.py\nb/two.py\n\n", ""))
+              GitDone(1, "tree-id\0b/two.py\0a.py\0b/two.py\0\0", ""))
     found = GhPullHub(Gh(), git).conflict_files("Owner-X/Repo-Y", "main", 7)
     assert found == ["a.py", "b/two.py"]
     assert git.calls[0] == ["init", "--bare", "--quiet", str(cache)]
@@ -577,7 +600,7 @@ def test_the_conflicting_files_are_read_from_merge_tree_after_a_fetch_into_a_cac
         "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", str(cache),
         "fetch", "--quiet", "--no-tags", "https://github.com/Owner-X/Repo-Y.git",
         "+refs/heads/main:refs/orch/base", "+refs/pull/7/head:refs/orch/pr"]
-    assert git.calls[2] == ["-C", str(cache), "merge-tree", "--write-tree", "--name-only", "--no-messages",
+    assert git.calls[2] == ["-C", str(cache), "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z",
                             "refs/orch/base", "refs/orch/pr"]
 
 

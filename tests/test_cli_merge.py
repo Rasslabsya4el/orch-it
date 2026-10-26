@@ -68,9 +68,11 @@ def github(tmp_path, monkeypatch):
 
     def git(args):
         calls.append(args)
-        return "ticket-10\n" if args[:1] == ["rev-parse"] else ""
+        if args == ["rev-parse", "--abbrev-ref", "HEAD"]:
+            return "ticket-10\n"
+        return f"{hub.branches[args[-1].removesuffix('^{commit}')][-1]}\n" if args[:1] == ["rev-parse"] else ""
 
-    monkeypatch.setattr(commands, "work_tree_git", lambda work_tree: git)
+    monkeypatch.setattr(commands.merge_git, "work_tree", lambda work_tree: git)
     return hub, calls
 
 
