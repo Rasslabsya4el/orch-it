@@ -20,7 +20,7 @@ from orch_it.tickets.hub import GhHub
 
 
 def add_parsers(commands, common: argparse.ArgumentParser) -> None:
-    group = commands.add_parser("brain", help="the brain's hand-off home").add_subparsers(
+    group = commands.add_parser("brain", help="the brain's hand-off issue").add_subparsers(
         dest="command", required=True)
     home = group.add_parser("handoff", help="the brain's pinned hand-off issue").add_subparsers(
         dest="action", required=True)

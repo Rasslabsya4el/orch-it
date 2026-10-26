@@ -85,6 +85,11 @@ class Hub(Protocol):
         """The orch-it version the repo's default branch runs, `X.Y.Z`."""
 
 
+class ListingHub(Hub, Protocol):
+    def listed(self, repo: str, label: str) -> list[Issue]:
+        """The repo's open issues (no pull requests) carrying the label."""
+
+
 VERSION_FILE = ".orch-it/version"  # the version an installed repo runs (part 8 writes it)
 _PROJECT_NAME = re.compile(r'^name\s*=\s*"orch-it"\s*$', re.MULTILINE)
 _PROJECT_VERSION = re.compile(r'^version\s*=\s*"([^"\n]+)"\s*$', re.MULTILINE)
@@ -115,17 +120,11 @@ class GhHub:
         return [_issue(repo, item) for item in items if "pull_request" not in item]
 
     def create(self, repo: str, title: str, body: str, labels: list[str]) -> int:
-        folder = tempfile.mkdtemp(prefix="orch-it-gh-")
-        path = Path(folder) / "input.json"
-        try:
-            path.write_text(json.dumps({"title": title, "body": body, "labels": labels}, ensure_ascii=False), "utf-8")
-            made = self._object(["api", "-X", "POST", f"repos/{repo}/issues", "--input", str(path)])
-        finally:
-            path.unlink(missing_ok=True)
-            os.rmdir(folder)
-        if not isinstance(made.get("number"), int):
+        made = json_values(self._send(["api", "-X", "POST", f"repos/{repo}/issues"],
+                                      {"title": title, "body": body, "labels": labels}))
+        if len(made) != 1 or not isinstance(made[0], dict) or not isinstance(made[0].get("number"), int):
             raise GithubError("gh_bad_output", f"{repo}: the new issue has no number")
-        return made["number"]
+        return made[0]["number"]
 
     def pinned(self, repo: str) -> list[int]:
         owner, name = repo.split("/", 1)
@@ -223,14 +222,15 @@ class GhHub:
         except (ValueError, UnicodeDecodeError):
             raise GithubError("gh_bad_output", f"{repo}:{path}: not text") from None
 
-    def _send(self, args: list[str], payload: dict) -> None:
-        """A write whose JSON goes in a file of its own, so no text is bounded by a command line."""
+    def _send(self, args: list[str], payload: dict) -> str:
+        """A write whose JSON goes in a file of its own, so no text is bounded by a command line;
+        GitHub's answer."""
 
         folder = tempfile.mkdtemp(prefix="orch-it-gh-")
         path = Path(folder) / "input.json"
         try:
             path.write_text(json.dumps(payload, ensure_ascii=False), "utf-8")
-            self.gh([*args, "--input", str(path)])
+            return self.gh([*args, "--input", str(path)])
         finally:
             path.unlink(missing_ok=True)
             os.rmdir(folder)

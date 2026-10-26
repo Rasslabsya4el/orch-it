@@ -2,7 +2,7 @@
 `repos.<owner/name>` of the installation's settings file:
 
 - `brain_chat_title` (default `Brain: <repo name>`, the GitHub repo's name): the title of the
-  owner's chat that is the brain; the session hook finds the brain by it;
+  owner's session that is the brain (the brain title); the session hook finds the brain by it;
 - `brain_handoff_issue` (no default): the number of the repo's pinned hand-off issue, written by
   `python -m orch_it brain handoff ensure`.
 
@@ -32,10 +32,16 @@ class BrainSettings:
         if (not isinstance(title, str) or not title.strip() or len(title) > TITLE_CHARS
                 or any(c in title for c in "\r\n")):
             raise SettingsError("bad_setting", f"repos.{repo}.{TITLE_SETTING}: one line of text")
-        number = own.get(HANDOFF_SETTING)
-        if number is not None and (isinstance(number, bool) or not isinstance(number, int) or number < 1):
-            raise SettingsError("bad_setting", f"repos.{repo}.{HANDOFF_SETTING}: an issue number")
-        return cls(title, number)
+        return cls(title, handoff_issue_of(raw, repo))
+
+
+def handoff_issue_of(raw: dict, repo: str) -> int | None:
+    """The setting `brain_handoff_issue` alone: a reader of it never fails on the title."""
+
+    number = repo_section(raw, repo).get(HANDOFF_SETTING)
+    if number is not None and (isinstance(number, bool) or not isinstance(number, int) or number < 1):
+        raise SettingsError("bad_setting", f"repos.{repo}.{HANDOFF_SETTING}: an issue number")
+    return number
 
 
 def default_title(repo: str) -> str:

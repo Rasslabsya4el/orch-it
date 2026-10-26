@@ -108,7 +108,6 @@ def test_the_newest_hand_off_comment_is_the_one_read():
     hub.later(minutes=5)
     hub.say(5, "second hand-off")
     hub.later(minutes=5)
-    hub.say(5, "a bot's note", bot=True)
     assert handoff.latest(hub, REPO, 5).body == "second hand-off"
 
 
@@ -123,8 +122,52 @@ def test_write_posts_the_hand_off_points_the_ticket_back_and_counts_it(settings_
     assert said.body.startswith("Done: A. Next: B.") and "#40" in said.body
     [pointer] = hub.notes[(REPO, 40)]
     assert "#5" in pointer.body and len(pointer.body.splitlines()) == 1
-    [(role, detail)] = store.query("select role, detail from events where kind = 'handoff.written'").rows
-    assert role == "brain" and json.loads(detail)["entry_ref"] == f"{REPO}#5"
+    handoff.write(hub, store, REPO, "Done: B.", ticket=40)
+    assert len(hub.notes[(REPO, 40)]) == 1 and len(hub.notes[(REPO, 5)]) == 2  # one pointer per ticket
+    rows = store.query("select role, detail from events where kind = 'handoff.written'").rows
+    assert [(role, json.loads(detail)["entry_ref"]) for role, detail in rows] == [("brain", f"{REPO}#5")] * 2
+
+
+def test_two_ensures_that_each_made_an_issue_converge_on_the_oldest(settings_file):
+    hub = FakeHub()
+    hub.add(1, "", [handoff.LABEL], title=handoff.TITLE)
+    hub.add(2, "", [handoff.LABEL], title=handoff.TITLE)
+    hub.pins[REPO] = [1, 2]
+    settings.save_in_repo(REPO, "brain_handoff_issue", 2)
+    done = handoff.ensure(hub, REPO)
+    assert (done.number, done.actions, done.others) == (1, ("setting_written",), (2,))
+
+
+def test_the_label_in_another_case_is_the_label(settings_file):
+    hub = FakeHub()
+    hub.add(1, "", ["Brain-Handoff"], title=handoff.TITLE)
+    hub.pins[REPO] = [1]
+    settings.save_in_repo(REPO, "brain_handoff_issue", 1)
+    assert handoff.ensure(hub, REPO).actions == ()
+
+
+def test_of_two_hand_offs_in_one_second_the_later_one_is_read():
+    hub = FakeHub()
+    hub.add(5, "", [handoff.LABEL], title=handoff.TITLE)
+    hub.say(5, "first")
+    hub.say(5, "second")
+    assert handoff.latest(hub, REPO, 5).body == "second"
+
+
+def test_two_writers_of_the_settings_at_once_both_land(settings_file):
+    import threading
+
+    def write(repo):
+        for n in range(1, 21):
+            settings.save_in_repo(repo, "brain_handoff_issue", n)
+
+    writers = [threading.Thread(target=write, args=(f"owner-x/r{i}",)) for i in range(4)]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join(timeout=60)
+    assert {repo: own["brain_handoff_issue"] for repo, own in settings.load()["repos"].items()} == {
+        f"owner-x/r{i}": 20 for i in range(4)}
 
 
 def test_write_refuses_with_no_hand_off_issue_set_and_an_empty_text(settings_file, tmp_path):
@@ -149,3 +192,32 @@ def test_a_repo_without_the_label_gets_it_and_a_full_pin_row_is_refused_by_name(
         handoff.ensure(hub, REPO)
     assert refused.value.code == "pin_refused"
     assert handoff.LABEL in hub.repo_labels[REPO]
+
+
+def test_a_ticket_of_another_title_is_never_taken_for_the_hand_off_issue(settings_file):
+    hub = FakeHub()
+    hub.add(2, "", [handoff.LABEL, "needs-triage"], title="Fix the parser")
+    settings.save_in_repo(REPO, "brain_handoff_issue", 2)
+    done = handoff.ensure(hub, REPO)
+    assert done.number != 2 and "created" in done.actions and done.others == (2,)
+    assert hub.issues[(REPO, 2)].labels == (handoff.LABEL, "needs-triage")
+
+
+@pytest.mark.parametrize("ticket", [5, 77, 6])
+def test_a_ticket_that_is_no_ticket_is_refused_before_anything_is_posted(settings_file, tmp_path, ticket):
+    hub = FakeHub()
+    hub.add(5, "", [handoff.LABEL], title=handoff.TITLE)
+    hub.add(6, "", [], is_pr=True)
+    settings.save_in_repo(REPO, "brain_handoff_issue", 5)
+    with pytest.raises(handoff.HandoffError) as refused:
+        handoff.write(hub, Store.open(tmp_path / "store"), REPO, "text", ticket=ticket)
+    assert refused.value.code == "ticket_bad" and hub.notes == {}
+
+
+def test_a_hand_off_over_github_s_comment_size_is_refused(settings_file, tmp_path):
+    hub = FakeHub()
+    hub.add(5, "", [handoff.LABEL], title=handoff.TITLE)
+    settings.save_in_repo(REPO, "brain_handoff_issue", 5)
+    with pytest.raises(handoff.HandoffError) as refused:
+        handoff.write(hub, Store.open(tmp_path / "store"), REPO, "x" * 70_000)
+    assert refused.value.code == "handoff_too_long" and hub.notes == {}

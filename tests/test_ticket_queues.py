@@ -47,10 +47,21 @@ def test_neither_queue_ever_returns_the_hand_off_issue(labels):
         assert 9 not in [i.number for i in queue(hub, REPO, name)]
 
 
+def test_a_park_line_whose_label_was_lost_still_keeps_a_ticket_out_of_ready():
+    hub = world()
+    hub.add(8, "Parked: date 2099-01-01 until 2099-01-02\n\n## For the human\n", ["ready-for-agent"])
+    assert 8 not in [i.number for i in queue(hub, REPO, "ready")]
+
+
 def test_a_second_issue_carrying_the_label_is_left_out_too():
     hub = world()
     hub.add(12, "", [handoff.LABEL, "needs-triage"])
     assert 12 not in [i.number for i in queue(hub, REPO, "sweep")]
+
+
+def test_a_bad_brain_title_setting_never_stops_a_queue():
+    settings.save_in_repo(REPO, "brain_chat_title", "x" * 300)
+    assert [i.number for i in queue(world(), REPO, "sweep")] == [4, 3]
 
 
 def test_an_unknown_queue_is_refused():
