@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,7 @@ from pathlib import Path
 from orch_it.events import schema
 from orch_it.events.ids import import_id
 from orch_it.events.pricing import price_turn
+from orch_it.brain.session import agent_setting_in_head, brain_by, title_of
 from orch_it.events.store import Store
 
 SOURCE = "claude-code"
@@ -95,6 +97,7 @@ class _Transcript:
     first_at: datetime | None = None
     last_at: datetime | None = None
     title: str | None = None
+    full_title: str | None = None  # the title as written, uncut: the one compared with the brain title
     agent_setting: str | None = None  # the `--agent` a main session was started with
     model: str | None = None
     effort: str | None = None
@@ -140,7 +143,7 @@ def import_transcripts(folder: str | Path, store: Store, *, repo: str, role: str
             "parent_session": None, "step": "session", "run": None, "note": None,
             "machine": "probe", "os": "probe", "layer_version": "probe"}, {}))
 
-    brain = _name(brain_title if brain_title is not None else _brain_title(repo))
+    brain = brain_title if brain_title is not None else _brain_title(repo)
     report = ImportReport()
     events: dict[str, dict] = {}
     for path, parent, meta in _transcript_files(folder, session):
@@ -183,16 +186,15 @@ def _brain_title(repo: str) -> str:
 
     try:
         return BrainSettings.of(settings.load(), repo).chat_title
-    except settings.SettingsError:  # a broken setting never stops an import: the default title stands
+    except settings.SettingsError as e:  # a broken setting never stops an import: the default title stands
+        print(f"import: the brain title setting cannot be read, the default is used: {e}", file=sys.stderr)
         return default_title(repo)
 
 
 def _top_role(transcript: _Transcript, given: str, brain_title: str) -> str:
     """The brain by its title first, by its `--agent brain` second; else the role given."""
 
-    if transcript.title == brain_title or transcript.agent_setting == "brain":
-        return "brain"
-    return given
+    return "brain" if brain_by(transcript.full_title, transcript.agent_setting, brain_title) else given
 
 
 def _subagent_role(given: str | None, meta: dict) -> str:
@@ -286,10 +288,11 @@ def _take_quiet_tail(transcript: _Transcript, raw: bytes, order: int) -> None:
 
 def _take(transcript: _Transcript, record: dict, order: int) -> None:
     kind = record.get("type")
-    if kind == "custom-title" and isinstance(record.get("customTitle"), str):
-        transcript.title = _name(record["customTitle"])
-    if isinstance(record.get("agentSetting"), str):
-        transcript.agent_setting = record["agentSetting"]
+    title = title_of(record)
+    if title is not None:
+        transcript.title, transcript.full_title = _name(title), title
+    if transcript.agent_setting is None:
+        transcript.agent_setting = agent_setting_in_head(order, record)
     at = _moment(record.get("timestamp"))
     if at is None:
         if kind == "assistant":

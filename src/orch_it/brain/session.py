@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 
 TAIL_BYTES = 256 * 1024  # the newest title record sits near the end: a rename appends one
 HEAD_LINES = 50  # the launch facts a transcript records first
@@ -34,15 +35,41 @@ def session_title(payload: dict) -> str | None:
 
 
 def is_brain(payload: dict, brain_title: str) -> bool:
-    """See the module text; a transcript that cannot be read raises `TranscriptUnreadable`."""
+    """See the module text. A session started as the brain is the brain without its transcript
+    being read; otherwise a transcript that cannot be read raises `TranscriptUnreadable`."""
 
-    if session_title(payload) == brain_title:
-        return True
     agent = payload.get("agent_type")
-    if isinstance(agent, str) and agent:
-        return agent.rsplit(":", 1)[-1] == BRAIN
+    if brain_by(None, agent if isinstance(agent, str) else None, brain_title):
+        return True
+    if brain_by(session_title(payload), None, brain_title):
+        return True
     path = payload.get("transcript_path")
-    return isinstance(path, str) and bool(path) and _agent_setting(path) == BRAIN
+    if (isinstance(agent, str) and agent) or not isinstance(path, str) or not path:
+        return False
+    return brain_by(None, _agent_setting(path), brain_title)
+
+
+def brain_by(title: str | None, agent: str | None, brain_title: str) -> bool:
+    """The one rule both the session hook and the store's importer apply: the title equals the brain
+    title, else the agent it was started as (`agent_type`, `agentSetting`; a plugin's
+    `plugin:brain` too) is the brain."""
+
+    return (title is not None and title == brain_title) or (
+        isinstance(agent, str) and agent.rsplit(":", 1)[-1] == BRAIN)
+
+
+def agent_setting_in_head(number: int, record: dict) -> str | None:
+    """The `agentSetting` a transcript's head records (its first `HEAD_LINES` lines), else None."""
+
+    value = record.get("agentSetting") if number < HEAD_LINES else None
+    return value if isinstance(value, str) and value else None
+
+
+def title_of(record: dict) -> str | None:
+    """The title a `custom-title` record sets; an empty one sets none."""
+
+    value = record.get("customTitle") if record.get("type") == "custom-title" else None
+    return value if isinstance(value, str) and value else None
 
 
 def _path(payload: dict) -> str:
@@ -69,14 +96,12 @@ def _last_title(path: str) -> str | None:
     return title
 
 
-def _title_in(lines) -> str | None:
+def _title_in(lines: Iterable[bytes]) -> str | None:
     title = None
     for raw in lines:
         if b'"custom-title"' not in raw:
             continue
-        record = _record(raw)
-        if record.get("type") == "custom-title" and isinstance(record.get("customTitle"), str) and record["customTitle"]:
-            title = record["customTitle"]
+        title = title_of(_record(raw)) or title
     return title
 
 
@@ -86,10 +111,8 @@ def _agent_setting(path: str) -> str | None:
             for number, raw in enumerate(source):
                 if number >= HEAD_LINES:
                     break
-                if b"agentSetting" in raw:
-                    value = _record(raw).get("agentSetting")
-                    if isinstance(value, str) and value:
-                        return value
+                if b"agentSetting" in raw and (value := agent_setting_in_head(number, _record(raw))):
+                    return value
     except (OSError, ValueError) as e:
         raise TranscriptUnreadable(type(e).__name__) from None
     return None

@@ -70,6 +70,27 @@ def test_the_brain_is_its_exact_title_first_and_agent_brain_second(payload, brai
     assert session.is_brain(payload, "Brain: orch-it") is brain
 
 
+def test_a_session_started_as_the_brain_needs_no_readable_transcript():
+    assert session.is_brain({"agent_type": "brain", "transcript_path": "/no/such/file.jsonl"}, "Brain: orch-it")
+
+
+def test_an_empty_title_record_never_wipes_the_title_before_it(tmp_path):
+    path = transcript(tmp_path / "s.jsonl", "Brain: orch-it", "")
+    assert session.session_title({"transcript_path": str(path)}) == "Brain: orch-it"
+
+
+def test_the_importer_reads_the_title_and_the_agent_as_the_hook_does(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    folder = tmp_path / "projects" / "a-project"
+    folder.mkdir(parents=True)
+    transcript(folder / f"{SESSION}.jsonl", "Brain: orch-it", "")
+    import_transcripts(folder, Store.open(tmp_path / "s1"), repo="owner-x/orch-it")
+    assert Store.open(tmp_path / "s1").query("select distinct role from events").rows == [("brain",)]
+    transcript(folder / f"{SESSION}.jsonl", "Fix the parser", head={"type": "agent-setting", "agentSetting": "brain"})
+    import_transcripts(folder, Store.open(tmp_path / "s2"), repo="owner-x/orch-it", role="orch")
+    assert Store.open(tmp_path / "s2").query("select distinct role from events").rows == [("brain",)]
+
+
 def test_a_session_started_with_agent_brain_is_the_brain_by_its_transcript_head(tmp_path):
     path = transcript(tmp_path / "s.jsonl", head={"type": "agent-setting", "agentSetting": "brain"})
     assert session.is_brain({"transcript_path": str(path)}, "Brain: orch-it")
@@ -99,3 +120,12 @@ def test_another_title_keeps_the_role_given_and_a_set_brain_title_is_read(tmp_pa
     transcript(folder / f"{SESSION}.jsonl", "Brain: orch layer")
     import_transcripts(folder, Store.open(tmp_path / "store2"), repo="owner-x/orch-it")
     assert Store.open(tmp_path / "store2").query("select distinct role from events").rows == [("brain",)]
+
+
+def test_a_long_title_that_merely_starts_with_the_brain_title_is_no_brain(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    folder = tmp_path / "projects" / "a-project"
+    folder.mkdir(parents=True)
+    transcript(folder / f"{SESSION}.jsonl", "B" * 200 + "y" * 500)
+    import_transcripts(folder, Store.open(tmp_path / "s"), repo="owner-x/orch-it", brain_title="B" * 200)
+    assert Store.open(tmp_path / "s").query("select distinct role from events").rows == [("worker",)]
