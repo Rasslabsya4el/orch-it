@@ -172,7 +172,7 @@ def park(hub: Hub, store: Store, repo: str, number: int, kind: str, ref: str, un
         _check_it_can_come(hub, store, repo, number, made, today)
     except ParkError as refused:
         run = f"park-refused:{repo}#{number}@{datetime.now().astimezone().isoformat()}"
-        _write(store, repo, number, role, run, [
+        write_events(store, repo, number, role, run, [
             ("step.started", {"reason": "parked", "on": f"{kind} {ref}"[:120]}),
             ("step.ended", {"outcome": "refused", "reason": refused.code})])
         raise
@@ -182,7 +182,7 @@ def park(hub: Hub, store: Store, repo: str, number: int, kind: str, ref: str, un
     if written is None or written.park_lines != (made.line,) or not written.parked:
         raise ParkError("park_mismatch", "the ticket read back does not hold the line and the label")
     run = park_run(repo, number, hub.parked_at(repo, number))
-    _write(store, repo, number, role, run, [
+    write_events(store, repo, number, role, run, [
         ("step.started", {"reason": "parked", "on": f"{made.kind} {made.ref}"}),
         ("ticket.parked", {"on": made.kind, "on_ref": made.ref, "until": made.until.isoformat()})])
     return made
@@ -199,7 +199,7 @@ def unpark(hub: Hub, store: Store, repo: str, number: int, *, now: datetime, rol
     found = held_park(held.park_lines)
     run = park_run(repo, number, hub.parked_at(repo, number))
     take_off(hub, issue)
-    _write(store, repo, number, role, run, [
+    write_events(store, repo, number, role, run, [
         ("step.ended", {"outcome": "stopped", "reason": "hand"}),
         ("ticket.unparked", {"by": "hand", "return": "hand", "on_ref": found.ref if found else None,
                              "late_minutes": late_minutes(found, now) if found else None})])
@@ -283,7 +283,7 @@ def _check_it_can_come(hub: Hub, store: Store, repo: str, number: int, made: Par
         if made.date <= today:
             raise ParkError("event_passed", made.ref)
     elif made.kind == "run_ended":
-        ended = _run_ended(hub, store, repo, made.ref)
+        ended = run_ended(hub, store, repo, made.ref)
         if ended is None:
             raise ParkError("ref_missing", made.ref)
         if ended:
@@ -294,7 +294,7 @@ def _check_it_can_come(hub: Hub, store: Store, repo: str, number: int, made: Par
             raise ParkError("event_passed", f"{repo} runs {held}")
 
 
-def _run_ended(hub: Hub, store: Store, repo: str, run: str) -> RunState | bool | None:
+def run_ended(hub: Hub, store: Store, repo: str, run: str) -> RunState | bool | None:
     """Whether the run has ended: a `RunState` for a GitHub run, True/False for a store run,
     None when no such run is known."""
 
@@ -319,7 +319,7 @@ def version_reached(held: str, wanted: str) -> bool:
     return parts(held) >= parts(wanted)
 
 
-def _write(store: Store, repo: str, number: int, role: str, run: str, events: list[tuple[str, dict]]) -> None:
+def write_events(store: Store, repo: str, number: int, role: str, run: str, events: list[tuple[str, dict]]) -> None:
     with store.writer() as writer:
         for kind, detail in events:
             writer.write({"kind": kind, "repo": repo, "ticket": number, "role": role, "session": None,
