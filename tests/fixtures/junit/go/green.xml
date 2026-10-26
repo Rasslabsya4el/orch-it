@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites tests="3" skipped="1">
-	<testsuite name="example.com/math" tests="3" failures="0" errors="0" id="0" hostname="WIN-OHK3JQ5AM84" skipped="1" time="0.412" timestamp="2026-10-25T21:19:44+01:00">
+	<testsuite name="example.com/math" tests="3" failures="0" errors="0" id="0" hostname="fixture-host" skipped="1" time="0.412" timestamp="2026-10-25T21:19:44+01:00">
 		<testcase name="TestAdds" classname="example.com/math" time="0.000"></testcase>
 		<testcase name="TestSubtracts" classname="example.com/math" time="0.000"></testcase>
 		<testcase name="TestSkips" classname="example.com/math" time="0.000">

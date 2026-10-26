@@ -35,10 +35,26 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -e ".[test]"
+      # The commits a pull request adds hold no private data (#395 decision 4, row 7): the scan
+      # reads the pull request's own commits, not the merge into main, and takes the author's and
+      # the owner's public emails as allowed.
+      - name: private data in the pull request's commits
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          python -m orch_it guards scan --range "$BASE..$HEAD" --machine-independent --allow-email-of "$AUTHOR" --allow-email-of "$OWNER"
       - name: pytest
         shell: bash
         env:
@@ -60,6 +76,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
