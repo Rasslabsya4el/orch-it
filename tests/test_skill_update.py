@@ -69,7 +69,7 @@ def world(tmp_path):
 
 
 class FakeForge:
-    """GitHub as the update sees it: its pull requests of `skills-update/` branches, and what it was asked."""
+    """GitHub as the update sees it: its pull requests of `skills-upstream/` branches, and what it was asked."""
 
     def __init__(self, prs=None, fail=()):
         self.prs = list(prs or [])          # {"url", "branch", "state"}
@@ -156,7 +156,7 @@ def test_update_opens_one_pr_needing_triage_and_never_touches_the_work_tree(worl
     done = run_update(world, forge)
     assert done.status == "opened"
     [(branch, title, body)] = forge.created
-    assert branch == f"skills-update/{up[:12]}-{head[:8]}"
+    assert branch == f"skills-upstream/{up[:12]}-{head[:8]}"
     assert "| `zoom-out` | removed |" in body and "| `wizard` | added |" in body
     assert "called by no role" in body
     assert forge.labels == [(done.pr, "needs-triage")] and forge.auto == []
@@ -171,7 +171,7 @@ def test_update_opens_one_pr_needing_triage_and_never_touches_the_work_tree(worl
     assert git(world["repo"], "rev-parse", "--abbrev-ref", "HEAD") == "main"
     assert git(world["repo"], "rev-parse", "HEAD") == head
     assert git(world["repo"], "status", "--porcelain", "--untracked-files=all") == ""
-    assert git(world["repo"], "branch", "--list", "skills-update/*") == ""
+    assert git(world["repo"], "branch", "--list", "skills-upstream/*") == ""
 
 
 def test_update_with_only_text_changes_and_additions_merges_when_green_after_its_tests_start(world):
@@ -210,7 +210,7 @@ def test_a_removed_copy_still_named_by_a_role_file_is_red_in_the_body(world):
 
 def test_an_open_pr_for_the_same_upstream_commit_is_brought_up_to_date_not_opened_again(world):
     up = newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
-    open_pr = {"url": "https://example.invalid/pull/9", "branch": f"skills-update/{up[:12]}-00000000", "state": "OPEN"}
+    open_pr = {"url": "https://example.invalid/pull/9", "branch": f"skills-upstream/{up[:12]}-00000000", "state": "OPEN"}
     forge = FakeForge(prs=[open_pr], fail={"merge_when_green"})
     with pytest.raises(SkillsError):
         run_update(world, forge, dispatch_tests=True)
@@ -219,14 +219,14 @@ def test_an_open_pr_for_the_same_upstream_commit_is_brought_up_to_date_not_opene
 
 def test_a_pr_the_brain_closed_is_not_opened_again(world):
     up = newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
-    forge = FakeForge(prs=[{"url": "u/7", "branch": f"skills-update/{up[:12]}-11111111", "state": "CLOSED"}])
+    forge = FakeForge(prs=[{"url": "u/7", "branch": f"skills-upstream/{up[:12]}-11111111", "state": "CLOSED"}])
     done = run_update(world, forge)
     assert (done.status, done.pr, forge.created) == ("declined", "u/7", [])
 
 
 def test_a_newer_upstream_commit_supersedes_the_open_pr_of_an_older_one(world):
     newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
-    old = {"url": "u/3", "branch": "skills-update/aaaaaaaaaaaa-11111111", "state": "OPEN"}
+    old = {"url": "u/3", "branch": "skills-upstream/aaaaaaaaaaaa-11111111", "state": "OPEN"}
     forge = FakeForge(prs=[old])
     done = run_update(world, forge)
     assert forge.closed == [("u/3", f"Superseded by {done.pr}: his upstream moved on.")]
@@ -265,8 +265,8 @@ def test_our_files_beside_the_copies_keep_their_names_and_modes(world):
 
 def test_older_open_prs_are_superseded_on_every_run_that_finds_a_change(world):
     up = newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
-    old = {"url": "u/3", "branch": "skills-update/aaaaaaaaaaaa-11111111", "state": "OPEN"}
-    current = {"url": "u/4", "branch": f"skills-update/{up[:12]}-22222222", "state": "OPEN"}
+    old = {"url": "u/3", "branch": "skills-upstream/aaaaaaaaaaaa-11111111", "state": "OPEN"}
+    current = {"url": "u/4", "branch": f"skills-upstream/{up[:12]}-22222222", "state": "OPEN"}
     forge = FakeForge(prs=[old, current])
     assert run_update(world, forge).status == "already_open"
     assert forge.closed == [("u/3", "Superseded by u/4: his upstream moved on.")]
@@ -277,7 +277,7 @@ def test_older_open_prs_are_superseded_on_every_run_that_finds_a_change(world):
 
 def test_a_branch_that_cannot_be_brought_up_to_date_still_gets_its_tests_and_label(world):
     up = newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
-    current = {"url": "u/4", "branch": f"skills-update/{up[:12]}-22222222", "state": "OPEN"}
+    current = {"url": "u/4", "branch": f"skills-upstream/{up[:12]}-22222222", "state": "OPEN"}
     forge = FakeForge(prs=[current], fail={"update_branch"})
     with pytest.raises(SkillsError):
         run_update(world, forge, dispatch_tests=True)

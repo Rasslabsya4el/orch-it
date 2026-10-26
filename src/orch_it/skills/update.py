@@ -9,7 +9,7 @@ pinned tree is the one the manifest records file by file, and classifies every s
 caller's work tree: it fetches `origin/main`, exports its tree to a scratch folder, writes the new
 copies and manifest there (added skills copied, the names his upstream dropped recorded as `gone`),
 runs the references check of decision 5 on it, and builds the commit with a scratch index, then pushes
-it to `skills-update/<upstream commit>-<main commit>`. The pull request's body lists every skill with
+it to `skills-upstream/<upstream commit>-<main commit>`. The pull request's body lists every skill with
 its class. A renamed, removed or contract-changed skill, his copy or one left out, labels it
 `needs-triage`: it waits for the brain. Only `text_changed` and `added` set it to merge when green.
 A later run finds the open pull request of the same upstream commit and brings it up to date
@@ -37,7 +37,7 @@ from orch_it.skills import copies, references
 from orch_it.skills.classify import Change, classify
 from orch_it.skills.copies import GIT_TIMEOUT_SECONDS, NO_WINDOW, Manifest, SkillsError, Tree
 
-BRANCH_PREFIX = "skills-update/"
+BRANCH_PREFIX = "skills-upstream/"
 BASE_REF = "main"
 TRIAGE_LABEL = "needs-triage"
 TRIAGE_CLASSES = ("renamed", "removed", "contract_changed")
@@ -46,7 +46,7 @@ _EMPTY_BLOB = "0" * 40
 
 
 class Forge(Protocol):
-    def update_prs(self) -> list[dict]: ...            # every pull request of a skills-update/ branch: url, branch, state
+    def update_prs(self) -> list[dict]: ...            # every pull request of a skills-upstream/ branch: url, branch, state
     def create_pr(self, branch: str, title: str, body: str) -> str: ...
     def add_label(self, pr: str, label: str) -> None: ...
     def merge_when_green(self, pr: str) -> None: ...

@@ -39,27 +39,27 @@ def test_an_existing_label_is_only_added():
 
 
 def test_the_update_prs_are_read_from_every_page_and_filtered_by_branch():
-    lines = [{"url": "u/1", "branch": "skills-update/abc-123", "state": "OPEN"},
-             {"url": "u/3", "branch": "skills-update/def-456", "state": "MERGED"}]
+    lines = [{"url": "u/1", "branch": "skills-upstream/abc-123", "state": "OPEN"},
+             {"url": "u/3", "branch": "skills-upstream/def-456", "state": "MERGED"}]
     gh = FakeGh({("api", "--paginate"): "\n".join(json.dumps(line) for line in lines) + "\n"})
     assert GithubForge("o/r", gh=gh).update_prs() == lines
     [call] = gh.calls
     assert call[:3] == ["api", "--paginate", "repos/o/r/pulls?state=all&per_page=100"]
-    assert 'startswith("skills-update/")' in call[call.index("--jq") + 1] and "--repo" not in call
+    assert 'startswith("skills-upstream/")' in call[call.index("--jq") + 1] and "--repo" not in call
 
 
 def test_the_body_goes_by_file_and_the_rest_are_plain_calls():
     gh = FakeGh({("pr", "create"): "Warning: x\nhttps://github.com/o/r/pull/10\n"})
     forge = GithubForge("o/r", gh=gh)
-    assert forge.create_pr("skills-update/abc", "t", "a body\nwith | a table |") == "https://github.com/o/r/pull/10"
+    assert forge.create_pr("skills-upstream/abc", "t", "a body\nwith | a table |") == "https://github.com/o/r/pull/10"
     assert gh.bodies == ["a body\nwith | a table |"]
     forge.merge_when_green("u/10")
     forge.update_branch("u/10")
     forge.close_pr("u/9", "Superseded by u/10")
-    forge.dispatch_tests("skills-update/abc")
+    forge.dispatch_tests("skills-upstream/abc")
     assert [c[:3] for c in gh.calls[1:]] == [["pr", "merge", "u/10"], ["pr", "update-branch", "u/10"],
                                             ["pr", "close", "u/9"], ["workflow", "run", "tests.yml"]]
-    assert gh.calls[-1][3:7] == ["--ref", "skills-update/abc", "-f", "slow_and_live=false"]
+    assert gh.calls[-1][3:7] == ["--ref", "skills-upstream/abc", "-f", "slow_and_live=false"]
 
 
 def test_a_refusal_is_its_own_error():
