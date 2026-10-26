@@ -188,8 +188,8 @@ def _profile_emails(repo: str) -> tuple[str, ...]:
     for endpoint in logins:
         try:
             email = github.run_gh(["api", endpoint, "--jq", ".email"]).strip()
-        except github.GithubError:
-            continue
+        except Exception:
+            continue  # a profile lookup must never fail the scan; that address is then private
         if email and email != "null" and "@" in email:
             found.append(email)
     return tuple(found)

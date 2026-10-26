@@ -395,8 +395,12 @@ def test_the_tracked_hook_is_a_small_lf_sh_script_that_runs_the_entry_point_and_
     assert b"\r" not in raw
     lines = raw.decode("utf-8").splitlines()
     assert lines[0] == "#!/bin/sh"
-    assert lines[-1] == 'exec python -m orch_it hook pre-push "$@"'
-    assert len(lines) <= 8
+    # runs the entry point, and only the guard's own refusal (exit 1) blocks — any other
+    # nonzero code is a launcher failure and fails open (decision 7)
+    assert 'python -m orch_it hook pre-push "$@"' in lines
+    assert '[ "$code" = "1" ] && exit 1' in lines
+    assert "exit 0" in lines
+    assert len(lines) <= 16
     mode = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-s", "--", "hooks/pre-push"],
                           capture_output=True, text=True, creationflags=NO_WINDOW).stdout.split()[0]
     assert mode == "100755"
@@ -412,7 +416,7 @@ def hooked(tmp_path, repo):
     exe = sys.executable.replace("\\", "/")
     hooks = tmp_path / "hooks"
     hooks.mkdir()
-    script = HOOK.read_text("utf-8").replace("exec python ", f'exec "{exe}" ')
+    script = HOOK.read_text("utf-8").replace("python -m orch_it", f'"{exe}" -m orch_it')
     assert exe in script
     (hooks / "pre-push").write_bytes(script.encode("utf-8"))
     (hooks / "pre-push").chmod(0o755)
@@ -456,3 +460,25 @@ def test_a_real_push_of_a_new_branch_is_scanned_from_the_start(hooked):
                           env=repo.env, timeout=120, creationflags=NO_WINDOW)
     assert done.returncode != 0
     assert b"home_path" in done.stderr + done.stdout
+
+
+@pytest.mark.parametrize("fake_code,expected", [(1, 1), (0, 0), (2, 0), (127, 0)])
+def test_the_pre_push_hook_script_fails_open_on_a_launcher_failure(tmp_path, fake_code, expected):
+    # decision 7: only the guard's own refusal (exit 1) blocks; a launcher failure (python
+    # missing, an argparse error, exit 2/127) lets the push through rather than wedging it
+    import shutil as _sh
+    import subprocess as _sp
+    sh = _sh.which("sh") or _sh.which("bash")
+    if sh is None:
+        pytest.skip("no POSIX sh to run the hook script")
+    script = Path(__file__).resolve().parents[1] / "hooks" / "pre-push"
+    fake_dir = tmp_path / "bin"
+    fake_dir.mkdir()
+    fake = fake_dir / "python"
+    fake.write_text(f"#!/bin/sh\nexit {fake_code}\n")
+    fake.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = str(fake_dir) + os.pathsep + env["PATH"]
+    done = _sp.run([sh, str(script), "origin", "https://x/y.git"], input="", text=True,
+                   env=env, capture_output=True, timeout=30)
+    assert done.returncode == expected, (fake_code, done.returncode, done.stderr)
