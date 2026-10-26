@@ -95,8 +95,10 @@ REQUIRED = tuple(DEFAULT_REQUIRED_JOBS)
 FOLLOW_WORKFLOW, MAIN_CHECK_WORKFLOW = "follow.yml", "main-check.yml"
 RED_ON_PR = "def test_red():\n    assert False, 'the trial: a pull request that is red'\n"
 # green in the pull request's run, red in the push run after its merge: a merge that turns the base red
+# red in a run of the base (a push, or the run `--dispatch-base-runs` asks for), green on a pull request
 RED_ON_PUSH = ("import os\n\n\ndef test_red_on_a_push():\n"
-               "    assert os.environ.get('GITHUB_EVENT_NAME') != 'push', 'the trial: red only on the base'\n")
+               "    assert os.environ.get('GITHUB_EVENT_NAME') not in ('push', 'workflow_dispatch'), "
+               "'the trial: red only on the base'\n")
 ROWS_ALL = (2, 3, 4, 5, 6)
 OPEN_WORKERS = 4
 READY_WITHIN_S = 60
@@ -136,6 +138,10 @@ class Trial(Protocol):
     def enable_workflow(self, file: str) -> None: ...
 
     def set_actions(self, on: bool) -> None: ...
+
+    def dispatch_tests(self) -> None:
+        """Ask for a run of `tests` on the base when the base gets none of its own on a push (a trial
+        branch `tests.yml` does not name under `push`); nothing otherwise."""
 
     def adopt(self, ticket: int) -> None:
         """A ticket the merge flow opened during the trial (a red-on-main one): `cleanup` closes it too."""
@@ -556,6 +562,9 @@ class _Run:
     def ended_run(self, sha: str, attempt: int = 1):
         """The run of the `tests` workflow on the base at `sha`, at `attempt` or later, once it ended."""
 
+        if attempt == 1:
+            self.trial.dispatch_tests()
+
         def probe():
             for found in self.hub.branch_runs(self.repo, self.base):
                 if found.sha == sha and found.attempt >= attempt and found.jobs and PENDING not in found.jobs.values():
@@ -687,12 +696,13 @@ class RealTrial:
 
     def __init__(self, repo: str, base: str, work_tree: Path, hub: PullHub, *, gh: Gh = run_gh,
                  lock_root: Path | None = None, identity: tuple[str, str] | None = None,
-                 allow_default_base: bool = False):
+                 allow_default_base: bool = False, dispatch_base_runs: bool = False):
         self.repo, self.base, self.work_tree, self.hub, self.gh = repo, base, Path(work_tree), hub, gh
         self.git = merge_git.work_tree(self.work_tree)
         self.lock_root = lock_root
         self.identity = identity
         self.allow_default_base = allow_default_base
+        self.dispatch_base_runs = dispatch_base_runs
         self.tickets: list[int] = []  # every ticket the trial made or adopted
         self.branches: set[str] = set()  # every branch it made
         self._workflows_off: set[str] = set()
@@ -808,6 +818,11 @@ class RealTrial:
         self.gh(["workflow", "enable", file, "--repo", self.repo])
         self._workflows_off.discard(file)
 
+    def dispatch_tests(self) -> None:
+        if self.dispatch_base_runs:
+            self.gh(["workflow", "run", "tests.yml", "--repo", self.repo, "--ref", self.base,
+                     "-f", "slow_and_live=false"])
+
     def set_actions(self, on: bool) -> None:
         self.gh(["api", "-X", "PUT", f"repos/{self.repo}/actions/permissions", "-F", f"enabled={str(on).lower()}"])
         self._actions_off = not on
@@ -891,7 +906,7 @@ def _real_world(args: argparse.Namespace):
         identity = (name.strip(), email.strip().rstrip(">"))
     trial = RealTrial(args.repo, args.base, Path(args.work_tree), hub,
                       lock_root=Path(args.lock_root) if args.lock_root else None, identity=identity,
-                      allow_default_base=args.allow_default_base)
+                      allow_default_base=args.allow_default_base, dispatch_base_runs=args.dispatch_base_runs)
     return trial, hub, lambda: datetime.now(UTC), time.sleep
 
 
@@ -908,6 +923,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--keep", action="store_true", help="leave the trial's tickets and pull requests open at the end")
     p.add_argument("--allow-default-base", action="store_true",
                    help="allow --base to be the repo's default branch (row 5 puts a red test on it)")
+    p.add_argument("--dispatch-base-runs", action="store_true",
+                   help="ask for each base run of `tests` by workflow_dispatch (a trial branch `tests.yml` "
+                        "runs no push on)")
     p.add_argument("--lock-root", default=None, metavar="PATH", help="the merge line's lock folder")
     p.add_argument("--identity", default=None, metavar='"Name <email>"', help="author of the trial's commits")
     p.add_argument("--line-minutes", type=float, default=90, help="the bound of the line's run (default: 90)")

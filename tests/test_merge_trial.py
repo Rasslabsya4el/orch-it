@@ -90,6 +90,9 @@ class FakeTrial:
         self.actions_log.append(on)
         self.hub.actions = on
 
+    def dispatch_tests(self):
+        self.dispatched = getattr(self, "dispatched", 0) + 1
+
     def adopt(self, ticket):
         self.adopted.append(ticket)
 
@@ -683,3 +686,25 @@ def test_a_wait_that_gh_fails_in_is_tried_again_and_then_raised(world):
     with pytest.raises(GithubError):
         run.wait("a thing", flaky)
     assert len(calls) == 4
+
+
+def test_a_real_trial_asks_for_the_base_s_run_only_when_told_to(tmp_path):
+    calls = []
+    for dispatch in (False, True):
+        trial = merge_trial.RealTrial(REPO, "trial-main", tmp_path, hub=None, gh=lambda args: calls.append(args) or "",
+                                      dispatch_base_runs=dispatch)
+        trial.dispatch_tests()
+    assert calls == [["workflow", "run", "tests.yml", "--repo", REPO, "--ref", "trial-main", "-f", "slow_and_live=false"]]
+
+
+def test_the_trial_s_red_test_is_red_on_a_dispatched_run_of_the_base_too(tmp_path, monkeypatch):
+    namespace = {}
+    exec(merge_trial.RED_ON_PUSH, namespace)
+    for event, red in (("push", True), ("workflow_dispatch", True), ("pull_request", False)):
+        monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+        try:
+            namespace["test_red_on_a_push"]()
+            failed = False
+        except AssertionError:
+            failed = True
+        assert failed is red, event
