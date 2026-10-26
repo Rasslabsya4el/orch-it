@@ -36,7 +36,8 @@ def test_it_adds_no_required_check():
 def test_main_is_checked_when_a_tests_run_on_the_default_branch_ends():
     text = (WORKFLOWS / "main-check.yml").read_text("utf-8")
     assert "workflow_run:\n    workflows: [tests]\n    types: [completed]" in text
-    assert "if: github.event.workflow_run.head_branch == github.event.repository.default_branch" in text
+    assert ("github.event.workflow_run.head_branch == github.event.repository.default_branch &&\n"
+            "      github.event.workflow_run.event != 'pull_request'") in text  # a fork's branch named main is no main
     assert 'python -m orch_it main check --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" --role github' in text
     assert "name: orch-it-events-main-${{ github.run_id }}-${{ github.run_attempt }}" in text
 

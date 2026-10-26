@@ -50,6 +50,45 @@ def test_a_member_of_the_line_is_followed_and_red_main_gets_its_ticket(tmp_path)
     assert any(code == "red_ticket_opened" for code, _ in done.repairs)
 
 
+def test_a_follow_or_a_main_check_that_breaks_never_ends_the_sweep_unwritten(tmp_path, monkeypatch):
+    from orch_it.merge import reconcile as sweep_module
+    from orch_it.testruns.github import GithubError
+
+    hub, store, prs = world(tmp_path)
+
+    def broken(*args, **kwargs):
+        raise ValueError("a bug")
+
+    def no_runs(repo, branch):
+        raise GithubError("gh_failed", "Actions are disabled (HTTP 403)")
+
+    monkeypatch.setattr(sweep_module, "follow", broken)
+    hub.branch_runs = no_runs
+    done = sweep(hub, store, tmp_path)
+    assert len(done.failed) == 2 and done.repairs == []
+    assert store.query("SELECT outcome FROM events WHERE kind = 'step.ended' AND step = 'reconcile'").rows == [
+        ("failed",)]
+
+
+def test_a_rerun_the_sweep_asked_for_is_a_repair(tmp_path):
+    from fake_github import NO_RESULT
+
+    hub, store, _ = world(tmp_path)
+    hub.main_run(hub.land(), {"linux": NO_RESULT, "windows": PASSED})
+    assert ("rerun", "main") in sweep(hub, store, tmp_path).repairs
+
+
+def test_an_artifact_already_brought_in_is_not_downloaded_again(tmp_path):
+    hub, store, _ = world(tmp_path)
+    hub.event_files["orch-it-events-main-3-1"] = {"2026-11-02/abcd-runner.jsonl": ""}
+    downloads = []
+    real = hub.download_artifact
+    hub.download_artifact = lambda *args: (downloads.append(args[2]), real(*args))
+    sweep(hub, store, tmp_path, bring_events=True)
+    sweep(hub, store, tmp_path, bring_events=True)
+    assert downloads == ["orch-it-events-main-3-1"]
+
+
 def test_a_sweep_with_nothing_to_repair_repairs_nothing(tmp_path):
     hub, store, _ = world(tmp_path)
     assert sweep(hub, store, tmp_path).repairs == []
