@@ -3,7 +3,8 @@
 `python -m orch_it labels sync` (#398 decision 6); `python -m orch_it guards scan` (#395 decision 4:
 it prints one line per private value found and exits 1 when there is any); `python -m orch_it skills
 shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens; `python -m orch_it
-research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts).
+research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m orch_it
+tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -28,6 +29,8 @@ from orch_it.skills import shadow
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.runner import NEED_OSES, RunError, git_output, run_tests
+from orch_it.tickets import commands as ticket_commands
+from orch_it.tickets.park import ParkError
 
 DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
@@ -190,6 +193,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--job", help=argparse.SUPPRESS)  # the MCP front's job id, carried by the started event
 
     commands.add_parser("research-mcp", help="the research bridge's MCP server on stdin and stdout")
+
+    ticket_commands.add_parsers(commands, common)
     return root
 
 
@@ -416,10 +421,12 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _research(args)
         elif args.group == "research-mcp":
             return research_mcp.serve()
+        elif args.group == "tickets":
+            text, code = ticket_commands.run(args, _store(args), args.repo or _repo_of("."), render), 0
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, labels.LabelError, CommandError, RunError,
+            queries.QueryError, github.GithubError, labels.LabelError, ParkError, CommandError, RunError,
             scanner.ScanError, hook.ReverseError, ResearchRefused) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
