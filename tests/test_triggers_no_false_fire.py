@@ -57,3 +57,20 @@ def test_nesting_past_the_depth_bound_is_refused_as_opaque():
     deep = "echo " + "$(echo " * (shell.MAX_DEPTH + 5) + "rm -rf x" + ")" * (shell.MAX_DEPTH + 5)
     found = [a for a in act(deep) if isinstance(a, Delete) and a.rule_id == "unreadable-command"]
     assert found and found[0].targets == (None,)  # opaque, the guard refuses it
+
+
+def test_a_computed_path_delete_in_a_code_body_is_not_refused():
+    # the merge-turn release line and the like: os.remove/os.rmdir of a computed path pass
+    rel = ("python -c \"import os; p=os.path.join(os.environ['X'],'merge-turn'); "
+           "os.remove(os.path.join(p,'owner')); os.rmdir(p)\"")
+    assert guarded(rel) == []
+
+
+def test_a_raw_string_literal_path_in_a_code_body_is_read():
+    found = [a for a in act("python -c \"import os; os.remove(r'../tickets/x')\"") if isinstance(a, Delete)]
+    assert found and found[0].targets == ("../tickets/x",)
+
+
+def test_busybox_and_ifs_spliced_deletes_are_read():
+    assert [a for a in act("busybox rm -rf ../tickets") if isinstance(a, Delete)][0].targets == ("../tickets",)
+    assert [a for a in act("rm${IFS}-rf${IFS}../tickets") if isinstance(a, Delete)][0].targets == ("../tickets",)

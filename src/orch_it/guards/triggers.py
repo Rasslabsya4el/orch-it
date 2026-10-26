@@ -248,7 +248,7 @@ def _is_flag(word: str) -> bool:
 
 _POSIX_SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 _PASS_THROUGH = {"env", "sudo", "nice", "nohup", "setsid", "stdbuf", "ionice", "doas", "command",
-                 "builtin", "exec", "time"}
+                 "builtin", "exec", "time", "busybox"}
 
 
 _EVAL = {"eval", "iex", "invoke-expression"}
@@ -1285,8 +1285,13 @@ def _code_body(body, simple, segment, delete_res, stop_re, stop_rule, flavor, wi
     for delete_re, rule, reader in delete_res:
         deletes = list(delete_re.finditer(code))
         if deletes:
-            targets = tuple(t for m in deletes for t in reader(body, code, m))
-            found.append(Delete(targets, simple.cwd, True, True, True, rule, segment))
+            # only a literal path argument is a target; a computed one (`os.rmdir(p)`,
+            # `rmtree(os.environ['X'])`) is unreadable, so it is NOT refused — refusing every
+            # computed-path delete would block ordinary code (the merge-turn release line, say),
+            # and the guard reads the object, not a guess. A literal path is judged like `rm`.
+            targets = tuple(t for m in deletes for t in reader(body, code, m) if t is not None)
+            if targets:
+                found.append(Delete(targets, simple.cwd, True, True, True, rule, segment))
     stops = list(stop_re.finditer(code))
     if stops:
         pids = tuple(int(m.group(1)) for m in stops if m.group(1))
@@ -1587,7 +1592,8 @@ def _arg_target(body: str, match: re.Match) -> str | None:
     position; None when its argument is not a plain string literal (a variable, a join)."""
 
     tail = body[match.start():]
-    found = re.match(r"[^(]*\(\s*(['\"])((?:\\.|[^'\"\\])*)\1\s*[),]", tail)
+    # a string literal may carry a prefix (`r'x'`, `rb"x"`, `f'x'`, `u'x'`): read its text
+    found = re.match(r"[^(]*\(\s*[rRbBfFuU]{0,2}(['\"])((?:\\.|[^'\"\\])*)\1\s*[),]", tail)
     return found.group(2) if found else None
 
 
