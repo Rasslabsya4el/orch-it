@@ -274,7 +274,7 @@ class Patterns:
     def find_in_file(self, path: str, text: str) -> list[tuple[str, int]]:
         """(kind, 1-based line) of each value and pattern kind of #413 found in `text`, the whole
         text of the file at the repo path `path`, sorted by line. Empty when `values` is None, for a
-        path that is an allowed place, and for a line an exceptions entry allows. The setup's own
+        path that is an allowed place, and for a (line, kind) an exceptions entry allows. The setup's own
         home and host are left to `find`."""
 
         if self.values is None or exceptions_list.is_allowed_place(path, self.settings_file):
@@ -284,7 +284,7 @@ class Patterns:
         found |= {(hit.kind, hit.line) for hit in pattern_kinds.find_pattern_kinds(path, text, self.job_names)}
         lines = text.split("\n")
         return sorted((kind, number) for kind, number in found
-                      if not self.exceptions.allows(path, lines[number - 1] if number <= len(lines) else ""))
+                      if not self.exceptions.allows(path, lines[number - 1] if number <= len(lines) else "", kind))
 
     def not_checked_line(self) -> str:
         """`not checked: git_email (not set), ...` for the kinds of values the setup lacked, else

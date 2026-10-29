@@ -180,7 +180,7 @@ One place (file, line, kind) where the scan meets a value of a kind the coding s
 _Avoid_: hit, match, leak
 
 **Exceptions list**:
-`guards-exceptions.toml` at the repo root; each entry names a file, a line pattern and its reason; an entry with no reason, or a malformed file, refuses the push.
+`guards-exceptions.toml` at the repo root; each entry names a file, a line pattern, the kinds of finding it excuses and its reason; an entry with no kinds or no reason, or a malformed file, refuses the push.
 _Avoid_: exemption, ignore file, waiver
 
 **Allowed place**:

@@ -97,7 +97,9 @@ The label set is `src/orch_it/labels/labels.json`; `python -m orch_it labels syn
 A ticket that waits on one event is parked, never left waiting by a word in its title or body:
 
 ```
-python -m orch_it tickets park <n> <kind> <ref> --until <YYYY-MM-DD>
+<python> -m orch_it tickets park <n> <kind> <ref> --until <YYYY-MM-DD>
 ```
+
+`<python>` is the interpreter orch_it is installed in: the first word of the repo's test command, or the one `hooks/orch-it` finds.
 
 `kind` is one of `pr_ended` (a pull request `#N` merging; closed unmerged sends it to the brain), `ticket_closed` (a ticket `#N` or `owner/repo#N` closed completed; not planned sends it to the brain; never its own parent), `date` (a day), `run_ended` (a GitHub Actions run id or a store run id ending green), `owner_answer` (the owner commenting on the ticket named) or `layer_version` (the repo running orch-it `X.Y.Z`). `until` is the last day it may wait. Park and unpark only through these commands: what they write and refuse is in `docs/events.md` (Commands), and the hook refuses a `Parked:` line or a `parked` label written by hand. `python -m orch_it tickets unpark <n>` takes both off. The reader `python -m orch_it tickets parks` returns a ticket whose event came, and sends to the brain (`needs-triage`, a comment) one whose event came the other way, whose `until` passed, that a person commented on, or whose park cannot be read.

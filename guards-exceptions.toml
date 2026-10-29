@@ -8,26 +8,31 @@
 [[exception]]
 file = "src/orch_it/**/*.py"
 pattern = '(REQUIRED_CHECKS|DEFAULT_REQUIRED_JOBS|GITHUB_OSES) = '
+kinds = ["check_name_literal"]
 reason = "Follow-up: the names of the checks a push must see green are a default written in code; the tests-on-GitHub ticket of map #355 moves them to a setting with the default there."
 
 [[exception]]
 file = "tests/*merge*.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "Follow-up: the merge-line tests freeze the two job names of the tests workflow (and an OS name beside them); the tests-on-GitHub ticket of map #355 moves the names to a setting and these tests read them from it."
 
 [[exception]]
 file = "tests/*github*.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "Follow-up: the fake GitHub and the import of its runs freeze the two job names of the tests workflow; the tests-on-GitHub ticket of map #355 moves the names to a setting and these tests read them from it."
 
 [[exception]]
 file = "tests/*workflow*.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "Follow-up: these tests read the jobs of the repo's own workflow files by their two names; the tests-on-GitHub ticket of map #355 moves the names to a setting and these tests read them from it."
 
 [[exception]]
 file = "tests/test_guards_status.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "Follow-up: the branch-protection fixture lists the two required checks by name; the tests-on-GitHub ticket of map #355 moves the names to a setting and this test reads them from it."
 
 # ---- 6. A word that is also a workflow job name, used as a plain word ----------------------------------------
@@ -35,6 +40,7 @@ reason = "Follow-up: the branch-protection fixture lists the two required checks
 [[exception]]
 file = "**/*.py"
 pattern = '''["'`](check|follow|sweep|shape|update)["'`]'''
+kinds = ["check_name_literal"]
 reason = "The workflow files give the jobs short names that are also ordinary words; here the quoted word is a command name, an event step, a queue name, a dictionary key or a flag value, not the name of a GitHub check."
 
 # ---- 6. An OS name used as the value of an OS field ------------------------------------------------------
@@ -42,56 +48,67 @@ reason = "The workflow files give the jobs short names that are also ordinary wo
 [[exception]]
 file = "src/orch_it/testruns/*.py"
 pattern = '''^(?!.*(DEFAULT_REQUIRED_JOBS|GITHUB_OSES)).*["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "The test-run code names the operating system by its closed set of words (linux, windows, macos) as the settings and the events do; an OS name is the value of the os field, not a check name."
 
 [[exception]]
 file = "src/orch_it/guards/shell.py"
 pattern = '''["']windows["']'''
+kinds = ["check_name_literal"]
 reason = "The word names the shell dialect (windows or posix) that the command reader returns; it is no check name."
 
 [[exception]]
 file = "src/orch_it/guards/triggers.py"
 pattern = '''["']windows["']'''
+kinds = ["check_name_literal"]
 reason = "The word names the shell dialect (windows or posix) that the command reader returns; it is no check name."
 
 [[exception]]
 file = "src/orch_it/tickets/hook.py"
 pattern = '''["']windows["']'''
+kinds = ["check_name_literal"]
 reason = "The word names the shell dialect (windows or posix) that the command reader returns; it is no check name."
 
 [[exception]]
 file = "tests/test_*place*.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "Fixtures of the place rule and its runs give a test run the OS it ran on; an OS name is the value of the run_os field (a closed set), not a check name."
 
 [[exception]]
 file = "tests/test_*machine*.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "Fixtures of a machine in the settings give its OS; an OS name is the value of the os field (a closed set), not a check name."
 
 [[exception]]
 file = "tests/test_own_runs.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "A fixture gives a run on this machine its OS; an OS name is the value of the os field (a closed set), not a check name."
 
 [[exception]]
 file = "tests/test_test_settings.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "Fixtures of the test settings give each machine its OS; an OS name is the value of the os field (a closed set), not a check name."
 
 [[exception]]
 file = "tests/test_closed_sets.py"
 pattern = '''["'](linux|windows)["']'''
+kinds = ["check_name_literal"]
 reason = "The test freezes the closed set of OS names that the run_os field of an event accepts; it is no check name."
 
 [[exception]]
 file = "tests/test_proctree.py"
 pattern = '''platform="linux"'''
+kinds = ["check_name_literal"]
 reason = "A fake sys.platform for a test of the process helper; an OS name, not a check name."
 
 [[exception]]
 file = "tests/test_prepush.py"
 pattern = '''HOME_SPELLINGS\[?["']?(linux|windows)|^\s*["'](linux|windows)":'''
+kinds = ["check_name_literal"]
 reason = "A table of the home-folder spellings of the private-data scan, keyed by OS name; the keys are OS names, not check names."
 
 # ---- 5. A bare python -------------------------------------------------------------------------------------
@@ -99,61 +116,73 @@ reason = "A table of the home-folder spellings of the private-data scan, keyed b
 [[exception]]
 file = ".github/workflows/*.yml"
 pattern = 'python3? (-m orch_it|-c |\.github/scripts/)'
+kinds = ["bare_python"]
 reason = "A step of a GitHub workflow runs on a runner where the setup step puts the one interpreter of the job on the path under this name; a shell step has no sys.executable to ask."
 
 [[exception]]
 file = "hooks/orch-it"
 pattern = '(command -v|exec|&&) py[t]hon3?\b'
+kinds = ["bare_python"]
 reason = "The shim finds the interpreter by trying its candidates in order (the setting, the names with a 3 and without, then the py launcher); naming the candidates is its work, so it assumes none."
 
 [[exception]]
 file = ".claude/skills/write-ticket/SKILL.md"
 pattern = '^py[t]hon -m orch_it tickets park'
+kinds = ["bare_python"]
 reason = "Follow-up, real: the skill tells the agent to run the park command in the form every doc of the repo writes it; a setting for the interpreter name in the docs is not built, and the agent's own shell finds it."
 
 [[exception]]
 file = "docs/agents/*.md"
 pattern = '`py[t]hon -m orch_it '
+kinds = ["bare_python"]
 reason = "Follow-up, real: the brain's rules text shows each command to run in the one form the repo's docs write it; a setting for the interpreter name in the docs is not built."
 
 [[exception]]
 file = "src/orch_it/language_tables/*.toml"
 pattern = '`py[t]hon -m orch_it '
+kinds = ["bare_python"]
 reason = "Follow-up, real: the text printed to a person names the command to run in the one form the repo's docs write it; a setting for the interpreter name in the printed text is not built."
 
 [[exception]]
 file = "src/orch_it/roles/roles.json"
 pattern = '`py[t]hon -m orch_it '
+kinds = ["bare_python"]
 reason = "Follow-up, real: the note in the roles settings names the render command in the one form the repo's docs write it; a setting for the interpreter name in the note is not built."
 
 [[exception]]
 file = "tests/fixtures/brain_port/*"
 pattern = 'py[t]hon3? (-m|-I|scripts/)'
+kinds = ["bare_python"]
 reason = "A snapshot of the old layer's brain rules, kept as written: it is the source text the port table checks the new rules against, with its old command forms."
 
 [[exception]]
 file = "tests/fixtures/junit/VERSIONS.md"
 pattern = '^py[t]hon -m pytest '
+kinds = ["bare_python"]
 reason = "A record of the command that made the junit fixtures, kept as written."
 
 [[exception]]
 file = "tests/fixtures/roles/commands/docs/commands.md"
 pattern = 'py[t]hon -m orch_it roles '
+kinds = ["bare_python"]
 reason = "A fixture docs file whose command line is the text the roles check reads; it is the data under test."
 
 [[exception]]
 file = "tests/test_guards_kinds.py"
 pattern = '''subprocess\.run\((\["|")py[t]hon3?\b'''
+kinds = ["bare_python"]
 reason = "A fixture that plants the literal the check must refuse: a call with a bare interpreter name, to prove the check finds it."
 
 [[exception]]
 file = "tests/test_test_settings.py"
 pattern = '''\["py[t]hon", "-c", '''
+kinds = ["bare_python"]
 reason = "A fixture that plants a test command with a bare interpreter name, to prove the settings reader refuses the control character after it."
 
 [[exception]]
 file = "tests/test_triggers_coverage.py"
 pattern = '''parametrize\("head", \["py[t]hon"'''
+kinds = ["bare_python"]
 reason = "A fixture that lists the command words the process guard must read as an interpreter; they are the input of the test."
 
 # ---- 4. A command or call that exists on one OS only --------------------------------------------------------
@@ -161,26 +190,31 @@ reason = "A fixture that lists the command words the process guard must read as 
 [[exception]]
 file = "src/orch_it/guards/kinds.py"
 pattern = 'winreg\|msvcrt'
+kinds = ["one_os_call"]
 reason = "The detector itself: this regex lists the names of the one-OS calls the check looks for."
 
 [[exception]]
 file = "tests/test_guards_*.py"
 pattern = 'ctypes\.windll|import winreg|import msvcrt|import fcntl|os\.getuid|pattern = "fcntl"'
+kinds = ["one_os_call"]
 reason = "A fixture that plants the literal the check must refuse: a one-OS call written in a text, to prove the check finds it (or the exceptions list allows it)."
 
 [[exception]]
 file = "tests/test_scan_wired.py"
 pattern = 'os\.startfile'
+kinds = ["one_os_call"]
 reason = "A fixture that plants the literal the check must refuse: a one-OS call written in a file, to prove the scan finds it (and that an OS test above it guards it)."
 
 [[exception]]
 file = "tests/test_ticket_text_values.py"
 pattern = '^ONE_OS_CALL = '
+kinds = ["one_os_call"]
 reason = "A fixture that plants the literal the check must refuse: a one-OS name written in a ticket text, to prove the ticket check finds it."
 
 [[exception]]
 file = "tests/test_research_settings.py"
 pattern = '"ctypes\.windll": re\.compile'
+kinds = ["one_os_call"]
 reason = "A table of the one-OS calls this test forbids in the research bridge's code; it names the calls to look for and uses none."
 
 # ---- 2. The login name of the machine ----------------------------------------------------------------------
@@ -190,9 +224,11 @@ reason = "A table of the one-OS calls this test forbids in the research bridge's
 [[exception]]
 file = "**/*.py"
 pattern = 'parent/[u]ser/session|/[u]ser/hooks|[u]ser@notty|https://[u]ser:secret'
+kinds = ["user"]
 reason = "The word is part of an invented path, an ssh banner, a credential URL or a comment; it is a finding only on a machine whose login is that common word."
 
 [[exception]]
 file = "tests/test_*.py"
 pattern = '"[u]ser": "[U]SER=tester9"|[u]ser=[U]SER, |env=\{"[U]SER": [U]SER\}'
+kinds = ["user"]
 reason = "A fixture that plants the login name the scan reads from the environment, to prove the scan finds it."

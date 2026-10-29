@@ -205,11 +205,21 @@ def test_the_same_literal_in_research_and_in_an_exceptions_entry_passes(setup, c
     setup.repo.commit({"docs/research/x.md": text, "notes.txt": text, "other.txt": text})
     code, out, _ = scan(capsys, setup, "--tree")
     assert code == 1 and set(found(out)) == {"notes.txt", "other.txt"}
-    entries = ('[[exception]]\nfile = "notes.txt"\npattern = "clone"\nreason = "a record of the clone line"\n\n'
-               '[[exception]]\nfile = "other.txt"\npattern = "clone"\nreason = "another record"\n')
+    entries = ('[[exception]]\nfile = "notes.txt"\npattern = "clone"\nkinds = ["repo", "account", "git_name"]\nreason = "a record of the clone line"\n\n'
+               '[[exception]]\nfile = "other.txt"\npattern = "clone"\nkinds = ["repo", "account", "git_name"]\nreason = "another record"\n')
     setup.repo.commit({"guards-exceptions.toml": entries})
     code, out, _ = scan(capsys, setup, "--tree")
     assert (code, found(out)) == (0, {})
+
+
+def test_an_entry_excuses_only_its_kinds_on_a_line(setup, capsys):
+    """A workflow line with a bare interpreter and a repo name: the entry for the interpreter leaves the repo."""
+
+    entry = ('[[exception]]\nfile = "w.yml"\npattern = "python -m orch_it"\nkinds = ["bare_python"]\n'
+             'reason = "the runner\'s interpreter"\n')
+    setup.repo.commit({"w.yml": setup.line("        run: python -m orch_it --repo {repo}\n"), "guards-exceptions.toml": entry})
+    code, out, _ = scan(capsys, setup, "--tree")
+    assert code == 1 and found(out) == {"w.yml": {"repo", "account"}}
 
 
 def test_the_settings_file_is_an_allowed_place(setup, tmp_path, monkeypatch, capsys):
@@ -222,7 +232,7 @@ def test_the_settings_file_is_an_allowed_place(setup, tmp_path, monkeypatch, cap
 
 def test_an_exceptions_entry_with_no_reason_exits_2_naming_the_entry(setup, capsys):
     setup.repo.commit({"notes.txt": f"clone {REPO}\n",
-                       "guards-exceptions.toml": '[[exception]]\nfile = "notes.txt"\npattern = "clone"\n'})
+                       "guards-exceptions.toml": '[[exception]]\nfile = "notes.txt"\npattern = "clone"\nkinds = ["repo"]\n'})
     code, out, err = scan(capsys, setup, "--tree")
     assert (code, out) == (2, "")
     assert "entry 1" in err and "notes.txt" in err and "reason" in err
@@ -290,7 +300,7 @@ def push_of(setup, tmp_path, base, head):
 
 def test_a_push_with_an_exceptions_entry_with_no_reason_is_refused_and_the_other_kinds_still_run(setup, tmp_path, capsys):
     base = setup.repo.commit({"README.md": "clean\n"})
-    head = setup.repo.commit({"guards-exceptions.toml": '[[exception]]\nfile = "n.txt"\npattern = "x"\n',
+    head = setup.repo.commit({"guards-exceptions.toml": '[[exception]]\nfile = "n.txt"\npattern = "x"\nkinds = ["git_name"]\n',
                               "n.txt": f"by {GIT_NAME}\n"})
     assert push_of(setup, tmp_path, base, head) == ("", 1)
     err = capsys.readouterr().err
@@ -299,7 +309,7 @@ def test_a_push_with_an_exceptions_entry_with_no_reason_is_refused_and_the_other
 
 
 def test_a_push_reads_the_exceptions_list_of_the_pushed_commit_when_it_is_not_checked_out(setup, tmp_path, capsys):
-    entry = '[[exception]]\nfile = "n.txt"\npattern = "by"\nreason = "a record"\n'
+    entry = '[[exception]]\nfile = "n.txt"\npattern = "by"\nkinds = ["git_name"]\nreason = "a record"\n'
     base = setup.repo.commit({"README.md": "clean\n"})
     head = setup.repo.commit({"guards-exceptions.toml": entry, "n.txt": f"by {GIT_NAME}\n"})
     setup.repo.git("checkout", "-q", base)  # the work tree is at the base: its tree has no list
