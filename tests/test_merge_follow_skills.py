@@ -4,8 +4,10 @@ found through the branch `skills-upstream/<commit>-<base>`). A red or no result 
 sends that issue to the brain with the failing ids and takes `ready-for-agent` off; a green pull request
 touches nothing. Seam: `follow` on FakeGitHub, as the other follow tests."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
 from fake_github import FAILED, NO_RESULT, PASSED, REPO, FakeGitHub
 
 from orch_it import tickets
@@ -184,3 +186,56 @@ def test_a_merged_pull_request_with_neither_ticket_nor_skills_issue_stays_merged
     done = run(hub, store, pr)
     assert (done.outcome, done.ticket) == ("merged_alone", None)
     assert closes(hub) == [] and hub.issues[(REPO, ISSUE)].open
+
+
+def test_a_merged_skills_pull_request_writes_its_comment_and_its_ticket_closed_events(tmp_path):
+    """The events list the close the way the ticket path writes it: the closing comment, then `ticket.closed`."""
+
+    hub, store, pr = skills_world(tmp_path)
+    merged_pr(hub, pr)
+    run(hub, store, pr)
+    rows = store.query("SELECT kind, ticket, json_extract(detail, '$.comment_kind') FROM events "
+                       "WHERE kind IN ('comment.written', 'ticket.closed')").rows
+    assert ("comment.written", ISSUE, "closing") in [tuple(row) for row in rows]
+    assert ("ticket.closed", ISSUE, None) in [tuple(row) for row in rows]
+
+
+def test_a_skills_issue_edited_between_its_read_and_its_close_is_raced_and_nothing_is_written(tmp_path, monkeypatch):
+    """The ticket path's re-read and refusal: an issue changed since it was read is not closed, nor commented."""
+
+    hub, store, pr = skills_world(tmp_path)
+    merged_pr(hub, pr)
+    read, reads = hub.issue, []
+
+    def edited_after_the_first_read(repo, number):
+        found = read(repo, number)
+        if number == ISSUE and found is not None:
+            reads.append(number)
+            if len(reads) == 2:
+                return replace(found, body=found.body + "\nedited meanwhile\n")
+        return found
+
+    monkeypatch.setattr(hub, "issue", edited_after_the_first_read)
+    done = run(hub, store, pr)
+    monkeypatch.undo()
+    assert done.outcome == "raced"
+    assert hub.issues[(REPO, ISSUE)].open and closes(hub) == [] and hub.comments(REPO, ISSUE) == []
+
+
+def test_a_second_follow_after_the_comment_but_a_refused_close_posts_no_second_done_text(tmp_path, monkeypatch):
+    hub, store, pr = skills_world(tmp_path)
+    merged_pr(hub, pr)
+
+    def refused(repo, number, reason):
+        raise RuntimeError("the close was refused")
+
+    monkeypatch.setattr(hub, "close_issue", refused)
+    with pytest.raises(RuntimeError):
+        run(hub, store, pr)
+    assert hub.issues[(REPO, ISSUE)].open
+    monkeypatch.undo()
+    done = run(hub, store, pr)
+    assert done.outcome == "closed_skills"
+    assert [c.body for c in hub.comments(REPO, ISSUE) if done_text(COMMIT) in c.body] == [
+        marks.follow_mark("closed") + done_text(COMMIT)]
+    assert not hub.issues[(REPO, ISSUE)].open

@@ -282,12 +282,24 @@ class _Follow:
 
     def _closed_skills(self, merge: dict) -> FollowReport:
         """A skills update's pull request merged: its skills issue (no acceptance table to judge) gets the closing
-        comment `done_text` of the commit in its branch, and closes as completed."""
+        comment `done_text` of the commit in its branch, and closes as completed. Like the ticket's close, the issue
+        is read again and refused when it changed since it was read (`_Raced`, nothing written); a comment an
+        earlier follow posted before its close was refused is not posted a second time."""
 
         commit = _SKILLS_HEAD.fullmatch(self.pull.branch).group(1)
-        self.hub.comment(self.repo, self.issue.number, f"{marks.follow_mark('closed')}{done_text(commit)}")
-        self.hub.close_issue(self.repo, self.issue.number, "completed")
-        self._write(None, None, [("comment.written", {"comment_kind": "closing"})])
+        text = marks.follow_mark("closed") + done_text(commit)
+        issue = self._fresh()
+        if issue is None or not issue.open:
+            self._close_step("refused", "already_closed")
+            self._end_pr("passed", "merged", merge)
+            return self.report("already_closed")
+        if (issue.body, issue.labels) != (self.issue.body, self.issue.labels):
+            raise _Raced(f"#{issue.number} changed since it was read")
+        if not any(said.body.startswith(text) for said in self.hub.comments(self.repo, issue.number)):
+            self.hub.comment(self.repo, issue.number, text)
+            self._write(None, None, [("comment.written", {"comment_kind": "closing"})])
+        self.hub.close_issue(self.repo, issue.number, "completed")
+        self._write(None, None, [record.ticket_closed(None, None)])
         self._close_step("passed", None)
         self._end_pr("passed", "merged", merge)
         return self.report("closed_skills", commit)
