@@ -127,6 +127,22 @@ def test_a_tree_with_no_settings_file_keeps_the_known_families_only(tmp_path):
     assert hits == [("README.md", 1, "gpt")]
 
 
+def test_a_model_name_set_in_the_tree_settings_is_refused(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"research": {"models": {"small": "acme-llm/acme-1"}}}), "utf-8")
+    assert "acme-1" in refused_names_of_tree(tmp_path)
+
+
+def test_key_env_is_no_refused_name(tmp_path):
+    raw = {"research": {"key_env": "ACME_LLM_KEY", "provider": {"id": "acme-llm"}, "models": {"small": "acme-llm/acme-1"}}}
+    (tmp_path / "settings.json").write_text(json.dumps(raw), "utf-8")
+    assert "acme_llm_key" not in refused_names_of_tree(tmp_path)
+
+
+def test_a_tree_settings_file_with_no_research_object_refuses_nothing_extra(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"store": "x", "repos": {}}), "utf-8")
+    assert refused_names_of_tree(tmp_path, KNOWN_FAMILIES) == refused_names(None, KNOWN_FAMILIES)
+
+
 def test_a_malformed_settings_file_in_the_tree_raises(tmp_path):
     (tmp_path / "settings.json").write_text("[1]", "utf-8")
     with pytest.raises(SettingsError):

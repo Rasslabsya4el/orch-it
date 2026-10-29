@@ -17,6 +17,9 @@ installation's settings file:
 - `state`: the folder of runs and jobs, default `research` beside the store in orch-it's data
   folder, never inside a repo.
 
+The names check (`python -m orch_it research-check-names`) reads a `settings.json` at a repo's root, its
+`research` object, and refuses the values of the provider and model name fields only.
+
 A value of the wrong shape, or a key not in this list (a typo would be silently ignored), raises
 `SettingsError("bad_setting", "research.<key>")`; a run the settings cannot serve raises
 `ResearchRefused` before any server starts.
