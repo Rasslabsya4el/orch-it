@@ -26,7 +26,17 @@ def text(key: str, **fields: object) -> str:
     """The string `key` in the current language. With `fields` it is `str.format`ted with them;
     with none it is returned as written (a regex or a brace in it stays)."""
 
-    language = settings.human_language()
+    return _lookup(settings.human_language(), key, fields)
+
+
+def english(key: str, **fields: object) -> str:
+    """`text` in English under every setting: for what is written as a record for agents and scripts
+    (a ticket's agent block), which a person's language does not change."""
+
+    return _lookup("en", key, fields)
+
+
+def _lookup(language: str, key: str, fields: dict[str, object]) -> str:
     path = settings.table_path(language)
     try:
         table = tomllib.loads(path.read_text("utf-8"))
@@ -41,3 +51,14 @@ def text(key: str, **fields: object) -> str:
         return value.format(**fields)
     except (KeyError, IndexError) as e:
         raise LanguageError("missing_field", f"{key!r} in the {language!r} table needs {e}") from None
+
+
+def text_or_refusal(key: str, **fields: object) -> str:
+    """`text`, for a refusal or a guard's notice that must still be written: when the setting names no
+    table (or the settings cannot be read) the words are the error's own, which name the missing table,
+    and no other language's words are written instead. The caller's refusal is never lost to a setting."""
+
+    try:
+        return text(key, **fields)
+    except (settings.SettingsError, LanguageError) as e:
+        return str(e)

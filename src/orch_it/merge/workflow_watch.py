@@ -26,8 +26,7 @@ from orch_it.tickets.reader import TRIAGE_LABEL
 
 LABELS = (TRIAGE_LABEL,)
 NON_GREEN = frozenset({"failure", "cancelled", "timed_out"})
-HOW = {"failure": "failure", "cancelled": "cancelled", "timed_out": "timed out"}
-NO_JOB = "no job started"
+HOW_KEY = {"failure": "watch_how_failure", "cancelled": "watch_how_cancelled", "timed_out": "watch_how_timed_out"}
 NAME_MAX = 49  # `Workflow ` + name + ` did not end green` stays within the title limit of 80
 _MARK = re.compile(r"<!-- orch-it workflow-watch workflow=(\S+) -->")
 RUN_MARK = "<!-- orch-it workflow-watch run={run_id} -->"
@@ -98,10 +97,12 @@ def green(run: WorkflowRun) -> bool:
     return run.outcome == "success" and run.jobs_started > 0
 
 
-def how_ended(run: WorkflowRun) -> str:
-    """How a non-green run ended, in the words the watch ticket names."""
+def how_ended(run: WorkflowRun, *, record: bool = False) -> str:
+    """How a non-green run ended, in the words of the language table (a comment a person reads); `record`:
+    in English whatever the setting (the agent block of the watch ticket)."""
 
-    return NO_JOB if run.jobs_started == 0 else HOW[run.outcome]
+    say = language.english if record else language.text
+    return say("watch_how_no_job") if run.jobs_started == 0 else say(HOW_KEY[run.outcome])
 
 
 def display_name(workflow: str) -> str:
@@ -154,7 +155,7 @@ def _checked(title: str, body: str) -> tuple[str, str]:
 def build(run: WorkflowRun) -> tuple[str, str]:
     """(title, body) of the watch ticket for the non-green latest `run` of its workflow."""
 
-    name, shown, how = run.workflow, display_name(run.workflow), how_ended(run)
+    name, shown, how = run.workflow, display_name(run.workflow), how_ended(run, record=True)
     title = language.text("watch_title", shown=shown)
     human = "\n".join(f"- **{field}:** {text}" for field, text in {
         "What": language.text("watch_what", shown=shown, run_id=run.run_id),
@@ -183,13 +184,13 @@ Weight: 2
 
 
 def _comment(run: WorkflowRun) -> str:
-    return (f"Workflow `{run.workflow}` did not end green again: run {run.run_id} ended as {how_ended(run)} "
-            f"at {run.url}, ended {run.ended_at}.")
+    return language.text("watch_comment", workflow=run.workflow, run_id=run.run_id, how=how_ended(run),
+                         url=run.url, ended_at=run.ended_at)
 
 
 def _close(run: WorkflowRun) -> str:
-    return (f"Workflow `{run.workflow}` ends green: run {run.run_id} at {run.url}, ended {run.ended_at}. "
-            "Closing this watch.")
+    return language.text("watch_close", workflow=run.workflow, run_id=run.run_id, url=run.url,
+                         ended_at=run.ended_at)
 
 
 def latest_per_workflow(runs: list[WorkflowRun]) -> list[WorkflowRun]:

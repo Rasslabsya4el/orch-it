@@ -23,6 +23,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from orch_it import language
 from orch_it.guards import exceptions, hook, scanner
 from orch_it.testruns import github
 
@@ -123,25 +124,23 @@ def _fired(hit: scanner.Hit) -> hook.Fired:
 
 
 def _refusal(hits: list[scanner.Hit]) -> str:
-    lines = ["orch-it: push refused, the commits hold private data and the remote is public"
-             " (or its visibility could not be read):"]
+    lines = [language.text_or_refusal("push_refused_private")]
     lines += [f"  {hit.commit[:12]} {hit.where} {_where(hit)} {hit.kind}{scanner.cited(hit.kind)}"
               for hit in hits[:SHOWN_HITS]]
     if len(hits) > SHOWN_HITS:
-        lines.append(f"  ... and {len(hits) - SHOWN_HITS} more")
-    lines.append("take the values out of the commits (amend or rebase) and push again;"
-                 " `python -m orch_it guards scan --range <remote>..<local>` lists the same")
+        lines.append(language.text_or_refusal("push_more", count=len(hits) - SHOWN_HITS))
+    lines.append(language.text_or_refusal("push_take_out", python=sys.executable))
     return "\n".join(lines) + "\n"
 
 
 def _closing_refusal(closing: list[tuple[str, int, str, str]]) -> str:
-    lines = ["orch-it: push refused, a commit message holds a closing keyword before a ticket reference"
-             " (GitHub closes the ticket when the commit reaches its default branch):"]
-    lines += [f'  {sha}, line {number}, "{text[:LINE_BOUND]}", {" ".join(hit.split())}'
+    lines = [language.text_or_refusal("push_refused_closing")]
+    lines += [language.text_or_refusal("push_closing_hit", sha=sha, number=number, text=text[:LINE_BOUND],
+                                       hit=" ".join(hit.split()))
               for sha, number, text, hit in closing[:SHOWN_HITS]]
     if len(closing) > SHOWN_HITS:
-        lines.append(f"  ... and {len(closing) - SHOWN_HITS} more")
-    lines.append("write `Refs <URL>` or `Ticket: <URL>` in its place (amend or rebase) and push again")
+        lines.append(language.text_or_refusal("push_more", count=len(closing) - SHOWN_HITS))
+    lines.append(language.text_or_refusal("push_closing_way"))
     return "\n".join(lines) + "\n"
 
 
@@ -238,7 +237,7 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
     if not_checked:  # a clean push never goes without what was not checked
         _say(not_checked + "\n")
     if broken is not None:  # a list nobody can read refuses the push; the scan above ran without it
-        _say(f"orch-it: push refused, {exceptions.FILE_NAME}: {broken}\n")
+        _say(language.text_or_refusal("push_unreadable", file=exceptions.FILE_NAME, reason=broken) + "\n")
     if hits or closing or broken is not None:
         if hits:
             _say(_refusal(hits))
