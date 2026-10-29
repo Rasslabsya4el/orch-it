@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from orch_it.events.ids import live_id
-from orch_it.events import schema
+from orch_it.events import github_budget, schema
 from orch_it.events.store import Store
 from orch_it.testruns import environment, outcome, place_rule
 from orch_it.testruns.config import TestSettings
@@ -234,7 +234,7 @@ class _Run:
             for _ in range(polls):
                 if decision.chosen is not None:
                     break
-                sleep(WAIT_POLL_SECONDS)
+                sleep(self.poll_wait())
                 decision = self.decide(excluded)
         except BaseException:  # stopped by a person or a failing store: the wait is not left open
             writer.write(envelope | {"kind": "step.ended", "detail": {"outcome": "stopped", "reason": None}})
@@ -242,6 +242,18 @@ class _Run:
         writer.write(envelope | {"kind": "step.ended", "detail": {
             "outcome": "passed" if decision.chosen else "no_result", "reason": None}})
         return decision
+
+    def poll_wait(self) -> float:
+        """The wait before the next re-decision of a wait on test_place (#414 decision 9, as the line's `poll_wait`):
+        WAIT_POLL_SECONDS while the GitHub request budget, as the github place reads it, is at or above the threshold;
+        longer under it. No github place or no reading keeps the interval."""
+
+        github = self.places.get("github")
+        left = github.rate_limit() if hasattr(github, "rate_limit") else None
+        if left is None:
+            return float(WAIT_POLL_SECONDS)
+        remaining, limit = left
+        return github_budget.poll_interval(WAIT_POLL_SECONDS, remaining, limit, github_budget.threshold())
 
     def _started(self, writer, envelope, decision, run_os) -> None:
         writer.write(envelope | {"kind": "step.started", "detail": {

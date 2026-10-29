@@ -268,11 +268,40 @@ class GithubPlace:
     def _pause(self, deadline: float) -> bool:
         """One poll interval slept, never past the deadline; False when the deadline has passed."""
 
+        interval = self.poll_wait()  # the budget is read first: the deadline is counted after that call
         left = deadline - self.clock()
         if left <= 0:
             return False
-        self.sleep(min(POLL_SECONDS, left))
+        self.sleep(min(interval, left))
         return True
+
+    def poll_wait(self) -> float:
+        """The wait before the next read of a run's jobs (#414 decision 9, as the line's `poll_wait`): POLL_SECONDS
+        while the account's request budget, as GitHub reports it now, is at or above the threshold; longer under it.
+        No reading keeps the interval."""
+
+        left = self.rate_limit()
+        if left is None:
+            return POLL_SECONDS
+        remaining, limit = left
+        return github_budget.poll_interval(POLL_SECONDS, remaining, limit, github_budget.threshold())
+
+    def rate_limit(self) -> tuple[int, int] | None:
+        """The core request budget of the token as GitHub reports it now: (remaining, limit); None when it cannot be
+        read. Not stored: its call names no repo."""
+
+        try:
+            found = self._object(self.gh(["api", "rate_limit"]))
+        except GithubError:
+            return None
+        resources = found.get("resources")
+        core = resources.get("core") if isinstance(resources, dict) else None
+        if not isinstance(core, dict):
+            return None
+        remaining, limit = core.get("remaining"), core.get("limit")
+        if type(remaining) is not int or type(limit) is not int or limit <= 0:
+            return None
+        return remaining, limit
 
     def _ours(self, ref: str, sha: str) -> int | None:
         """The id of the run the dispatch made, the one on our own branch; None while none is listed."""

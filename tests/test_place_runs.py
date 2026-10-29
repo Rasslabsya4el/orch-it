@@ -129,6 +129,40 @@ def test_a_wait_stopped_by_a_person_is_ended_stopped(tmp_path):
     assert ends(store, "wait") == [("stopped", None)]
 
 
+class Budgeted:
+    """A github place for the wait only: it is not offered (github_tests is off), and it reads the request budget
+    GitHub has left, as the real place does."""
+
+    id, os = "github", "linux"
+
+    def __init__(self, remaining):
+        self.remaining = remaining
+
+    def rate_limit(self):
+        return self.remaining, 5000
+
+    def run(self, request, scratch):
+        raise PlaceRefused("busy")
+
+
+def test_the_wait_polls_at_its_base_while_the_github_budget_is_above_the_threshold(tmp_path):
+    store = Store.open(tmp_path / "store")
+    occupy_own(store)
+    sleeps = []
+    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
+              places={"own": OwnPlace(), "github": Budgeted(2500)}, wait_minutes=1, sleep=sleeps.append)
+    assert sleeps == [15.0] * 4  # half of the 5000 left is above the 20% threshold: the base, 15 s
+
+
+def test_the_wait_polls_longer_while_the_github_budget_is_under_the_threshold(tmp_path):
+    store = Store.open(tmp_path / "store")
+    occupy_own(store)
+    sleeps = []
+    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
+              places={"own": OwnPlace(), "github": Budgeted(500)}, wait_minutes=1, sleep=sleeps.append)
+    assert sleeps == [60.0] * 4  # a tenth left: two doublings of 15 s, 1 + floor(log2(1000 / 500)) = 2
+
+
 def test_a_wait_ends_after_its_polls_even_if_the_clock_stands_still(tmp_path):
     store = Store.open(tmp_path / "store")
     occupy_own(store)
