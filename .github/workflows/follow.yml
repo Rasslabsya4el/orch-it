@@ -4,7 +4,7 @@ name: follow
 # review or a comment on it, a comment on, edit of or close of a parked ticket, and the end of a
 # `tests` run each run `follow`, which moves the ticket as the pull request stands. The end of a
 # `tests` run follows the open pull requests whose head is the run's commit: a pull request with a
-# ready mark and no auto-merge on a base that requires no check (#424) is merged there once its
+# ready mark on a base that does not require every required job (the mark-only class, #424) is merged there once its
 # checks are green, and nothing else fires when they turn green. The workflow's token closes,
 # labels, comments and merges, and nothing downstream needs to start from what it writes. Known limits: a
 # merge made with GITHUB_TOKEN starts no workflow, so a `push` run of `tests` / `main-check` does not fire
@@ -28,8 +28,8 @@ on:
     types: [completed]
 
 permissions:
-  contents: write  # git fetch of a pull request's head, the compare behind it, auto-merge on the pull request
-  pull-requests: write  # read a pull request, its reviews and comments; turn auto-merge on or off
+  contents: write  # git fetch of a pull request's head, the compare behind it, the merge of a mark-only pull request
+  pull-requests: write  # read a pull request, its reviews and comments; merge a mark-only pull request
   issues: write  # comment on, label and close the ticket
   actions: write  # rerun or cancel a tests run, read its reports and jobs
   checks: read  # read the check runs of a pull request's head

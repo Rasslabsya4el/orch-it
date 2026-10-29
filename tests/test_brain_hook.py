@@ -21,6 +21,9 @@ REPO = "owner-x/orch-it"
 RULES = "# The brain: the owner's chat\n\nThe brain is the chat the installation's settings name.\n"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))

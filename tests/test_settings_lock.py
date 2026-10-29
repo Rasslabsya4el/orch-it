@@ -10,6 +10,9 @@ import pytest
 from orch_it import settings
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 @pytest.fixture
 def settings_file(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"

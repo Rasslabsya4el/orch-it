@@ -38,6 +38,8 @@ POINT_KINDS = [
     "skill.shadowed",
     # #400 decision 2
     "lock.removed", "line.served",
+    # #414 decision 9: one GitHub call counted per account per hour, with the budget read from GitHub when known
+    "github.called",
 ]
 
 OUTCOMES = ["passed", "failed", "no_result", "refused", "lost", "stopped"]
@@ -136,6 +138,7 @@ CODE_FIELDS = {
     },
     ("setting.read", "source"): {"repo", "machine", "default"},
     ("machine.resumed", "cause"): {"suspend", "hibernate"},
+    ("github.called", "budget"): {"account", "actions"},
 }
 
 
@@ -150,7 +153,7 @@ def test_every_step_id_of_the_list_and_no_other():
 
 def test_every_point_kind_of_the_list_and_no_other():
     assert sorted(schema.point_kinds()) == sorted(POINT_KINDS)
-    assert len(POINT_KINDS) == 50  # 47 of the list, + skill.shadowed (#397), lock.removed, line.served (#400)
+    assert len(POINT_KINDS) == 51  # 47 of the list, + github.called (#414), + skill.shadowed (#397), lock.removed, line.served (#400)
 
 
 def test_kinds_are_the_point_kinds_and_the_pair():

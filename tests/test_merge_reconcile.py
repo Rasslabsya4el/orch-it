@@ -10,10 +10,11 @@ from fake_github import FAILED, PASSED, REPO, FakeGitHub
 from follow_world import NOW, world
 
 from orch_it.events.store import Store
-from orch_it.merge import reconcile as reconcile_module
+from orch_it.merge import marks, reconcile as reconcile_module
 from orch_it.merge.follow import FollowReport
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 
 def sweep(hub, store, tmp_path, **kwargs):
@@ -47,7 +48,7 @@ def test_with_actions_off_the_same_sweep_runs_here_and_says_so(tmp_path):
 def test_a_member_of_the_line_is_followed_and_red_main_gets_its_ticket(tmp_path):
     hub, store, prs = world(tmp_path)
     hub.checks_on(hub.head(prs[10]), FAILED, failing=["t::mine"])
-    hub.main_run(hub.land(), {"linux": FAILED, "windows": PASSED}, failing=["t::main"])
+    hub.main_run(hub.land(), {LINUX_CHECK: FAILED, WINDOWS_CHECK: PASSED}, failing=["t::main"])
     done = sweep(hub, store, tmp_path)
     assert ("unparked", f"#{prs[10]}") in done.repairs
     assert any(code == "red_ticket_opened" for code, _ in done.repairs)
@@ -77,7 +78,7 @@ def test_a_rerun_the_sweep_asked_for_is_a_repair(tmp_path):
     from fake_github import NO_RESULT
 
     hub, store, _ = world(tmp_path)
-    hub.main_run(hub.land(), {"linux": NO_RESULT, "windows": PASSED})
+    hub.main_run(hub.land(), {LINUX_CHECK: NO_RESULT, WINDOWS_CHECK: PASSED})
     assert ("rerun", "main") in sweep(hub, store, tmp_path).repairs
 
 
@@ -191,7 +192,8 @@ def test_a_sweep_that_follows_a_skills_pull_request_closed_by_its_follow_repairs
 
     hub = FakeGitHub(NOW)
     store = Store.open(tmp_path / "events")
-    pr = hub.open_pull(body="His upstream moved.", branch="skills-upstream/0123456789ab-abcdef12", auto_merge="squash")
+    pr = hub.open_pull(body="His upstream moved.", branch="skills-upstream/0123456789ab-abcdef12")
+    hub.comment(REPO, pr, marks.ready_comment(None, hub.head(pr), hub.now))  # in the merge line
 
     def closed_skills(hub_, store_, repo, number, **kwargs):
         return FollowReport(number, 20, "closed_skills", "0123456789ab")

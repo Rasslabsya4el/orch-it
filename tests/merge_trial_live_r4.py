@@ -12,7 +12,7 @@ sweep follows every pull request on GitHub. The red end waits for that run, requ
 
 The comment end waits, before it posts the owner's comment, for the follow runs of its pull request's own marks to settle
 (`_settled_follow_runs`, about 1 min on GitHub). A pull request whose required checks are green within that minute merges
-on its own auto-merge before its comment's follow run ends, and then the end can no longer be judged open. So the comment
+before its comment's follow run ends, and then the end can no longer be judged open. So the comment
 pull request carries an unmarked test, `tests/test_trial_slow_<tag>.py`, that sleeps `SLOW_SECONDS` (1 min 50 s, under the
 change run's per-test bound of 2 min: `per_change_timeout_seconds` in pyproject.toml, read by `tests.yml`). Its `tests` run
 stays busy past the follow run, so the pull request is still open when the comment's end is judged. The judge is unchanged;

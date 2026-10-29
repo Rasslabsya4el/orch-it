@@ -14,6 +14,7 @@ The walk resolves the names os is reached by through the file's own imports: `im
 `from os import mkdir as m`. An os.open whose flags is a Name is followed one assignment in the enclosing
 function; a flags Name that the function does not assign counts as a create."""
 
+import pytest
 import ast
 from collections import Counter
 from pathlib import Path
@@ -30,6 +31,9 @@ CAUGHT = {"PermissionError", "OSError", "IOError", "EnvironmentError", "Exceptio
 LISTED_NON_LOCKS = {
     ("research/mcp.py", "start"): ("makes a folder, not a lock", 1),
 }
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 class Create(NamedTuple):

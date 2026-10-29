@@ -35,6 +35,9 @@ PINNED = "49dd158d1076134a641b33efb035946536778336"  # the pin of the first copi
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def manifest() -> Manifest:
     found = Manifest.load(ROOT)
     assert found is not None, "no .claude/skills/pocock.json"

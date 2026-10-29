@@ -11,6 +11,9 @@ from orch_it.guards.exceptions import Exceptions, ExceptionsError, is_allowed_pl
 SETTINGS = "conf/settings.json"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def write(tmp_path, body):
     path = tmp_path / "guards-exceptions.toml"
     path.write_text(body, encoding="utf-8")

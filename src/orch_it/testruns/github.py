@@ -1,7 +1,7 @@
 """The GitHub importer (#394 decision 7): the runs of the `tests` workflow become events.
 
-For each completed run, and for each job named in the setting `github_required_jobs` (default
-`linux` and `windows`) in every attempt of it, the importer writes a `test_run` step pair
+For each completed run, and for each job named in the setting `required_checks` (default in
+`defaults.json`, read by `config.required_checks`) in every attempt of it, the importer writes a `test_run` step pair
 (place `github`), the queue time as a `wait` pair with reason `github_queue`, and one
 `test.result` per case of the job's JUnit artifact. The artifact is read by `outcome.judge`
 like any other report; the job's GitHub conclusion decides the outcome:
@@ -40,6 +40,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from collections import Counter
@@ -51,13 +52,13 @@ from pathlib import Path
 from orch_it import settings
 from orch_it.events import schema
 from orch_it.events.ids import import_id
+from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns import outcome
+from orch_it.testruns.config import required_checks
 
 SOURCE = "github"
 WORKFLOW_FILE = "tests.yml"
-REQUIRED_JOBS_SETTING = "github_required_jobs"
-DEFAULT_REQUIRED_JOBS = ["linux", "windows"]
 JOB_TIMEOUT_SETTING = "github_job_timeout_minutes"
 DEFAULT_JOB_TIMEOUT_MINUTES = 9
 NEWEST_RUNS_SETTING = "github_live_newest_runs"  # how many of the newest runs the live import test judges
@@ -108,7 +109,17 @@ class ImportReport:
 
 
 def run_gh(args: list[str]) -> str:
-    """The default `gh` runner: `gh <args>` bounded by a timeout, its stdout as text."""
+    """The default `gh` runner: `_call_gh`, then the call counted in the store (#414 decision 9) whatever its outcome.
+    The count is written after the call and never fails it."""
+
+    try:
+        return _call_gh(args)
+    finally:
+        github_budget.count_call(github_budget.repo_of(args))
+
+
+def _call_gh(args: list[str]) -> str:
+    """`gh <args>` bounded by a timeout, its stdout as text."""
 
     if args[:1] == ["run"]:
         timeout = DOWNLOAD_TIMEOUT_S
@@ -155,7 +166,7 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
     if newest is not None:
         _check_newest(newest, "newest")
     config = settings.load()
-    required = _required_jobs(config)
+    required = list(required_checks(config, repo))
     job_bound = _job_timeout_minutes(config)
 
     every_run = _items(gh(_list_runs_args(repo, floor, newest)), "workflow_runs")
@@ -184,6 +195,38 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
                 report.runs_failed += 1
                 if e.code not in report.failure_codes:
                     report.failure_codes.append(e.code)
+    return report
+
+
+def import_one_run(store: Store, repo: str, run_id: int, *, gh: Gh | None = None, now: datetime | None = None,
+                   required: tuple[str, ...] | None = None, keep: Path | None = None,
+                   timed: bool = True) -> ImportReport:
+    """Write the events of the one run `run_id` of `repo`, whatever its own status says (#414 decision 11: a run's
+    own status can stay not-completed long after every job has ended; the caller has settled on the jobs). The
+    events are the ones `import_github` writes for a completed run, with the same ids. `required`: the check names
+    (default: the setting `required_checks`). `keep`: a folder that gets a copy of each job's JUnit report, named by
+    its run, job and attempt. `timed` False: the jobs' end events carry no start or run minutes (the caller keeps
+    the run's own time, so the rule reads one time per run). A `gh` failure raises `GithubError`."""
+
+    gh = gh or run_gh
+    if not schema.is_repo(repo):
+        raise GithubError("bad_repo", str(repo))
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        raise GithubError("bad_now", str(now))
+    config = settings.load()
+    names = list(required if required is not None else required_checks(config, repo))
+    found = json_values(gh(["api", f"repos/{repo}/actions/runs/{run_id}"]))
+    if len(found) != 1 or not isinstance(found[0], dict):
+        raise GithubError("gh_bad_output", f"run {run_id} is no object")
+    run = found[0]
+    _need_id(run, "run")
+    if _moment(run.get("created_at")) is None:
+        raise GithubError("gh_bad_output", f"run {run['id']} has no created_at")
+    report = ImportReport(runs_read=1)
+    importer = _Importer(store, repo, gh, names, _job_timeout_minutes(config), [run], now, report, keep, timed)
+    with store.writer() as writer:
+        importer.import_run(run, writer)
     return report
 
 
@@ -230,14 +273,6 @@ def _since(since: str | None) -> datetime | None:
     except (TypeError, ValueError):
         raise GithubError("bad_since", str(since)) from None
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
-
-
-def _required_jobs(config: dict) -> list[str]:
-    names = config.get(REQUIRED_JOBS_SETTING, DEFAULT_REQUIRED_JOBS)
-    if (not isinstance(names, list) or not names
-            or not all(isinstance(name, str) and name and name == name.strip() for name in names)):
-        raise settings.SettingsError("bad_setting", REQUIRED_JOBS_SETTING)
-    return list(dict.fromkeys(names))
 
 
 def _job_timeout_minutes(config: dict) -> float:
@@ -307,6 +342,10 @@ def _moment(text: object) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+moment_of = _moment  # the GitHub place reads job stamps the importer's way
+items_of = _items  # and its lists of objects
+
+
 def _created(run: dict) -> datetime:
     return _moment(run.get("created_at")) or datetime.min.replace(tzinfo=UTC)
 
@@ -321,7 +360,7 @@ def _minutes(start: datetime | None, end: datetime | None) -> float | None:
     return max((end - start).total_seconds(), 0.0) / 60
 
 
-def _os_of(job: dict) -> str | None:
+def os_of(job: dict) -> str | None:
     """`linux`, `windows` or `macos`, from the job's labels, else its name."""
 
     labels = [label for label in job.get("labels") or [] if isinstance(label, str)]
@@ -375,8 +414,8 @@ class _Target:
 
 
 class _Importer:
-    def __init__(self, store, repo, gh, required, job_bound, every_run, now, report):
-        self.store, self.repo, self.gh = store, repo, gh
+    def __init__(self, store, repo, gh, required, job_bound, every_run, now, report, keep=None, timed=True):
+        self.store, self.repo, self.gh, self.keep, self.timed = store, repo, gh, keep, timed
         self.required, self.job_bound, self.now, self.report = required, job_bound, now, report
         self.facts_of_run = {run["id"]: _facts(run) for run in every_run}
 
@@ -460,6 +499,8 @@ class _Importer:
         with tempfile.TemporaryDirectory(prefix="orch-it-gh-") as folder:
             self.gh(["run", "download", str(run["id"]), "-R", self.repo, "-n", name, "-D", folder])
             report = next(iter(sorted(Path(folder).rglob(REPORT_FILE))), None)
+            if report is not None and self.keep is not None:
+                shutil.copyfile(report, self.keep / f"{target.key.replace('/', '-')}.xml")
             return outcome.judge(report, cut=cut), report is not None
 
     # --- the events of one job -------------------------------------------------------------
@@ -473,7 +514,7 @@ class _Importer:
             else:
                 end = outcome.RunEnd("no_result", "job_missing", (), False)
             started_at, ended_at = created, _moment(run.get("updated_at")) or created
-            run_os = _os_of({"name": target.name})
+            run_os = os_of({"name": target.name})
             minutes = {"billed_minutes": 0, "start_minutes": None, "run_minutes": None}
             wait = None
         else:
@@ -486,12 +527,14 @@ class _Importer:
             end = self._by_conclusion(run, job, end, hit_bound)
             started_at = job_started or job_created or created
             ended_at = job_ended or _moment(run.get("updated_at")) or started_at
-            run_os = _os_of(job)
+            run_os = os_of(job)
             step = next((s for s in _objects(job.get("steps"), "steps") if s.get("name") == TEST_STEP), {})
             step_start, step_end = _moment(step.get("started_at")), _moment(step.get("completed_at"))
             minutes = {"billed_minutes": billed.get(job.get("id"), 0),
                        "start_minutes": _minutes(job_created, step_start),
                        "run_minutes": _minutes(step_start, step_end)}
+            if not self.timed:
+                minutes |= {"start_minutes": None, "run_minutes": None}
             # a clock that put the start before the creation gives a wait of 0, never a negative one
             wait = (job_created, max(job_started, job_created)) if job_created and job_started else None
 

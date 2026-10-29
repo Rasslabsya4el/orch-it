@@ -12,6 +12,9 @@ from orch_it.guards.kinds import TICKET_PATH, Finding, find_in_ticket_text, find
 JOBS = frozenset({"alpha", "beta"})
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def found(path, text, job_names=JOBS):
     return [(f.kind, f.line) for f in find_pattern_kinds(path, text, job_names)]
 

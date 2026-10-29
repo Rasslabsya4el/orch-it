@@ -33,7 +33,7 @@ Every wait is bounded (`Plan.wait_minutes`, the line's own bounds in `Plan.setti
 every `poll_seconds`. A workflow or Actions turned off is turned on again when its row ends and
 by `RealTrial.restore` when the script ends (every setting is restored even when one restore
 fails). Before any row, `RealTrial.preflight` refuses a clone that is not the repo's (its origin
-names exactly OWNER/NAME) or has changes to tracked files, a repo without auto-merge or a `tests`
+names exactly OWNER/NAME) or has changes to tracked files, a repo without a `tests`
 workflow, a base that does not exist, is not protected by strict checks `linux` and `windows` only,
 or is the repo's default branch (row 5 puts a red test on the base; `--allow-default-base`). When
 the rows end, every trial ticket still open is closed `not_planned` (`ready-for-agent` off first,
@@ -76,7 +76,8 @@ from orch_it.merge.main_check import check_main
 from orch_it.merge.pr_open import Opened, open_pr
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, WORKFLOW_FILE, Gh, GithubError, run_gh
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
+from orch_it.testruns.github import WORKFLOW_FILE, Gh, GithubError, run_gh
 from orch_it.tickets.model import READY_LABEL
 from orch_it.tickets.reader import TRIAGE_LABEL
 
@@ -97,7 +98,7 @@ ROWS_FULL = """| row | result | evidence |
 | 4 | after merge | the weekly report |
 """
 ROWS = "\n".join(line for line in ROWS_FULL.splitlines() if not line.startswith("| 4 ")) + "\n"
-REQUIRED = tuple(DEFAULT_REQUIRED_JOBS)
+REQUIRED = DEFAULT_REQUIRED_CHECKS
 FOLLOW_WORKFLOW, MAIN_CHECK_WORKFLOW, RECONCILE_WORKFLOW = "follow.yml", "main-check.yml", "reconcile.yml"
 LIST_MINUTES = 3  # the longest a read of a list GitHub fills eventually waits for what must appear in it
 SETTLE_SECONDS = 60  # the fixed wait before a list is read once for what must NOT appear in it
@@ -108,6 +109,9 @@ RED_ON_PR = "def test_red():\n    assert False, 'the trial: a pull request that 
 RED_ON_PUSH = ("import os\n\n\ndef test_red_on_a_push():\n"
                "    assert os.environ.get('GITHUB_EVENT_NAME') not in ('push', 'workflow_dispatch'), "
                "'the trial: red only on the base'\n")
+# the fix of that merge: the same test, passing, so the next push run runs it and holds it passed (a red-on-main ticket
+# closes only on a run whose reports hold each of its ids passed, #414 unit 4; a deleted test is never run again)
+GREEN_ON_PUSH = "def test_red_on_a_push():\n    pass\n"
 ROWS_ALL = (2, 3, 4, 5, 6)
 OPEN_WORKERS = 4
 READY_WITHIN_S = 60
@@ -280,7 +284,7 @@ def end_judges(tag: str) -> dict[str, Callable[[dict], bool]]:
         "closed_unmerged": lambda r: (
             r["needs_triage"] and not r["ready"] and not r["parked"] and r["open"] and r["pr_state"] == "closed"),
         "comment": lambda r: (
-            r["auto_merge"] is None and r["needs_triage"] and not r["ready"] and not r["parked"]
+            not r["in_line"] and r["needs_triage"] and not r["ready"] and not r["parked"]
             and r["pr_state"] == "open"),
         "merged": lambda r: (
             not r["open"] and r["state_reason"] == "completed" and r["pr_state"] == "merged"
@@ -376,7 +380,7 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
         out["second_check"] = {"outcome": two.outcome, "attempt": again.attempt, "opened": two.opened,
                                "red_tickets": run.red_tickets_of(ids, settle=True)}
         run.say(f"second main check: {two.outcome} opened {two.opened}")
-        fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: None})
+        fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: GREEN_ON_PUSH})
         fix_merge = run.land(fixed.pr)
         run.follow(fixed.pr)
         green = run.ended_run(fix_merge.merge_sha)
@@ -498,10 +502,10 @@ def _conflict_record(run: _Run, loser: str | None, prepared: dict, order: list[s
         "ticket_ready": state["ready"], "ticket_parked": state["parked"], "ticket_open": state["open"],
         "last_comment": state["comment"][:300], "last_comment_names_the_file": shared in state["comment"],
         "attempt_counted": counted, "behind": [opened[label].pr for label in behind], "merged_behind": merged_behind,
-        "auto_merge": state["auto_merge"]}
+        "in_line": state["in_line"]}
     row["passed"] = bool(
         state["ready"] and not state["parked"] and state["open"] and row["last_comment_names_the_file"]
-        and counted == [False] and behind and len(merged_behind) == len(behind) and state["auto_merge"] is None
+        and counted == [False] and behind and len(merged_behind) == len(behind) and not state["in_line"]
         and winners == 4)
     return row
 
@@ -586,7 +590,7 @@ class _Run:
         return states if ended and FAILED in states.values() else None
 
     def land(self, pr: int) -> Pull:
-        """Merge `pr` once its required checks are green on its head (GitHub's auto-merge may do it first)."""
+        """Merge `pr` once its required checks are green on its head."""
 
         def probe() -> Pull | None:
             pull = self.hub.pull(self.repo, pr)
@@ -685,10 +689,11 @@ class _Run:
         text = "\n".join(line for line in (said[-1].body if said else "").splitlines() if not line.startswith("<!--"))
         found = {"open": issue.open, "state_reason": issue.state_reason, "labels": sorted(issue.labels),
                  "ready": parsed.ready, "parked": parsed.parked or bool(parsed.park_lines),
-                 "needs_triage": TRIAGE_LABEL in parsed.labels, "comment": text.strip(), "auto_merge": None}
+                 "needs_triage": TRIAGE_LABEL in parsed.labels, "comment": text.strip(), "in_line": False}
         if pr is not None:
             pull = self.hub.pull(self.repo, pr)
-            found |= {"pr_state": pull.state, "auto_merge": pull.auto_merge}
+            held = marks.ready_since(marks.of_layer(self.hub.pull_comments(self.repo, pr), self.owner))
+            found |= {"pr_state": pull.state, "in_line": held is not None}
         return found
 
     def events(self, ticket: int) -> list[tuple[str, dict]]:
@@ -793,8 +798,6 @@ class RealTrial:
         if self.git(["status", "--porcelain", "--untracked-files=no"]).strip():
             raise TrialError(f"the work tree {self.work_tree} has changes to tracked files: use a clean clone")
         info = self._json(["api", f"repos/{self.repo}"])
-        if not info.get("allow_auto_merge"):
-            raise TrialError(f"{self.repo} does not allow auto-merge (settings > General): `pr open` needs it")
         default = info.get("default_branch")
         self.default_branch = default
         if default == self.base and not self.allow_default_base:

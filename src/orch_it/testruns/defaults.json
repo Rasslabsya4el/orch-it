@@ -1,0 +1,8 @@
+{
+  "required_checks": ["linux", "windows"],
+  "windows_check": "windows",
+  "windows_os": "windows",
+  "windows_change_minutes": 3.5,
+  "windows_change_runs": 3,
+  "windows_slowest_listed": 5
+}

@@ -15,6 +15,9 @@ SESSION = "sess-123"
 AGENT = 1000
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 class Tree:
     def __init__(self, rows):
         self._p = {r["pid"]: r for r in rows}

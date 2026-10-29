@@ -14,13 +14,10 @@ import re
 import tempfile
 from datetime import UTC, datetime
 
-from orch_it import labels, settings
+from orch_it import labels
 from orch_it.merge import marks
-from orch_it.merge.commands import required_jobs
 from orch_it.merge.gh import GhPullHub
 from orch_it.merge.pr_open import after_open
-from orch_it.merge.settings import MergeSettings
-from orch_it.settings import SettingsError
 from orch_it.skills.copies import SkillsError
 from orch_it.skills.update import BRANCH_PREFIX
 from orch_it.testruns.github import Gh, GithubError, run_gh
@@ -94,8 +91,8 @@ class GithubForge:
         self._gh("pr", "update-branch", pr)
 
     def mark_ready(self, pr: str) -> None:
-        """The ready mark and auto-merge of a pull request `update` opened or brought up to date (#424): it enters
-        the merge line. Already in the line at its head, it keeps its one mark and only auto-merge is set again."""
+        """The ready mark of a pull request `update` opened or brought up to date (#424): it enters the merge line,
+        which merges it. Already in the line at its head, it keeps its one mark."""
 
         found = _PULL_NUMBER.fullmatch(pr.strip())
         if found is None:
@@ -106,13 +103,10 @@ class GithubForge:
             pull = hub.pull(self.repo, number)
             if pull is None:
                 raise SkillsError("forge_failed", f"{self.repo}#{number}: no such pull request")
-            raw = settings.load()
-            method, required = MergeSettings.from_settings(raw, self.repo).merge_method, required_jobs(raw)
             ready = marks.ready_since(marks.of_layer(hub.pull_comments(self.repo, number), self.repo.split("/")[0]))
             marked = ready is not None and ready.head == pull.head_sha  # a re-used pull request already marked
-            after_open(hub, self.repo, number, pull.head_sha, None, datetime.now(UTC), method, pull.base, required,
-                       mark_written=marked)
-        except (GithubError, SettingsError) as e:
+            after_open(hub, self.repo, number, pull.head_sha, None, datetime.now(UTC), mark_written=marked)
+        except GithubError as e:
             raise SkillsError("forge_failed", str(e)) from None
 
     def close_pr(self, pr: str, comment: str) -> None:

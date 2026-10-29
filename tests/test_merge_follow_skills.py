@@ -25,7 +25,7 @@ TEST_ID = "tests/test_skills.py::test_copy_matches_manifest"
 
 
 def skills_world(tmp_path, *, with_issue=True, labels=("ready-for-agent",)):
-    """One skills update's pull request in the merge line (auto-merge on) and its issue, ready."""
+    """One skills update's pull request in the merge line (a ready mark) and its issue, ready."""
 
     hub = FakeGitHub(NOW)
     store = Store.open(tmp_path / "events")
@@ -33,7 +33,8 @@ def skills_world(tmp_path, *, with_issue=True, labels=("ready-for-agent",)):
         hub.add(ISSUE, "## For the human\n\n- **What:** his upstream moved.\n", list(labels),
                 title=f"His skills moved to {COMMIT}")
     pr = hub.open_pull(body="His upstream moved. The copies are rewritten.", branch=BRANCH,
-                       title="His skills move to 0123456789ab: text_changed skill", auto_merge="squash")
+                       title="His skills move to 0123456789ab: text_changed skill")
+    hub.comment(REPO, pr, marks.ready_comment(None, hub.head(pr), hub.now))
     return hub, store, pr
 
 
@@ -53,7 +54,7 @@ def test_red_sends_the_skills_issue_to_the_brain_with_the_failing_ids(tmp_path):
     assert "needs-triage" in labels(hub) and "ready-for-agent" not in labels(hub)
     said = hub.comments(REPO, ISSUE)[-1].body
     assert "To the brain" in said and TEST_ID in said
-    assert hub.pull(REPO, pr).auto_merge is None
+    assert marks.ready_since(hub.comments(REPO, pr)) is None
 
 
 def test_no_result_the_second_time_sends_the_skills_issue_to_the_brain(tmp_path):
@@ -62,7 +63,7 @@ def test_no_result_the_second_time_sends_the_skills_issue_to_the_brain(tmp_path)
     done = run(hub, store, pr)
     assert (done.outcome, done.ticket) == ("no_result", ISSUE)
     assert "needs-triage" in labels(hub) and "ready-for-agent" not in labels(hub)
-    assert hub.pull(REPO, pr).auto_merge is None
+    assert marks.ready_since(hub.comments(REPO, pr)) is None
 
 
 def test_no_result_the_first_time_is_run_once_more_and_the_issue_is_untouched(tmp_path):
@@ -88,7 +89,7 @@ def test_red_with_no_issue_of_its_commit_leaves_the_line_and_touches_no_issue(tm
     hub.checks_on(hub.head(pr), FAILED, failing=[TEST_ID])
     done = run(hub, store, pr)
     assert (done.outcome, done.ticket) == ("red", None)
-    assert hub.pull(REPO, pr).auto_merge is None
+    assert marks.ready_since(hub.comments(REPO, pr)) is None
 
 
 def test_a_pull_request_with_no_ticket_that_goes_red_changes_no_issue_label_or_body(tmp_path):
@@ -96,7 +97,8 @@ def test_a_pull_request_with_no_ticket_that_goes_red_changes_no_issue_label_or_b
     update, so a red touches no issue at all."""
 
     hub, store, _ = skills_world(tmp_path)
-    pr = hub.open_pull(body="A hand change", auto_merge="squash")
+    pr = hub.open_pull(body="A hand change")
+    hub.comment(REPO, pr, marks.ready_comment(None, hub.head(pr), hub.now))
     before = {key: (issue.labels, issue.body) for key, issue in hub.issues.items()}
     hub.checks_on(hub.head(pr), FAILED, failing=["t::x"])
     done = run(hub, store, pr)
@@ -181,7 +183,8 @@ def test_a_merged_skills_pull_request_with_no_issue_of_its_commit_stays_merged_a
 
 def test_a_merged_pull_request_with_neither_ticket_nor_skills_issue_stays_merged_alone(tmp_path):
     hub, store, _ = skills_world(tmp_path)
-    pr = hub.open_pull(body="A hand change", auto_merge="squash")
+    pr = hub.open_pull(body="A hand change")
+    hub.comment(REPO, pr, marks.ready_comment(None, hub.head(pr), hub.now))
     merged_pr(hub, pr)
     done = run(hub, store, pr)
     assert (done.outcome, done.ticket) == ("merged_alone", None)

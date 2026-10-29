@@ -1,7 +1,7 @@
 """The merge line (#400 decision 2; rows 2, 3 and 7 on fixture GitHub): one line per repo under its
 line lock, the oldest ready first; its head brought up to date, its checks waited for within their
-bound, merged at its head sha; every other member kept from GitHub's auto-merge while it is up to
-date, so nothing lands out of order and no green pull request starves."""
+bound, merged at its head sha by the line itself (nothing in GitHub merges: #414), so nothing lands out of
+order and no green pull request starves."""
 
 import json
 from datetime import timedelta
@@ -12,10 +12,11 @@ from follow_world import NO_AFTER_MERGE, ROWS_NO_AFTER, TITLE, Git
 from line_world import line_world
 
 from orch_it import tickets
-from orch_it.merge import lock
+from orch_it.merge import lock, marks
 from orch_it.merge.line import run_line
 from orch_it.merge.pr_open import open_pr
 from orch_it.merge.settings import MergeSettings
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 
 def line(hub, store, ci, tmp_path, **settings):
@@ -23,11 +24,15 @@ def line(hub, store, ci, tmp_path, **settings):
                     sleep=ci.sleep, root=tmp_path / "locks", holder="test line")
 
 
+def in_line(hub, pr):
+    return marks.ready_since(marks.of_layer(hub.pull_comments(REPO, pr), REPO.split("/")[0])) is not None
+
+
 def test_four_pull_requests_made_ready_at_once_merge_in_order_each_after_one_up_to_date_run(tmp_path):
     hub, store, prs, ci = line_world(tmp_path)
     done = line(hub, store, ci, tmp_path)
     order = [prs[n] for n in (10, 11, 12, 13)]
-    assert ci.merged == order  # GitHub's auto-merge may merge the head, never one behind it
+    assert ci.merged == order  # the line merges the head, never one behind it
     assert [s.pr for s in done.served] == order and {s.result for s in done.served} == {"merged"}
     for pr in order:  # the head each one merged at had exactly one run, on a head up to date with main
         merged_head = hub.head(pr)
@@ -68,7 +73,7 @@ def test_a_head_whose_checks_pass_their_bound_waits_for_the_next_run_and_the_nex
     ci.never.add(prs[10])
     done = line(hub, store, ci, tmp_path, check_minutes=10, check_stuck_minutes=120)
     assert [(s.pr, s.result) for s in done.served] == [(prs[10], "bound"), (prs[11], "merged")]
-    assert hub.pull(REPO, prs[10]).state == "open" and hub.pull(REPO, prs[10]).auto_merge == "merge"
+    assert hub.pull(REPO, prs[10]).state == "open" and in_line(hub, prs[10])
 
 
 def test_main_moving_under_the_head_each_time_leaves_it_to_the_next_run(tmp_path):
@@ -76,7 +81,7 @@ def test_main_moving_under_the_head_each_time_leaves_it_to_the_next_run(tmp_path
     pr = prs[10]
 
     def push_to_main_before_each_run_ends():  # someone else pushes to main a minute before the head turns green
-        check = hub.check_runs.get(hub.head(pr), {}).get("linux")
+        check = hub.check_runs.get(hub.head(pr), {}).get(LINUX_CHECK)
         if hub.pulls[pr].state == "open" and check and check.state == "pending" \
                 and hub.now - check.started_at >= timedelta(minutes=ci.minutes - 1):
             hub.land()
@@ -84,10 +89,10 @@ def test_main_moving_under_the_head_each_time_leaves_it_to_the_next_run(tmp_path
     ci.on_tick.append(push_to_main_before_each_run_ends)
     done = line(hub, store, ci, tmp_path, max_updates=2)
     assert [(s.pr, s.result, s.updates) for s in done.served] == [(pr, "starved", 2)]
-    assert hub.pull(REPO, pr).state == "open" and hub.pull(REPO, pr).auto_merge == "merge"  # stays in the line
+    assert hub.pull(REPO, pr).state == "open" and in_line(hub, pr)  # stays in the line
 
 
-def test_a_pull_request_made_ready_while_the_head_waits_is_held_and_never_merges_first(tmp_path):
+def test_a_pull_request_made_ready_while_the_head_waits_waits_its_turn_and_never_merges_first(tmp_path):
     hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
     head = prs[10]
     ci.slow[head] = 9  # the head's checks are slow; the newcomer's would end first
@@ -101,22 +106,18 @@ def test_a_pull_request_made_ready_while_the_head_waits_is_held_and_never_merges
                                 git=Git(hub), settings=MergeSettings(), now=hub.now).pr
 
     ci.on_tick.append(ready_a_newcomer_at_minute_two)
-    held = []
-    real = hub.set_auto_merge
-    hub.set_auto_merge = lambda repo, number, method: (held.append((number, method)), real(repo, number, method))
     done = line(hub, store, ci, tmp_path)
-    assert ci.merged == [head, fresh[11]]  # without the hold GitHub would have merged the newcomer first
-    assert (fresh[11], None) in held and (fresh[11], "merge") in held
+    assert ci.merged == [head, fresh[11]]  # the newcomer's checks end first, and it still lands second
     assert [s.result for s in done.served] == ["merged", "merged"]
 
 
-def test_the_line_bound_ends_the_run_and_gives_every_held_pull_request_its_auto_merge_back(tmp_path):
+def test_the_line_bound_ends_the_run_and_leaves_every_unmerged_pull_request_in_the_line(tmp_path):
     hub, store, prs, ci = line_world(tmp_path)
     done = line(hub, store, ci, tmp_path, line_minutes=8, lock_stale_minutes=60)
     assert done.reason == "bound" and len(ci.merged) < 4
     for ticket in (10, 11, 12, 13):
         pull = hub.pull(REPO, prs[ticket])
-        assert pull.state == "merged" or pull.auto_merge == "merge"
+        assert pull.state == "merged" or in_line(hub, prs[ticket])
 
 
 def test_an_empty_line_ends_at_once(tmp_path):
@@ -127,10 +128,12 @@ def test_an_empty_line_ends_at_once(tmp_path):
 
 def test_drafts_forks_and_pull_requests_out_of_the_line_are_not_served(tmp_path):
     hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
-    draft = hub.open_pull(body="Refs #10", draft=True, auto_merge="merge")
-    fork = hub.open_pull(body="a stranger's", auto_merge="merge")
+    draft = hub.open_pull(body="Refs #10", draft=True)
+    fork = hub.open_pull(body="a stranger's")
     hub.pulls[fork].head_repo = "stranger/repo-y"
-    idle = hub.open_pull(body="no auto-merge, no ready mark")
+    for pr in (draft, fork):  # both carry a ready mark; neither is served
+        hub.comment(REPO, pr, marks.ready_comment(None, hub.head(pr), hub.now))
+    idle = hub.open_pull(body="no ready mark")
     done = line(hub, store, ci, tmp_path)
     assert [s.pr for s in done.served] == [prs[10]] and {draft, fork, idle}.isdisjoint(ci.merged)
 
@@ -148,21 +151,19 @@ def test_a_second_line_on_the_same_repo_waits_says_who_holds_it_and_gives_up(tmp
     assert rows == [("refused", "lock_busy")]
 
 
-def test_a_held_member_a_person_commented_on_never_gets_its_auto_merge_back(tmp_path):
+def test_a_member_a_person_commented_on_while_it_waited_leaves_the_line_when_its_turn_comes(tmp_path):
     hub, store, prs, ci = line_world(tmp_path, tickets=(10, 11))
-    ci.slow[prs[10]] = 30
-
     said = []
 
-    def a_person_says_wait():  # once the line holds #11, a person asks to wait on it
-        if not said and hub.pulls[prs[11]].auto_merge is None:
+    def a_person_says_wait():  # while #10 is the head, a person asks to wait on #11
+        if not said:
             said.append(1)
             hub.note(prs[11], "wait, the zones change", author="owner-x")
 
     ci.on_tick.append(a_person_says_wait)
-    done = line(hub, store, ci, tmp_path, line_minutes=8, lock_stale_minutes=60)
-    assert done.reason == "bound"
-    assert hub.pull(REPO, prs[11]).auto_merge is None  # out of the line: the person's comment is read first
+    done = line(hub, store, ci, tmp_path)
+    assert ci.merged == [prs[10]]
+    assert not in_line(hub, prs[11])  # out of the line: the person's comment is read first
     assert "needs-triage" in hub.issues[(REPO, 11)].labels
     assert [(s.pr, s.result, s.detail) for s in done.served if s.pr == prs[11]] == [(prs[11], "left", "commented")]
     assert done.left == 1
@@ -174,19 +175,19 @@ def test_the_line_closes_the_ticket_of_the_head_it_merged(tmp_path):
     assert not hub.issues[(REPO, 10)].open
 
 
-def test_a_run_that_breaks_ends_its_step_and_gives_every_held_member_its_auto_merge_back(tmp_path):
+def test_a_run_that_breaks_ends_its_step_and_frees_the_lock(tmp_path):
     hub, store, prs, ci = line_world(tmp_path, tickets=(10, 11, 12))
     real = hub.update_branch
 
     def broken(repo, number, head_sha):
         raise RuntimeError("the network went away")
 
-    hub.land()  # every member behind: the head's update is the first write after the holds
+    hub.land()  # every member behind: the head's update is the first write
     hub.update_branch = broken
     with pytest.raises(RuntimeError):
         line(hub, store, ci, tmp_path)
     hub.update_branch = real
-    assert all(hub.pull(REPO, prs[n]).auto_merge == "merge" for n in (10, 11, 12))
+    assert all(in_line(hub, prs[n]) for n in (10, 11, 12))
     assert store.query("SELECT outcome, json_extract(detail, '$.reason') FROM events "
                        "WHERE kind = 'step.ended' AND step = 'line'").rows == [("failed", "error")]
     assert lock.holder_of(REPO, root=tmp_path / "locks") is None

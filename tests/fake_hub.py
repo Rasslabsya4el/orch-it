@@ -12,6 +12,10 @@ REPO = "owner-x/repo-y"
 
 class FakeHub:
     WRITES = ("write", "remove_label", "comment", "create", "pin", "label_created")
+    budget_left = None  # (remaining, limit) a test sets to forge the request budget GitHub reports; None: unread
+
+    def rate_limit(self):
+        return self.budget_left
 
     def __init__(self, now: datetime | None = None):
         self.now = now or datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
@@ -103,6 +107,9 @@ class FakeHub:
     def listed(self, repo, label):
         return [issue for (r, _), issue in sorted(self.issues.items())
                 if r == repo and issue.open and not issue.is_pr and label in issue.labels]
+
+    def open_issues(self, repo):
+        return [issue for (r, _), issue in sorted(self.issues.items()) if r == repo and issue.open and not issue.is_pr]
 
     def create(self, repo, title, body, labels):
         number = max([n for (r, n) in self.issues if r == repo] or [0]) + 1

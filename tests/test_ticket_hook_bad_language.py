@@ -23,6 +23,9 @@ WITH_SKILL = TRANSCRIPTS / "write_ticket_called.jsonl"
 BODY_RU = fixture("good_basic")[1]  # a body with a Russian human block (the shipped fixture set)
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 @pytest.fixture(autouse=True)
 def setting_file(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"

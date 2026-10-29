@@ -20,8 +20,7 @@ Keys, each optional:
   back to ready;
 - `red_main_park_days` (7): how long a ticket red only on tests red on main waits parked on the
   red-on-main ticket before it goes back to its queue late;
-- `merge_method` (`merge`): how the line merges and how `pr open` turns auto-merge on: `merge`,
-  `squash` or `rebase`.
+- `merge_method` (`merge`): how the line merges: `merge`, `squash` or `rebase`.
 
 A value of the wrong shape, or a key not named here, raises `SettingsError("bad_setting")` naming it.
 """
@@ -31,7 +30,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, fields
 
-from orch_it.settings import SettingsError
+from orch_it.settings import SettingsError, load
+from orch_it.testruns.config import required_checks
 
 SECTION = "merge"
 METHODS = ("merge", "squash", "rebase")
@@ -107,3 +107,10 @@ def _bound(key: str, value: object, least: float, most: float) -> float:
     if not (math.isfinite(number) and (number > 0 if least == 0 else number >= least) and number <= most):
         raise SettingsError("bad_setting", f"{SECTION}.{key}: from {least:g} to {most:g}")
     return value
+
+
+def required_checks_now(repo: str) -> tuple[str, ...]:
+    """The check names `repo`'s merge is held to: the setting `required_checks`, read now from the
+    settings file (`testruns/config.py`). A library function with no `required` argument reads it here."""
+
+    return required_checks(load(), repo)

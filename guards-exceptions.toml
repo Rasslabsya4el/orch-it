@@ -6,20 +6,6 @@
 # A pattern that quotes the word it excuses writes one letter in brackets (`[u]ser`, `py[t]hon`, `[U]SER`): the bracket
 # escape stops the entry from matching its own line.
 
-# ---- 6. A GitHub check or job name written as a literal ------------------------------------------------------
-
-[[exception]]
-file = "src/orch_it/**/*.py"
-pattern = '(REQUIRED_CHECKS|DEFAULT_REQUIRED_JOBS|GITHUB_OSES) = '
-kinds = ["check_name_literal"]
-reason = "Follow-up: the names of the checks a push must see green are a default written in code; the tests-on-GitHub ticket of map #355 moves them to a setting with the default there."
-
-[[exception]]
-file = ["tests/*merge*.py", "tests/*github*.py", "tests/*workflow*.py", "tests/test_guards_status.py"]
-pattern = '''["'](linux|windows)["']'''
-kinds = ["check_name_literal"]
-reason = "Follow-up: the merge-line tests, the fake GitHub and the import of its runs, the tests that read the repo's own workflow files and the branch-protection fixture freeze the two job names of the tests workflow (and an OS name beside them); the tests-on-GitHub ticket of map #355 moves the names to a setting and these tests read them from it."
-
 # ---- 6. A word that is also a workflow job name, used as a plain word ----------------------------------------
 
 [[exception]]
@@ -29,7 +15,7 @@ kinds = ["check_name_literal"]
 reason = "The workflow files give the jobs short names that are also ordinary words; here the quoted word is a command name, an event step, a queue name, a table header, a dictionary key or a flag value, not the name of a GitHub check."
 
 [[exception]]
-file = ["tests/merge_trial.py", "tests/merge_trial_live_r4.py", "tests/test_cli_brain.py", "tests/test_cli_merge.py", "tests/test_closed_sets.py", "tests/test_follow_workflow.py", "tests/test_guards_install.py", "tests/test_guards_status.py", "tests/test_merge_follow_mark_only.py", "tests/test_merge_line.py", "tests/test_merge_reconcile.py", "tests/test_merge_trial.py", "tests/test_merge_trial_live_r4.py", "tests/test_merge_trial_live_r5.py", "tests/test_skill_copies.py", "tests/test_skill_shadow.py", "tests/test_ticket_queues.py", "tests/test_tickets_hook.py"]
+file = ["tests/merge_trial.py", "tests/merge_trial_live_r4.py", "tests/test_cli_brain.py", "tests/test_cli_merge.py", "tests/test_closed_sets.py", "tests/test_follow_workflow.py", "tests/test_guards_install.py", "tests/test_guards_status.py", "tests/test_merge_follow_mark_only.py", "tests/test_merge_line.py", "tests/test_merge_reconcile.py", "tests/test_merge_trial.py", "tests/test_merge_trial_live_r4.py", "tests/test_merge_trial_live_r5.py", "tests/test_required_checks.py", "tests/test_skill_copies.py", "tests/test_skill_shadow.py", "tests/test_ticket_queues.py", "tests/test_tickets_hook.py"]
 pattern = '''["'`](check|follow|sweep|shape|update)["'`]'''
 kinds = ["check_name_literal"]
 reason = "The workflow files give the jobs short names that are also ordinary words; here the quoted word is a command name, an event step, a queue name, a dictionary key or a flag value in a test of the code above, not the name of a GitHub check."
@@ -40,7 +26,13 @@ reason = "The workflow files give the jobs short names that are also ordinary wo
 file = "src/orch_it/testruns/*.py"
 pattern = '''^OSES = \(|^\s*"(linux|windows)": \(|return "(linux|windows)"|== "windows"|"(ubuntu|linux|windows)" in text|else "linux"'''
 kinds = ["check_name_literal"]
-reason = "The test-run code names the operating system by its closed set of words (linux, windows, macos) as the settings and the events do; an OS name is the value of the os field, not a check name. The lines that list the job names of the tests workflow (DEFAULT_REQUIRED_JOBS, GITHUB_OSES) are not covered here but by the follow-up entry above."
+reason = "The test-run code names the operating system by its closed set of words (linux, windows, macos) as the settings and the events do; an OS name is the value of the os field, not a check name."
+
+[[exception]]
+file = ["tests/test_github_import.py", "tests/test_merge_reconcile.py"]
+pattern = '''run_os|"os": "linux"|os_name = \{'''
+kinds = ["check_name_literal"]
+reason = "The run_os field of a test run and the os field of an event: a closed set of OS names the test compares with the field; an OS name, not a check name."
 
 [[exception]]
 file = ["src/orch_it/guards/shell.py", "src/orch_it/guards/triggers.py", "src/orch_it/tickets/hook.py"]
