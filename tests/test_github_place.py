@@ -13,6 +13,7 @@ from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 from orch_it.events import github_budget
 from orch_it.events.store import Store
+from orch_it.testruns import place_rule
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.github import GithubError
 from orch_it.testruns.github_place import GithubPlace, oses_of_workflow
@@ -250,6 +251,21 @@ def test_the_stored_time_is_the_jobs_queued_to_finished_not_the_runs_own_status(
         " AND role = 'script'").rows
     assert abs(run_minutes * 60 - 400) <= 5
     assert start_minutes == 0
+
+
+def test_one_dispatched_run_feeds_the_rule_one_time_per_kind_queued_to_finished(world):
+    # two OS jobs, two kinds of time on file for them; the rule reads one of each, the run's own
+    world.actions.dispatch_jobs = {LINUX_CHECK: DispatchedJob(queued=0, started=130, completed=400),
+                                   WINDOWS_CHECK: DispatchedJob(label="windows-latest", queued=20, started=60,
+                                                                completed=380)}
+    run(world, forced="github")
+    _, measured = place_rule.read_facts(world.store, repo=REPO, selection="full", need_os="any", now=NOW)
+    github_runs, github_starts = measured["github"].runs, measured["github"].starts
+    assert len(github_runs) == 1 and abs(github_runs[0] * 60 - 400) <= 5
+    assert len(github_starts) == 1 and github_starts[0] == 0
+    # the importer's own events for the run (selection "nightly", a dispatch) carry no time of theirs
+    _, nightly = place_rule.read_facts(world.store, repo=REPO, selection="nightly", need_os="any", now=NOW)
+    assert nightly["github"].runs == ()
 
 
 def test_the_importer_stores_the_runs_jobs_under_the_github_role(world):

@@ -199,12 +199,14 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
 
 
 def import_one_run(store: Store, repo: str, run_id: int, *, gh: Gh | None = None, now: datetime | None = None,
-                   required: tuple[str, ...] | None = None, keep: Path | None = None) -> ImportReport:
+                   required: tuple[str, ...] | None = None, keep: Path | None = None,
+                   timed: bool = True) -> ImportReport:
     """Write the events of the one run `run_id` of `repo`, whatever its own status says (#414 decision 11: a run's
     own status can stay not-completed long after every job has ended; the caller has settled on the jobs). The
     events are the ones `import_github` writes for a completed run, with the same ids. `required`: the check names
     (default: the setting `required_checks`). `keep`: a folder that gets a copy of each job's JUnit report, named by
-    its run, job and attempt. A `gh` failure raises `GithubError`."""
+    its run, job and attempt. `timed` False: the jobs' end events carry no start or run minutes (the caller keeps
+    the run's own time, so the rule reads one time per run). A `gh` failure raises `GithubError`."""
 
     gh = gh or run_gh
     if not schema.is_repo(repo):
@@ -222,7 +224,7 @@ def import_one_run(store: Store, repo: str, run_id: int, *, gh: Gh | None = None
     if _moment(run.get("created_at")) is None:
         raise GithubError("gh_bad_output", f"run {run['id']} has no created_at")
     report = ImportReport(runs_read=1)
-    importer = _Importer(store, repo, gh, names, _job_timeout_minutes(config), [run], now, report, keep)
+    importer = _Importer(store, repo, gh, names, _job_timeout_minutes(config), [run], now, report, keep, timed)
     with store.writer() as writer:
         importer.import_run(run, writer)
     return report
@@ -412,8 +414,8 @@ class _Target:
 
 
 class _Importer:
-    def __init__(self, store, repo, gh, required, job_bound, every_run, now, report, keep=None):
-        self.store, self.repo, self.gh, self.keep = store, repo, gh, keep
+    def __init__(self, store, repo, gh, required, job_bound, every_run, now, report, keep=None, timed=True):
+        self.store, self.repo, self.gh, self.keep, self.timed = store, repo, gh, keep, timed
         self.required, self.job_bound, self.now, self.report = required, job_bound, now, report
         self.facts_of_run = {run["id"]: _facts(run) for run in every_run}
 
@@ -531,6 +533,8 @@ class _Importer:
             minutes = {"billed_minutes": billed.get(job.get("id"), 0),
                        "start_minutes": _minutes(job_created, step_start),
                        "run_minutes": _minutes(step_start, step_end)}
+            if not self.timed:
+                minutes |= {"start_minutes": None, "run_minutes": None}
             # a clock that put the start before the creation gives a wait of 0, never a negative one
             wait = (job_created, max(job_started, job_created)) if job_created and job_started else None
 

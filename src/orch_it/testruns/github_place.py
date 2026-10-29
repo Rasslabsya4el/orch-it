@@ -307,7 +307,7 @@ class GithubPlace:
         kept = scratch / "reports"
         kept.mkdir(parents=True, exist_ok=True)
         import_one_run(self.store, self.repo, run_id, gh=self.gh, now=datetime.now(UTC),
-                       required=self.settings.required_checks, keep=kept)
+                       required=self.settings.required_checks, keep=kept, timed=False)
         cases, readable = [], False
         for path in sorted(kept.glob("*.xml")):
             try:
