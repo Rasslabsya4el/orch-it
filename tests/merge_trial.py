@@ -272,11 +272,32 @@ def line_rows(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], date
     return row2, row3
 
 
+def end_judges(tag: str) -> dict[str, Callable[[dict], bool]]:
+    """The judge of each end of row 4: the ticket as GitHub holds it after the end (`_Run.read`) says the end's
+    outcome. Shared by `row_4` and its live form (`tests/merge_trial_live_r4.py`), so both judge alike."""
+
+    return {
+        "closed_unmerged": lambda r: (
+            r["needs_triage"] and not r["ready"] and not r["parked"] and r["open"] and r["pr_state"] == "closed"),
+        "comment": lambda r: (
+            r["auto_merge"] is None and r["needs_triage"] and not r["ready"] and not r["parked"]
+            and r["pr_state"] == "open"),
+        "merged": lambda r: (
+            not r["open"] and r["state_reason"] == "completed" and r["pr_state"] == "merged"
+            and all(f"| {row} | pass |" in r["comment"] for row in "123")),
+        "after_merge": lambda r: (
+            r["open"] and r["ready"] and not r["parked"] and r["pr_state"] == "merged" and "row 4" in r["comment"]),
+        "red": lambda r: (
+            r["open"] and r["ready"] and not r["parked"] and f"test_trial_pr_red_{tag}" in r["comment"]),
+    }
+
+
 def row_4(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime], sleep: Callable[[float], None],
           plan: Plan | None = None) -> dict:
     """Row 4: the ticket follows its pull request, every end, read back from GitHub and the store."""
 
     run = _Run(trial, hub, store, clock, sleep, plan, "r4")
+    judge = end_judges(run.tag)
     out: dict = {}
     opened: list[int] = []
     with run.without(FOLLOW_WORKFLOW) as off:
@@ -289,31 +310,23 @@ def row_4(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
             closed = run.pull_request("closed", {f"trial/{run.tag}/closed.txt": "closed\n"})
             opened.append(closed[2].pr)
             trial.close_pull(closed[2].pr)
-            out["closed_unmerged"] = _ending(run, closed, "closed_unmerged", lambda r: (
-                r["needs_triage"] and not r["ready"] and not r["parked"] and r["open"] and r["pr_state"] == "closed"))
+            out["closed_unmerged"] = _ending(run, closed, "closed_unmerged", judge["closed_unmerged"])
             said = run.pull_request("comment", {f"trial/{run.tag}/comment.txt": "comment\n"})
             opened.append(said[2].pr)
             trial.comment_as_person(said[2].pr, "Wait, please look at the zones before this lands.")
-            out["comment"] = _ending(run, said, "commented", lambda r: (
-                r["auto_merge"] is None and r["needs_triage"] and not r["ready"] and not r["parked"]
-                and r["pr_state"] == "open"), wanted_event="pr.commented")
+            out["comment"] = _ending(run, said, "commented", judge["comment"], wanted_event="pr.commented")
             merged = run.pull_request("merged", {f"trial/{run.tag}/merged.txt": "merged\n"})
             opened.append(merged[2].pr)
             run.land(merged[2].pr)
-            out["merged"] = _ending(run, merged, "closed", lambda r: (
-                not r["open"] and r["state_reason"] == "completed" and r["pr_state"] == "merged"
-                and all(f"| {row} | pass |" in r["comment"] for row in "123")), wanted_event="ticket.closed")
+            out["merged"] = _ending(run, merged, "closed", judge["merged"], wanted_event="ticket.closed")
             later = run.pull_request("after-merge", {f"trial/{run.tag}/later.txt": "later\n"}, body=FULL_BODY,
                                      rows=ROWS_FULL)
             opened.append(later[2].pr)
             run.land(later[2].pr)
-            out["after_merge"] = _ending(run, later, "after_merge", lambda r: (
-                r["open"] and r["ready"] and not r["parked"] and r["pr_state"] == "merged" and "row 4" in r["comment"]),
-                unwanted_event="ticket.closed")
+            out["after_merge"] = _ending(run, later, "after_merge", judge["after_merge"],
+                                         unwanted_event="ticket.closed")
             run.wait("the red pull request's checks to end", lambda: run.ended_red(red[2].pr))
-            out["red"] = _ending(run, red, "red", lambda r: (
-                r["open"] and r["ready"] and not r["parked"] and f"test_trial_pr_red_{run.tag}" in r["comment"]),
-                wanted_event="attempt.counted", counted=True)
+            out["red"] = _ending(run, red, "red", judge["red"], wanted_event="attempt.counted", counted=True)
         finally:
             for pr in opened:
                 pull = hub.pull(run.repo, pr)

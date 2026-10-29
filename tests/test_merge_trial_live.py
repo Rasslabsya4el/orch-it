@@ -362,6 +362,30 @@ def test_wait_workflow_run_times_out_with_trial_timeout_when_no_run_ends(live):
         live.wait_workflow_run(make_run(trial, Hub(), clock), "follow.yml", NOW, minutes=1)
 
 
+def test_wait_workflow_run_never_takes_an_ignored_run_even_when_it_is_listed_first(live):
+    # an older skipped run is listed first: with its id ignored the end takes the run after it
+    clock = Clock()
+    trial = WorkflowTrial([[listed("1", "2026-10-29T10:00:00Z", conclusion="skipped"),
+                            listed("2", "2026-10-29T10:00:00Z")]])
+    found = live.wait_workflow_run(make_run(trial, Hub(), clock), "follow.yml", NOW, ignore_ids=frozenset({"1"}))
+
+    assert found.run_id == "2"
+
+
+def test_wait_workflow_run_waits_for_a_pending_run_over_an_older_completed_run_it_ignores(live):
+    # the pending run is the end's own; the completed one before it is ignored, so the wait goes on until it ends
+    clock = Clock()
+    trial = WorkflowTrial([
+        [listed("2", "2026-10-29T10:00:00Z", status="in_progress", conclusion=None),
+         listed("1", "2026-10-29T10:00:00Z")],
+        [listed("2", "2026-10-29T10:00:00Z"), listed("1", "2026-10-29T10:00:00Z")],
+    ])
+    found = live.wait_workflow_run(make_run(trial, Hub(), clock), "follow.yml", NOW, ignore_ids=frozenset({"1"}))
+
+    assert found.run_id == "2" and trial.reads == 2
+    assert len(clock.slept) == 1
+
+
 def test_dispatch_workflow_asks_the_trial_once_for_the_file(live):
     clock = Clock()
     trial = WorkflowTrial()
