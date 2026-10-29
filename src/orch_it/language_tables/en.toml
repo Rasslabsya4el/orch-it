@@ -4,3 +4,5 @@
 human_field_language_rule = "the text of each human field is English"
 # A character class matching the letters of this language's script; the check counts them.
 human_field_letters = "[A-Za-z]"
+# A regex alternation of the Undo field's fixed words; the check leaves them out, they are the form, not text.
+undo_words = "two-way door|one-way door|one revert|touches"
