@@ -209,6 +209,7 @@ def test_every_job_runs_xdist_on_the_core_count_read_at_run_time_and_prints_it(t
         cores = os.cpu_count()
         first = call_args(calls[0])
         assert first[first.index("-n") + 1] == str(cores), job
+        assert first[first.index("--dist") + 1] == "worksteal", job  # a worker that runs dry takes a busy one's queued tests: the 60 s test cannot end the run late
         printed = done.stdout.splitlines()[0]  # before any test runs
         assert str(cores) in printed and "cores" in printed, done.stdout
 
