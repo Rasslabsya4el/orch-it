@@ -96,7 +96,8 @@ def reconcile(hub: PullHub, store: Store, repo: str, base: str, *, settings: Mer
         watch_workflows(hub, repo, checked_names(hub, repo))
     except Exception as e:  # a watch that breaks never ends the sweep (#411 rule 3)
         failed.append(_failed(store, repo, role, run, "workflows", e))
-    checks = run_scheduled_checks(store, hub, repo, raw_settings or {}, run)  # after the import: the store holds the runs
+    # after the import: the store holds the runs the checks read
+    checks = run_scheduled_checks(store, hub, repo, raw_settings or {}, run, role)
     if main is not None:
         repairs += [("red_ticket_opened", f"#{n}") for n in main.opened]
         repairs += [("closed", f"#{n}") for n in main.closed]

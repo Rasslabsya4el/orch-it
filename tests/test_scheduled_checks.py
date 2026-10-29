@@ -5,13 +5,14 @@ The planted runs sit over the default bounds by fixed steps; a run of N minutes 
 
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fake_github import FAILED, PASSED, REPO, FakeGitHub
 from required_names import LINUX_CHECK, LINUX_OS, WINDOWS_CHECK
 
 from orch_it.events.store import Store
-from orch_it.merge import commands, scheduled_checks
+from orch_it.merge import commands, record, scheduled_checks
 from orch_it.merge.hub import Result
 from orch_it.merge.main_check import check_main
 from orch_it.merge.reconcile import reconcile
@@ -185,3 +186,86 @@ def test_reconcile_runs_the_scheduled_checks_after_the_store_is_filled(world):
     done = reconcile(hub, store, REPO, "main", settings=MergeSettings(), now=NOW, raw_settings={})
     assert len(triage(hub)) == 1
     assert done.checks is not None and len(done.checks.bound.opened) == 1
+
+
+def down(*args, **kwargs):
+    raise RuntimeError("the hub is down for one call")
+
+
+def test_a_red_main_ticket_stays_open_on_a_green_run_without_the_test_and_closes_on_a_green_run_holding_it(world):
+    hub, store = world
+    night(hub)
+    [number] = check_main(hub, store, REPO, "main").opened
+    per_change_green(hub)
+    check_main(hub, store, REPO, "main")
+    assert hub.issues[(REPO, number)].open
+    green_night_holding_test(hub)
+    check_main(hub, store, REPO, "main")
+    assert not hub.issues[(REPO, number)].open
+
+
+def test_a_failing_check_names_the_tick_role_on_its_error_record(world, monkeypatch):
+    hub, store = world
+    night(hub)
+    real_write = record.write
+    roles = []  # the role each error record is written under; "custom-role" is not a closed-set code, so none is stored
+
+    def spy(store_, repo, ticket, role, run, step, events):
+        if any(kind == "error.raised" for kind, _ in events):
+            roles.append(role)
+            return None
+        return real_write(store_, repo, ticket, role, run, step, events)
+
+    monkeypatch.setattr(record, "write", spy)
+    monkeypatch.setattr(scheduled_checks, "run_bound_check", down)
+    tick(store, hub, role="custom-role")
+    assert roles == ["custom-role"]
+
+
+def test_reconcile_writes_its_error_record_under_its_own_role(world, monkeypatch):
+    hub, store = world
+    monkeypatch.setattr(scheduled_checks, "run_bound_check", down)
+    reconcile(hub, store, REPO, "main", settings=MergeSettings(), now=NOW, raw_settings={}, role="orch")
+    [row] = store.query("SELECT role FROM events WHERE kind = 'error.raised'").rows
+    assert row[0] == "orch"
+
+
+def test_a_store_that_refuses_the_error_record_does_not_stop_the_next_check(world, monkeypatch):
+    hub, store = world
+    night(hub)
+    real_write = record.write
+
+    def refusing(store_, repo, ticket, role, run, step, events):
+        if any(kind == "error.raised" for kind, _ in events):
+            raise OSError("the store refuses the error record")
+        return real_write(store_, repo, ticket, role, run, step, events)
+
+    monkeypatch.setattr(record, "write", refusing)
+    monkeypatch.setattr(scheduled_checks, "run_bound_check", down)
+    report = tick(store, hub)
+    assert report.unmarked.opened and len(report.failed) == 1 and "bound" in report.failed[0]
+
+
+def test_post_windows_time_twice_opens_one_ticket_and_posts_no_comment_the_second_time(world):
+    hub, store = world
+    for n in range(3):
+        windows_run(store, n, THIN.change_minutes + 1, "full")
+    first = post_windows_time(store, hub, {"repo": REPO})
+    assert first.opened
+    [number] = triage(hub)
+    second = post_windows_time(store, hub, {"repo": REPO})
+    assert not second.opened
+    assert triage(hub) == [number] and hub.comments(REPO, number) == []
+
+
+def test_reconcile_prints_the_time_lines_even_when_no_time_ticket_is_open(world, monkeypatch):
+    hub, store = world
+    for n in range(3):  # under the target: the per-change line says so, and no ticket opens
+        windows_run(store, n, THIN.change_minutes / 2, "full")
+    windows_run(store, 10, 14.5, "nightly")
+    monkeypatch.setattr(commands, "GhPullHub", lambda: hub)
+    monkeypatch.setattr(commands.settings, "load", lambda: {})
+    args = SimpleNamespace(repo=REPO, base="main", role="script")
+    out = commands._reconcile(args, lambda: store, lambda _: REPO, NOW)
+    assert triage(hub) == []
+    assert "not each over" in out and "took 14.5 min of pytest" in out

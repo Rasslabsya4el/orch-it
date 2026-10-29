@@ -205,7 +205,10 @@ def _reconcile(args, store_of, repo_of, now: datetime) -> str:
     lines = ["actions=on" if done.actions else "actions=off: the sweep runs here"]
     lines += [f"{code} {what}" for code, what in done.repairs]
     lines += [f"not followed {why}" for why in done.failed]
-    lines += [f"check failed {why}" for why in done.checks.failed] if done.checks else []
+    lines += [f"check failed {why}" for why in done.checks.failed]
+    for timed in (done.checks.windows_time, done.checks.nightly_time):  # each line is empty while it has no verdict
+        if timed is not None and timed.line:
+            lines.append(timed.line)
     if done.imported:
         lines.append(f"brought in {done.imported} events files of the workflows")
     return "".join(f"{line}\n" for line in lines)
