@@ -1,7 +1,7 @@
 {
   "_about": "His skills copied byte for byte from `upstream` at `commit` (#397 decision 1): per copy its upstream path and the git blob hash of every file; `not_copied` his skills left out and why; `gone` the names his upstream dropped and what became of them. Written with the copies by `orch_it.skills.copies.write`; a skill folder this file does not name is ours.",
   "upstream": "https://github.com/mattpocock/skills",
-  "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+  "commit": "17b8ffb9178ffd99a38a954520830d0af35f3121",
   "skills": {
     "code-review": {
       "path": "skills/engineering/code-review",
@@ -125,7 +125,7 @@
     "tdd": {
       "path": "skills/engineering/tdd",
       "files": {
-        "SKILL.md": "01eadaa34e7c9a63a67d6dc3cce1cc81b0e49985",
+        "SKILL.md": "7a4e1977770396137cb7c78a09fb371338580cd5",
         "agents/openai.yaml": "651b838a7663e027b1b8884491e867f26bb9a021",
         "mocking.md": "71cbfee674d93244ce81d1830b930ca9a69200bd",
         "tests.md": "7ab86479f925a1f9e8ba680af33cb3b12e015381"
