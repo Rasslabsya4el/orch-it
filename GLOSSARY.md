@@ -61,6 +61,16 @@ _Avoid_: runner, host, target, executor
 The one rule that picks a test run's place from the runs live and the times measured in the store.
 _Avoid_: scheduler, routing, placement policy
 
+**Availability**:
+The readiness verdict of the `github` test place: whether it may be offered (Actions on, its request budget with room,
+GitHub readable), its machines busy of their limit, and the note the decision carries (its busy-of-limit count, or why it is off).
+_Avoid_: status, health, state
+
+**Queue wait**:
+The time a GitHub job waits from its queued to its started, the wait for a machine; read from the job's own times, never
+from the run's status.
+_Avoid_: queue time, pending time, waiting time
+
 **Clean environment**:
 What a test run's process sees of its environment: the OS's base variables and the repo's own test settings, nothing of whoever started it.
 _Avoid_: sandbox, isolated environment
@@ -68,7 +78,10 @@ _Avoid_: sandbox, isolated environment
 **Bound**:
 The longest a test run or a research run may take; a run that reaches it is cut, which is never a failed run. A
 research run also has a stall bound: the longest its session tree may go without a new step. The merge line's run, its
-wait for its head's checks and the wait for its line lock each have a bound of their own.
+wait for its head's checks and the wait for its line lock each have a bound of their own. The bound check's bound is
+a median instead: the median run time of the newest `LAST_RUNS` ended test runs at a test place and OS (passed or failed
+ones), or a GitHub place's median queue wait over the same window; a median past its bound opens one `needs-triage`
+ticket, and a later crossing comments on it.
 _Avoid_: timeout, limit, deadline
 
 ## Research
@@ -330,6 +343,11 @@ _Avoid_: stop hook, gate, validator
 The order in which a repo's green pull requests land on its main line, one at a time, the oldest ready first.
 _Avoid_: merge queue, merge train, merge window
 
+**Batch**:
+The members the merge line combines on one branch from `main` for one full pass: a green pass merges all of them, a red
+one splits them in halves.
+_Avoid_: group, bundle, train, queue
+
 **Line lock**:
 The one hold on a repo's merge line: while one line runs, a second waits for it and names who holds it.
 _Avoid_: merge turn, mutex, merge lock
@@ -358,10 +376,6 @@ _Avoid_: dequeued, removed from queue
 **Follow mark**:
 The layer's mark on a ticket saying what its follow did with it; red returns in a row are counted from them.
 _Avoid_: status comment, bot note
-
-**Held member**:
-A pull request of the merge line kept from merging on its own while another one is served, until its turn comes.
-_Avoid_: paused PR, blocked PR, frozen
 
 **Follow**:
 What the layer does with a ticket when its pull request ends, is stopped by a person or goes red: closes it, returns
