@@ -174,8 +174,8 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
 def after_open(hub: PullHub, repo: str, pr: int, head: str, ticket: int | None, now: datetime, *,
                mark_written: bool = False) -> None:
     """Whoever opens a pull request (`pr open`, `skills update`) puts it in the merge line: the ready mark at
-    `head`, nothing more; the line merges it once its required checks are green on its head (#414). GitHub's
-    auto-merge is never set. `mark_written`: the mark already stands at `head` (a re-used pull request), so no
+    `head`, nothing more; the line merges it once its required checks are green on its head (#414); GitHub
+    sets nothing. `mark_written`: the mark already stands at `head` (a re-used pull request), so no
     second mark is written. `ticket` is None for a pull request that names no ticket."""
 
     if not mark_written:
