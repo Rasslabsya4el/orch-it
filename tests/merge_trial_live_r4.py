@@ -5,11 +5,13 @@ The harness only makes each end's event (a pull request closed or merged, a comm
 judges it with the same predicate as `row_4` (`merge_trial.end_judges`). The store is not read (the workflow writes
 its own artifact store), so each end records `"store": "not read (live)"`.
 
-A red pull request has no event of that workflow: a check run ending starts none. Its end waits for its ticket to
-show the red outcome, bounded like every wait; with no trigger that ever moves it, the end fails with that reason.
+A red pull request has no event of `follow.yml`: a check run ending starts none. So the red end is handled by the
+`reconcile` workflow: once the red pull request's required checks ended, the harness dispatches it, and its sweep
+follows every pull request on GitHub. The red end waits for that run, requires `success`, then judges the ticket.
 
-Every end is a record of `pr`, `ticket`, `follow` (the run's conclusion, None for the red end), `follow_run` (the
-run id), the ticket's state, `store`, `error` (None when the end holds) and `passed`.
+Every end is a record of `pr`, `ticket`, `handled_by` (`follow` or `reconcile`), `follow` (the conclusion of the run
+that handled it), `follow_run` (its run id, None when none started), the ticket's state, `store`, `error` (None when
+the end holds) and `passed`.
 """
 
 from __future__ import annotations
@@ -18,7 +20,8 @@ from collections.abc import Callable
 from datetime import datetime
 
 import merge_trial
-from merge_trial_live import wait_workflow_run
+from merge_trial_live import dispatch_workflow, wait_workflow_run
+from orch_it.testruns.github import GithubError
 
 NOT_READ = "not read (live)"
 
@@ -39,8 +42,8 @@ def row_4_live(trial: merge_trial.Trial, hub: merge_trial.PullHub, store: merge_
         opened.append(red[2].pr)
         closed = run.pull_request("closed", {f"trial/{run.tag}/closed.txt": "closed\n"})
         opened.append(closed[2].pr)
-        out["closed_unmerged"] = _follow_end(run, closed, "closed_unmerged", judge["closed_unmerged"], event="pull_request",
-                                             moved=lambda: _close_unmerged(run, closed[2].pr))
+        out["closed_unmerged"] = _follow_end(run, closed, "closed_unmerged", judge["closed_unmerged"],
+                                             event="pull_request", moved=lambda: _close_unmerged(run, closed[2].pr))
         said = run.pull_request("comment", {f"trial/{run.tag}/comment.txt": "comment\n"})
         opened.append(said[2].pr)
         out["comment"] = _follow_end(run, said, "comment", judge["comment"], event="issue_comment",
@@ -90,39 +93,41 @@ def _follow_end(run: merge_trial._Run, made: tuple, end: str, judge: Callable[[d
     try:
         found = wait_workflow_run(run, merge_trial.FOLLOW_WORKFLOW, since, head_sha=head, event=event)
     except merge_trial.TrialTimeout as e:
-        return _record(run, ticket, opened.pr, judge, error=f"{end}: {e}")
+        return _record(run, ticket, opened.pr, judge, handled_by="follow", error=f"{end}: {e}")
     error = None if found.conclusion == "success" else f"follow run {found.run_id} ended {found.conclusion}"
-    return _record(run, ticket, opened.pr, judge, follow=found.conclusion, follow_run=found.run_id, error=error)
+    return _record(run, ticket, opened.pr, judge, handled_by="follow", follow=found.conclusion,
+                   follow_run=found.run_id, error=error)
 
 
 def _red_end(run: merge_trial._Run, made: tuple, judge: Callable[[dict], bool]) -> dict:
-    """The red end: its checks end, then its ticket must show the red outcome within the bound."""
+    """The red end: its checks end; then the `reconcile` workflow is dispatched and the run it starts must end
+    `success`; then the ticket as GitHub holds it must satisfy `judge`. Each failure is this end's record."""
 
     ticket, _, opened = made
     try:
         run.wait("the red pull request's checks to end", lambda: run.ended_red(opened.pr))
     except merge_trial.TrialTimeout as e:
-        return _record(run, ticket, opened.pr, judge, error=f"red: {e}")
+        return _record(run, ticket, opened.pr, judge, handled_by="reconcile", error=f"red: {e}")
+    since = run.clock()
     try:
-        run.wait(f"ticket #{ticket} to show the red end", lambda: _showing(run, ticket, opened.pr, judge))
+        dispatch_workflow(run, merge_trial.RECONCILE_WORKFLOW)
+    except (merge_trial.TrialError, GithubError) as e:
+        return _record(run, ticket, opened.pr, judge, handled_by="reconcile",
+                       error=f"red: the dispatch of {merge_trial.RECONCILE_WORKFLOW} failed: {e}")
+    try:
+        found = wait_workflow_run(run, merge_trial.RECONCILE_WORKFLOW, since, event="workflow_dispatch")
     except merge_trial.TrialTimeout as e:
-        return _record(run, ticket, opened.pr, judge, error=(
-            f"red: {e}; the {merge_trial.FOLLOW_WORKFLOW} workflow runs on no event that a check run ending makes, "
-            "so no run moves this ticket"))
-    return _record(run, ticket, opened.pr, judge)
+        return _record(run, ticket, opened.pr, judge, handled_by="reconcile", error=f"red: {e}")
+    error = None if found.conclusion == "success" else f"red: reconcile run {found.run_id} ended {found.conclusion}"
+    return _record(run, ticket, opened.pr, judge, handled_by="reconcile", follow=found.conclusion,
+                   follow_run=found.run_id, error=error)
 
 
-def _showing(run: merge_trial._Run, ticket: int, pr: int, judge: Callable[[dict], bool]) -> dict | None:
-    """The ticket's state as GitHub holds it when `judge` holds, else None (a wait's probe)."""
-
-    state = run.read(ticket, pr)
-    return state if judge(state) else None
-
-
-def _record(run: merge_trial._Run, ticket: int, pr: int, judge: Callable[[dict], bool], *,
+def _record(run: merge_trial._Run, ticket: int, pr: int, judge: Callable[[dict], bool], *, handled_by: str,
             follow: str | None = None, follow_run: str | None = None, error: str | None = None) -> dict:
     """One end's record: the ticket read back now, judged; the end holds when the judge holds and no error stands."""
 
     state = run.read(ticket, pr)
-    return {"pr": pr, "ticket": ticket, "follow": follow, "follow_run": follow_run, "detail": error or "",
-            **state, "store": NOT_READ, "error": error, "passed": bool(judge(state)) and error is None}
+    return {"pr": pr, "ticket": ticket, "handled_by": handled_by, "follow": follow, "follow_run": follow_run,
+            "detail": error or "", **state, "store": NOT_READ, "error": error,
+            "passed": bool(judge(state)) and error is None}
