@@ -39,6 +39,8 @@ jobs:
       contains(github.event.issue.labels.*.name, 'parked')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      ORCH_IT_STORE: ${{ runner.temp }}/orch-it-events
     steps:
       # the layer's code of the default branch, never the pull request's own
       - uses: actions/checkout@v4
