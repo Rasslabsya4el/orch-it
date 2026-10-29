@@ -5,7 +5,7 @@ It is the tickets' `GhHub` (issues, comments, runs, all through `gh api`) plus t
 - pull requests: REST `repos/{r}/pulls/{n}` and `repos/{r}/pulls?state=open&base=...` (the list
   carries no `mergeable`, so each open pull request is read again on its own); `behind` from
   `repos/{r}/compare/{base}...{head_sha}` (`behind_by`, None when the compare is not there);
-  create with `gh pr create`; auto-merge with `gh pr merge --auto` or `--disable-auto`;
+  create with `gh pr create`;
   `PUT .../update-branch` and `PUT .../merge`, both pinned to the head sha the caller saw;
 - check runs of one sha: `repos/{r}/commits/{sha}/check-runs`, the latest run of each name, its
   Actions run and attempt from `details_url` and `repos/{r}/actions/runs/{id}`;
@@ -66,8 +66,6 @@ EVENTS_ARTIFACT_PREFIX = "orch-it-events-"
 EVENT_ARTIFACT_PAGES = 3  # of 100 artifacts each, newest first
 BASE_REF, PULL_REF = "refs/orch/base", "refs/orch/pr"
 BRANCH_RUN_EVENTS = ("push", "schedule", "workflow_dispatch")
-METHODS = ("merge", "squash", "rebase")
-DISABLE_REFUSAL = "can't disable auto-merge"  # GitHub's text when a disable finds no auto-merge to turn off
 _RUN_OF_JOB = re.compile(r"/actions/runs/(\d+)/job/")
 _PULL_URL = re.compile(r"/pull/(\d+)/?$")
 
@@ -124,7 +122,7 @@ class GhPullHub(GhHub):
         return Pull(
             repo=repo, number=number, title=_text(found.get("title")), body=_text(found.get("body")),
             branch=_text(head.get("ref")), head_sha=head["sha"], base=base["ref"], state=state,
-            draft=found.get("draft") is True, auto_merge=_auto_merge(repo, found.get("auto_merge")),
+            draft=found.get("draft") is True,
             mergeable={True: "mergeable", False: "conflicting"}.get(found.get("mergeable"), "unknown"),
             behind=behind, created_at=created, merged_at=merged_at,
             merge_sha=_text(found.get("merge_commit_sha")) or None if merged_at else None,
@@ -194,29 +192,6 @@ class GhPullHub(GhHub):
             checks = (rule.get("parameters") or {}).get("required_status_checks") or []
             names |= {_text(check.get("context")) for check in checks if isinstance(check, dict)}
         return names - {""}
-
-    def set_auto_merge(self, repo: str, number: int, method: str | None) -> None:
-        if method is None:
-            args, already = ["--disable-auto"], ("not enabled", "not on", "already disabled", "already off")
-        elif method in METHODS:
-            args, already = ["--auto", f"--{method}"], ("already enabled", "already on")
-        else:
-            raise ValueError(f"not a merge method: {method}")
-        try:
-            self.gh(["pr", "merge", str(number), "--repo", repo, *args])
-        except GithubError as e:
-            if any(phrase in str(e).lower() for phrase in already):
-                return
-            if method is None and DISABLE_REFUSAL in str(e).lower() and self._auto_merge_is_off(repo, number):
-                return
-            raise
-
-    def _auto_merge_is_off(self, repo: str, number: int) -> bool:
-        """After GitHub refused a disable: True when the pull request has no auto-merge on (it was landed or closed
-        meanwhile, or never had it), so the refusal is the state the caller wanted."""
-
-        found = self.pull(repo, number)
-        return found is None or found.state != "open" or found.auto_merge is None
 
     def update_branch(self, repo: str, number: int, head_sha: str) -> bool:
         try:
@@ -551,15 +526,6 @@ def _unprotected(error: GithubError) -> bool:
     if "HTTP 404" in text:
         return True
     return "HTTP 403" in text and any(words in text for words in _NO_PROTECTION_403)
-
-
-def _auto_merge(repo: str, value: object) -> str | None:
-    if value is None:
-        return None
-    method = value.get("merge_method") if isinstance(value, dict) else None
-    if not isinstance(method, str) or method.lower() not in METHODS:
-        raise GithubError("gh_bad_output", f"{repo}: an auto_merge with no merge_method")
-    return method.lower()
 
 
 def _state(run: dict) -> str:

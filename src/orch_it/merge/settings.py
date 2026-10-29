@@ -20,8 +20,7 @@ Keys, each optional:
   back to ready;
 - `red_main_park_days` (7): how long a ticket red only on tests red on main waits parked on the
   red-on-main ticket before it goes back to its queue late;
-- `merge_method` (`merge`): how the line merges and how `pr open` turns auto-merge on: `merge`,
-  `squash` or `rebase`.
+- `merge_method` (`merge`): how the line merges: `merge`, `squash` or `rebase`.
 
 A value of the wrong shape, or a key not named here, raises `SettingsError("bad_setting")` naming it.
 """
