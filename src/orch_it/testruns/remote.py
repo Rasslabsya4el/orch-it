@@ -126,7 +126,7 @@ def _lock(path: str, stale_seconds: float) -> bool:
     for _ in range(2):  # the second try follows breaking a stale lock
         try:
             handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        except (FileExistsError, PermissionError):  # Windows: a create racing a removal of the same name is refused
             try:
                 if time.time() - os.path.getmtime(path) <= stale_seconds:
                     return False
