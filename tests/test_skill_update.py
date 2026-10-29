@@ -5,6 +5,7 @@ upstream commit; `skills update`, run by ORCH under the owner's gh, builds the n
 upstream commit; a change that waits for the brain (a skill added, a copy renamed, removed or changed in
 contract, or a body breaking a shape rule) opens none, its issue is labelled `needs-triage`."""
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -613,3 +614,29 @@ def test_a_huge_change_stays_inside_a_github_body_and_its_shape():
                       ["a reason\nWeight: 99 | with `marks`"] * 3) for n in range(2000)]
     title, body, broken = update.checked_issue(update.Check(manifest, "2" * 40, {}, changes))
     assert len(body) < 65_536 and broken == [] and "1800 more changed skills" in body
+
+
+@pytest.mark.parametrize("setting", ["autocrlf", "eol", "attributes"], ids=["autocrlf-true", "eol-crlf", "tree-eol-crlf"])
+def test_an_update_pushes_the_upstream_blobs_whatever_the_line_ending_setting(world, monkeypatch, setting):
+    # the copies are the committed bytes: git's line-ending conversion (machine config or the tree's attributes) must
+    # reach neither the check of the copies nor the pull request's blobs (#420 rows 1 to 3)
+    config = world["tmp"] / "gitconfig"
+    config.write_text("[core]\n\tautocrlf = true\n" if setting == "autocrlf" else "", "utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))  # an isolated global config, never the developer's
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    if setting == "eol":
+        git(world["repo"], "config", "core.autocrlf", "false")
+        git(world["repo"], "config", "core.eol", "crlf")
+    attributes = b"* text eol=crlf\n" if setting == "attributes" else None  # None: the base has no .gitattributes
+    commit_files(world["repo"], {".gitattributes": attributes}, "the base's line endings")
+    git(world["repo"], "push", "-q", "origin", "HEAD:main")
+    up = newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
+    forge = FakeForge()
+    done = run_update(world, forge)
+    assert (done.status, forge.labels) == ("opened", [])
+    [(branch, _, _)] = forge.created
+    git(world["repo"], "fetch", "-q", "origin", branch)
+    for name, upstream_path in [("tdd", "skills/engineering/tdd/SKILL.md"),
+                                ("review", "skills/engineering/review/SKILL.md")]:
+        pushed_blob = git(world["repo"], "rev-parse", f"FETCH_HEAD:.claude/skills/{name}/SKILL.md")
+        assert pushed_blob == git(world["upstream"], "rev-parse", f"{up}:{upstream_path}")

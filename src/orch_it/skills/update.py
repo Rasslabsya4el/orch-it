@@ -31,16 +31,14 @@ upstream commit as superseded. The forge (GitHub) sits behind `Forge`.
 from __future__ import annotations
 
 import hashlib
-import io
 import os
 import re
 import shutil
 import stat
 import subprocess
-import tarfile
 import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from orch_it import settings
@@ -399,16 +397,31 @@ def report(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
     return Done(status, found.new_commit, url, [label] if status == "opened" else [])
 
 
+def _inside(into: Path, path: str) -> Path:
+    """The file `path` of a tree laid out under `into`; a path that would land outside `into` is refused."""
+
+    relative, target = PurePosixPath(path), into / path
+    if relative.is_absolute() or ".." in relative.parts or not target.resolve().is_relative_to(into.resolve()):
+        raise SkillsError("git_failed", f"{path}: a path outside the copies folder")
+    return target
+
+
 def _export(repo: Path, commit: str, into: Path) -> None:
-    data = subprocess.run(["git", "archive", "--format=tar", commit], cwd=repo, capture_output=True,
-                          timeout=GIT_TIMEOUT_SECONDS, creationflags=NO_WINDOW)
-    if data.returncode != 0:
-        raise SkillsError("git_failed", f"git archive: {data.stderr.decode('utf-8', 'replace').strip()[:300]}")
-    try:
-        with tarfile.open(fileobj=io.BytesIO(data.stdout)) as archive:
-            archive.extractall(into, filter="data")
-    except (tarfile.TarError, OSError) as e:
-        raise SkillsError("git_failed", f"the tree of {commit[:12]} could not be laid out: {e}") from None
+    """Lay the tree of `commit` out under `into` from its raw blobs, the bytes git stores, whatever the machine's
+    line-ending setting or the tree's attributes say (#420). A symlink becomes a plain file holding its target,
+    a submodule is skipped."""
+
+    listed = copies._git(repo, "ls-tree", "-r", "-z", commit)
+    if listed.returncode != 0:
+        raise SkillsError("git_failed", f"git ls-tree: {listed.stderr.decode('utf-8', 'replace').strip()[:300]}")
+    files = [entry for entry in copies._entries(listed.stdout) if entry.kind == "blob"]
+    blobs = copies._cat_blobs(repo, sorted({entry.sha for entry in files}))
+    for entry in files:
+        target = _inside(into, entry.path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(blobs[entry.sha])
+        if entry.mode == "100755":
+            os.chmod(target, 0o755)
 
 
 def _commit_skills(repo: Path, base: str, scratch: Path, message: str, identity: tuple[str, str] | None = None) -> str:

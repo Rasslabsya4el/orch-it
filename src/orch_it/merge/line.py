@@ -17,9 +17,10 @@ ready mark's (else its creation). One run, until the line is empty or `line_minu
    then its required checks of the head sha are waited for, polling every `poll_seconds`, at most
    `check_minutes` (`bound`: it stays in the line for the next run, the next member goes), with the
    follow run at each poll (a person's comment, an edit of its ticket, a red, no result: the follow
-   moves the ticket and the head `left`); green and up to date → merged with its head sha, and the
-   follow closes its ticket at once (GitHub refusing the merge more than `max_updates` times:
-   `refused`, left for the next run). A held member gets its auto-merge back only after its follow,
+   moves the ticket and the head `left`); green and up to date → its title and body are read fresh,
+   and a closing keyword in either refuses it (`refused`: auto-merge off, a left mark with the reason,
+   nothing merged, the line goes on); else merged with its head sha, and the follow closes its ticket at
+   once (GitHub refusing the merge more than `max_updates` times: `refused`, left for the next run). A held member gets its auto-merge back only after its follow,
    so what was said or done to it while held takes it out of the line instead.
 
 Events: a `line` step, run `line:<repo>@<start>` (started `base`, `prs`; ended `merged`, `left`,
@@ -48,13 +49,40 @@ from orch_it.tickets.park import ROLE
 # what the follow says of a member that is still in the line: the line goes on serving it (a
 # `raced` follow wrote nothing: the member waits a poll and is followed again)
 _STAYS = ("waiting", "green", "behind", "rerun", "stuck", "raced")
+LINE_ERROR_CODES = ("closing_keyword",)  # a merge the line will not make
+
+
+class LineError(ValueError):
+    """A merge the line will not make; `code` is one of `LINE_ERROR_CODES`, `detail` says why. The line
+    takes the error in and turns it into that pull request's `refused` turn; it does not stop the run."""
+
+    def __init__(self, code: str, detail: str = ""):
+        if code not in LINE_ERROR_CODES:
+            raise ValueError(f"not a merge line error code: {code}")
+        self.code = code
+        self.detail = detail
+        super().__init__(f"{code}: {detail}" if detail else code)
+
+
+def _hit_lines(text: str, hits: list[str]) -> list[int]:
+    """The 1-based line each closing keyword hit (as `marks.closing_keywords` returned it, in order) starts
+    on in `text`."""
+
+    lines, at = [], 0
+    for hit in hits:
+        at = text.index(hit, at)
+        lines.append(text.count("\n", 0, at) + 1)
+        at += len(hit)
+    return lines
 
 
 @dataclass(frozen=True)
 class Served:
     pr: int
     ticket: int | None
-    result: str  # a `line_result`: merged, left, starved (main moved too often), bound, refused (GitHub would not merge)
+    # a `line_result`: merged, left, starved (main moved too often), bound, refused (GitHub would not merge,
+    # or a closing keyword in its text)
+    result: str
     waited_minutes: float  # from its ready time to the end of its turn
     updates: int
     detail: str = ""  # the follow's outcome when it left
@@ -204,6 +232,10 @@ class _Line:
                 turn_ends = min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
                 continue
             if done.outcome == "green" and pull.behind == 0:
+                try:
+                    self.closing_check(number)
+                except LineError as refusal:
+                    return self.refuse(member, refusal, updates)
                 sha = self.hub.merge(self.repo, number, pull.head_sha, pull.auto_merge or self.settings.merge_method)
                 if sha:
                     self.follow(number)  # its ticket closes now, whether the workflow runs or not
@@ -221,6 +253,33 @@ class _Line:
     def follow(self, number: int) -> FollowReport:
         return follow(self.hub, self.store, self.repo, number, base=self.base, settings=self.settings,
                       now=self.clock(), role=self.role, required=self.required, owner=self.owner)
+
+    def closing_check(self, number: int) -> None:
+        """Before the merge: the title and body as they are now (a fresh read, so an edit after `pr open`
+        counts). A closing keyword in either raises `LineError`, naming each keyword, its reference, the text
+        and the line it starts on."""
+
+        now = self.hub.pull(self.repo, number)
+        if now is None:
+            return
+        found = []
+        for name, text in (("title", now.title), ("body", now.body)):
+            hits = marks.closing_keywords(text)
+            for hit, at_line in zip(hits, _hit_lines(text, hits)):
+                found.append(f"the {name} at line {at_line} says {hit}")
+        if found:
+            raise LineError("closing_keyword", f"#{number}: {'; '.join(found)}: write `Refs <URL>` in its place")
+
+    def refuse(self, member: _Member, refusal: LineError, updates: int) -> Served:
+        """A pull request whose text closes a ticket by a word leaves the line the way `follow._leave` takes
+        one out: auto-merge off, then a left mark carrying the reason, so no later run serves it until a new
+        ready mark. The line goes on with the pull requests behind it; the ticket stays open."""
+
+        number = member.pull.number
+        self.held.pop(number, None)
+        self.hub.set_auto_merge(self.repo, number, None)
+        self.hub.comment(self.repo, number, marks.left_comment(refusal.code, refusal.detail))
+        return self.turn(member, "refused", updates, refusal.detail)
 
     def conflict(self, member: _Member, files: list[str], updates: int = 0) -> Served:
         done = follow_conflict(self.hub, self.store, self.repo, member.pull.number, files, settings=self.settings,
