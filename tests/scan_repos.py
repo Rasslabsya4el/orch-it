@@ -70,7 +70,8 @@ class Repo:
     def commits_on(self, base: str, specs) -> list[str]:
         """One commit per spec (`files`, `remove`, `message`, `author`, `committer`), each on `base`
         and none on HEAD; all made by one `git fast-import`, so the work tree and the index stay as
-        they are (a test that pushes each of many commits in turn needs no commit or reset per case)."""
+        they are. The commits are those `commit()` makes, except for the commit date (a fixed older one) and a message
+        ending in a newline (kept as given). A test that pushes each of many commits in turn needs no commit or reset per case."""
 
         marks = self.path / ".git" / "batch-marks"
         chunks: list[bytes] = []
