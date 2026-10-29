@@ -1,6 +1,6 @@
 # The guards judge the object, own a process by its tree, and fail open with an event
 
-Status: amended by D4 amd 1 and D4 amd 2 (Rasslabsya4el/orchestration-layer#413); the decision text below is kept as it was.
+Status: amended by D4 amd 1, D4 amd 2 (Rasslabsya4el/orchestration-layer#413) and D4 amd 3 (orchestration-layer#453); the decision text below is kept as it was.
 
 The three kept guards — worktree delete, foreign process stop, private data in a public repo —
 decide on the object a command would act on (the real path on disk with links followed and the
@@ -54,3 +54,7 @@ Amendment (Rasslabsya4el/orchestration-layer#413, brain decision on item 3): a n
 open. A `human_language` with no table or no language code makes the tickets hook refuse the `gh issue create` or body
 edit it judges, with a reason naming the setting and the missing table, because there is a way through (set the
 language or add the table). Any other unexpected error still fails open.
+
+## D4 amd 3: where human_language lives
+
+Amendment (orchestration-layer#453): the setting `human_language` lives only in the `settings.json` at the root of the git work tree, and is `en` when that file or key is missing or there is no git tree.
