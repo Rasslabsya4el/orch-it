@@ -80,6 +80,7 @@ class FakeForge:
         self.fail = set(fail)
         self.created, self.labels, self.updated, self.closed = [], [], [], []
         self.opened, self.edited, self.closed_issues = [], [], []
+        self.marked, self.order = [], []    # the pull requests given the ready mark; update_branch and mark_ready in order
 
     def _maybe_fail(self, what):
         if what in self.fail:
@@ -102,6 +103,12 @@ class FakeForge:
     def update_branch(self, pr):
         self._maybe_fail("update_branch")
         self.updated.append(pr)
+        self.order.append(("update_branch", pr))
+
+    def mark_ready(self, pr):
+        self._maybe_fail("mark_ready")
+        self.marked.append(pr)
+        self.order.append(("mark_ready", pr))
 
     def close_pr(self, pr, comment):
         self._maybe_fail("close_pr")
@@ -336,6 +343,60 @@ def test_older_open_prs_are_superseded_on_every_run_that_finds_a_change(world):
     declined = FakeForge(prs=[old, dict(current, state="CLOSED")])
     assert run_update(world, declined).status == "declined"
     assert declined.closed == [("u/3", "Superseded by u/4: his upstream moved on.")]
+
+
+def test_a_fresh_update_hands_its_new_pull_request_the_ready_mark(world):
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
+    forge = FakeForge()
+    done = run_update(world, forge)
+    assert (done.status, forge.marked) == ("opened", [done.url])
+
+
+def test_an_open_pr_of_the_same_upstream_commit_is_brought_up_to_date_then_joins_the_line(world):
+    # the outside case: a pull request the old code opened has no ready mark and no auto-merge (a text change: no brain)
+    up = newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
+    open_pr = {"url": "https://example.invalid/pull/9", "branch": f"skills-upstream/{up[:12]}-00000000", "state": "OPEN"}
+    forge = FakeForge(prs=[open_pr])
+    assert run_update(world, forge).status == "already_open"
+    assert forge.order == [("update_branch", open_pr["url"]), ("mark_ready", open_pr["url"])]
+
+
+def test_a_needs_triage_change_calls_no_mark_ready(world):
+    newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
+    forge = FakeForge()
+    assert (run_update(world, forge).status, forge.created, forge.marked) == ("waits_for_brain", [], [])
+
+
+def test_an_open_pr_of_a_change_that_waits_for_the_brain_joins_no_line(world):
+    up = newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
+    open_pr = {"url": "u/8", "branch": f"skills-upstream/{up[:12]}-33333333", "state": "OPEN"}
+    forge = FakeForge(prs=[open_pr])
+    done = run_update(world, forge)
+    assert (done.status, forge.marked, forge.labels) == ("already_open", [], [("u/8", "needs-triage")])
+
+
+def test_a_declined_pr_calls_no_mark_ready(world):
+    up = newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    closed = {"url": "u/7", "branch": f"skills-upstream/{up[:12]}-11111111", "state": "CLOSED"}
+    forge = FakeForge(prs=[closed])
+    assert (run_update(world, forge).status, forge.marked) == ("declined", [])
+
+
+def test_a_refused_mark_ready_is_raised_after_the_pull_request_is_opened(world):
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
+    forge = FakeForge(fail={"mark_ready"})
+    with pytest.raises(SkillsError):
+        run_update(world, forge)
+    assert len(forge.created) == 1
+
+
+def test_the_closing_text_of_the_issue_is_done_text(world):
+    # no newer upstream commit: the copies sit at his pinned commit, whose open issue the report closes
+    commit12 = world["pinned"][:12]
+    forge = FakeForge(issues=[{"url": "i/9", "title": f"His skills moved to {commit12}", "labels": [], "state": "OPEN"}])
+    update.report(world["repo"], forge=forge, cache=world["cache"])
+    assert forge.closed_issues == [("i/9", update.done_text(commit12))]
+    assert update.done_text(commit12) == f"Done: the copies are at {commit12}."
 
 
 def test_a_branch_that_cannot_be_brought_up_to_date_still_gets_its_label(world):

@@ -128,8 +128,7 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
         raise PrError("head_moved", f"#{pr} is at {pull.head_sha[:12] if pull else 'nothing'}, the rows were "
                       f"measured at {measured[:12]}")
     hub.comment(repo, number, marks.acceptance_comment(pr, measured, marks.body_hash(issue.body), rows))
-    hub.comment(repo, pr, marks.ready_comment(number, measured, now))
-    hub.set_auto_merge(repo, pr, settings.merge_method)
+    after_open(hub, repo, pr, measured, number, now, settings.merge_method)
     if parked_on_it:
         line = ticket.park_lines[0]
     else:
@@ -153,6 +152,15 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
                for row in rows if row.result != "after merge"]
     record.write(store, repo, number, role, record.pr_run(repo, pr, ready.at if ready else None), "pr", events)
     return Opened(pr, measured, reused, line)
+
+
+def after_open(hub: PullHub, repo: str, pr: int, head: str, ticket: int | None, now: datetime,
+               method: str) -> None:
+    """Whoever opens a pull request (`pr open`, `skills update`) puts it in the merge line: the ready mark at
+    `head`, then auto-merge with `method`. `ticket` is None for a pull request that names no ticket."""
+
+    hub.comment(repo, pr, marks.ready_comment(ticket, head, now))
+    hub.set_auto_merge(repo, pr, method)
 
 
 def checked_rows(rows: tuple[AcceptanceRow, ...], text: str) -> list[marks.ResultRow]:

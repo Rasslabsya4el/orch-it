@@ -65,6 +65,7 @@ class Forge(Protocol):
     def create_pr(self, branch: str, title: str, body: str) -> str: ...
     def add_label(self, pr: str, label: str) -> None: ...
     def update_branch(self, pr: str) -> None: ...      # merge main into the pull request's branch
+    def mark_ready(self, pr: str) -> None: ...         # the ready mark and auto-merge: the pull request enters the merge line
     def close_pr(self, pr: str, comment: str) -> None: ...
     def update_issues(self) -> list[dict]: ...         # every issue of any state: url, title, labels, state
     def create_issue(self, title: str, body: str, label: str) -> str: ...
@@ -368,6 +369,12 @@ def checked_issue(found: Check) -> tuple[str, str, list[str]]:
     return title, body, broken
 
 
+def done_text(commit12: str) -> str:
+    """The closing comment of an issue whose copies are at its upstream commit."""
+
+    return f"Done: the copies are at {commit12}."
+
+
 def report(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: str = "main",
            cache: Path | None = None) -> Done:
     """The daily run: on a change, one issue per upstream commit, kept up to date; no pull request."""
@@ -379,7 +386,7 @@ def report(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
         done_title = ISSUE_TITLE + found.manifest.commit[:12]
         for held in open_:
             if held["title"] == done_title:
-                forge.close_issue(held["url"], f"Done: the copies are at {found.manifest.commit[:12]}.")
+                forge.close_issue(held["url"], done_text(found.manifest.commit[:12]))
         return Done("no_change", found.new_commit)
     title, body, broken = checked_issue(found)
     label = TRIAGE_LABEL if found.needs_triage or broken else READY_LABEL
@@ -482,6 +489,8 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
             failed += _attempt(lambda: _supersede(forge, older, pr["url"]))
             labels: list[str] = []
             failed += _attempt(lambda: labels.extend(_settle(forge, found, pr["url"])))
+            if not waits:  # a change that waits for the brain joins no merge line before the brain's word
+                failed += _attempt(lambda: forge.mark_ready(pr["url"]))
             if failed:
                 raise failed[0]
             return Done("already_open", found.new_commit, pr["url"], labels)
@@ -507,6 +516,7 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
     failed = _attempt(lambda: _supersede(forge, older, pr))
     labels: list[str] = []
     failed += _attempt(lambda: labels.extend(_settle(forge, found, pr)))
+    failed += _attempt(lambda: forge.mark_ready(pr))
     if failed:
         raise failed[0]
     return Done("opened", found.new_commit, pr, labels)
