@@ -65,10 +65,13 @@ def written_by_a_ru_owner(build, tmp_path, monkeypatch):
     return built
 
 
-def event(author=OWNER, kind="User"):
-    return {"action": "labeled", "repository": {"full_name": REPO, "owner": {"login": OWNER}},
+def event(author=OWNER, kind="User", action="labeled", sender=None):
+    made = {"action": action, "repository": {"full_name": REPO, "owner": {"login": OWNER}},
             "issue": {"number": 1, "labels": [{"name": "ready-for-agent"}], "user": {"login": author, "type": kind}},
             "label": {"name": "ready-for-agent"}}
+    if sender is not None:
+        made["sender"] = sender
+    return made
 
 
 def judged(title, body, runner, **who):
@@ -106,3 +109,52 @@ def test_a_marked_ticket_that_breaks_a_structural_rule_still_loses_the_label(run
     result, hub = judged(title, body.replace("Weight: 2", ""), runner)
     assert (result.outcome, result.codes) == ("removed", ["weight_missing"])
     assert hub.issues[(REPO, 1)].labels == ()
+
+
+NL = chr(10)
+
+
+def _marked_skills(tmp_path, monkeypatch):
+    title, body = written_by_a_ru_owner(skills, tmp_path, monkeypatch)
+    assert body.startswith(CODE_WRITTEN_MARK + NL)
+    return title, body
+
+
+def test_the_mark_counts_on_line_one_or_under_another_comment_line_not_deeper(runner, tmp_path, monkeypatch):
+    title, body = _marked_skills(tmp_path, monkeypatch)
+    bare = body.replace(CODE_WRITTEN_MARK + NL, "", 1)
+    under = "<!-- Parked: waiting -->" + NL + CODE_WRITTEN_MARK + NL + bare
+    after_human = bare + NL + CODE_WRITTEN_MARK + NL
+    heading = "## For the agent" + NL
+    in_agent_text = bare.replace(heading, heading + CODE_WRITTEN_MARK + NL, 1)
+    assert in_agent_text != bare
+    outcomes = {name: judged(title, text, runner)[0].outcome
+                for name, text in [("first", body), ("under", under), ("after", after_human), ("deep", in_agent_text)]}
+    assert outcomes == {"first": "kept", "under": "kept", "after": "removed", "deep": "removed"}
+
+
+def _edited(title, body, runner, sender, **who):
+    hub = FakeHub()
+    hub.add(1, body, ["ready-for-agent"], title=title)
+    return gh_check.check_event(event(action="edited", sender=sender, **who), hub, env=runner)
+
+
+def test_an_edit_of_a_marked_ticket_is_exempt_only_when_a_bot_or_the_owner_made_it(runner, tmp_path, monkeypatch):
+    title, body = _marked_skills(tmp_path, monkeypatch)
+    sent = {
+        "stranger": {"login": "someone-else", "type": "User"},
+        "owner": {"login": OWNER.upper(), "type": "User"},
+        "bot": {"login": "github-actions[bot]", "type": "Bot"},
+        "none": None,
+        "junk": "someone",
+    }
+    outcomes = {name: _edited(title, body, runner, sender).outcome for name, sender in sent.items()}
+    assert outcomes == {"stranger": "removed", "owner": "kept", "bot": "kept", "none": "removed", "junk": "removed"}
+
+
+def test_a_non_edit_action_ignores_the_sender(runner, tmp_path, monkeypatch):
+    title, body = _marked_skills(tmp_path, monkeypatch)
+    hub = FakeHub()
+    hub.add(1, body, ["ready-for-agent"], title=title)
+    labeled = event(sender={"login": "someone-else", "type": "User"})
+    assert gh_check.check_event(labeled, hub, env=runner).outcome == "kept"

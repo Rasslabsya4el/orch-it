@@ -11,12 +11,15 @@ The literal check (#413 unit 6) judges the same body with this run's values (`re
 the runner's own environment, the repo, owner and actor, the home folder, and the checkout's git setting) and
 the check names of the workflows in the workspace. A values line that is not checked is the comment's last line.
 
-A ticket the layer's own code opened (the skills issue, the red-on-main, no-result and workflow-watch tickets) is
-written on the writer's machine, in the writer's `human_language` and with the layer's own commands in it, and
-judged there when it is written. A runner has neither that language nor those values, so on GitHub such a ticket is
-judged by the shape rules alone, without the language rule and the literal rules (#424 unit 8). It is such a ticket
-when its body carries `CODE_WRITTEN_MARK` and its author is a bot or the repo's owner; a person's ticket is judged in
-full whatever its body says.
+A ticket the layer's own code writes (the skills issue, the red-on-main, no-result and workflow-watch tickets) is
+marked with `CODE_WRITTEN_MARK` among the leading comment lines of its body and opened by a bot or the repo's owner
+login. It is written in the writer's `human_language` and with the layer's own commands in it; no runner has the
+owner's settings, so on GitHub such a ticket is judged by the shape rules alone, without the language rule and the
+literal rules (#424 unit 8); the writers do not run those two either (the openers check with `violations` only). An
+edit counts only when its sender is a bot or the owner too; a person's ticket is judged in full whatever its body
+says. Known limits: anyone writing under the owner login can paste the mark (bounded by its place among the leading
+lines and by the sender test), and an organisation-owned repo whose layer account is not the owner login loses the
+exemption.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from pathlib import Path
 
 from orch_it import language
 from orch_it.tickets.hub import LAYER_MARK, Hub
-from orch_it.tickets.model import CODE_WRITTEN_MARK, READY_LABEL, parse
+from orch_it.tickets.model import CODE_WRITTEN_MARK, PARK_PREFIX, READY_LABEL, parse
 from orch_it.tickets.shape import literal_violations, violations
 
 CHECK_ERROR_CODES = ("event_unreadable",)
@@ -96,7 +99,7 @@ def check_event(event: object, hub: Hub, *, env=None, run=None, home=None, host=
     values = read_values(env=env, run=run, home=home, host=host)
     checks = read_job_names(str(Path(workspace) / ".github" / "workflows"))
     found = violations(parse(issue.body, title=issue.title, labels=issue.labels))
-    if _opened_by_the_layer(event, issue.body):
+    if _opened_by_the_layer(issue_part, repository, event, issue.body):
         found = [v for v in found if v.code not in WRITER_BOUND_CODES]
     else:
         found += literal_violations(issue.body, values=values, checks=checks)
@@ -113,19 +116,45 @@ def check_event(event: object, hub: Hub, *, env=None, run=None, home=None, host=
     return CheckResult(number, "removed", list(dict.fromkeys(v.code for v in found)))
 
 
-def _opened_by_the_layer(event: dict, body: str) -> bool:
-    """The layer's own code opened the ticket: its body has the mark, and the event (GitHub's own data) names a
-    bot or the repo's owner (the layer's commands run under the owner's `gh`) as the author."""
+def _opened_by_the_layer(issue_part: dict, repository: dict, event: dict, body: str) -> bool:
+    """The layer's own code wrote the ticket: the mark is one of the leading comment lines of its body, and the
+    event (GitHub's own data) names a bot or the repo's owner (the layer's commands run under the owner's `gh`)
+    as the author, and, for an edit, as the editor too."""
 
-    if CODE_WRITTEN_MARK not in body:
+    if not _marked_above(body):
         return False
-    author, owner = event["issue"].get("user"), event["repository"].get("owner")
-    login = author.get("login") if isinstance(author, dict) else None
+    owner = repository.get("owner")
+    owner_login = owner.get("login") if isinstance(owner, dict) else None
+    if not _bot_or_owner(issue_part.get("user"), owner_login):
+        return False
+    return event.get("action") != "edited" or _bot_or_owner(event.get("sender"), owner_login)
+
+
+def _bot_or_owner(account: object, owner_login: object) -> bool:
+    login = account.get("login") if isinstance(account, dict) else None
     if not isinstance(login, str) or not login:
         return False
-    if author.get("type") == "Bot":
+    if account.get("type") == "Bot":
         return True
-    return isinstance(owner, dict) and isinstance(owner.get("login"), str) and login.lower() == owner["login"].lower()
+    return isinstance(owner_login, str) and login.lower() == owner_login.lower()
+
+
+def _marked_above(body: str) -> bool:
+    """`CODE_WRITTEN_MARK` is a line of its own among the lines above the first text: blank lines, comments
+    (a comment of several lines whole) and `Parked:` lines, as the parser lets stand above the human block."""
+
+    in_comment = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if in_comment:
+            in_comment = "-->" not in stripped
+        elif stripped == CODE_WRITTEN_MARK:
+            return True
+        elif stripped.startswith("<!--"):
+            in_comment = "-->" not in stripped
+        elif stripped and not stripped.startswith(PARK_PREFIX):
+            return False
+    return False
 
 
 def _quiet(text: str) -> str:
