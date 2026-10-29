@@ -25,7 +25,7 @@
   is `error: lock_unwritable` and still names its holder;
 - `merge closing-check [--base main] [--head HEAD] [--work-tree .]`: a closing word before a reference
   in the commits of `origin/<base>..<head>`, and in the title and body the environment carries as
-  `PR_TITLE` and `PR_BODY` (`orch_it.merge.closing_check`, https://github.com/Rasslabsya4el/orchestration-layer/issues/422); exits 1 and names each hit (its sha
+  `PR_TITLE` and `PR_BODY` (`orch_it.merge.closing_check`, the home repo's ticket #422); exits 1 and names each hit (its sha
   or `title`/`body`, and the line) when there is one, 0 when there is none.
 
 `--repo` defaults to the work tree's GitHub origin. A refusal prints `error: <code>` and exits 2.
