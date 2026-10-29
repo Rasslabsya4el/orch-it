@@ -105,14 +105,19 @@ READ_RETRY_PAUSE_S = 1  # seconds between two tries of one read
 
 
 def _is_read(args: list[str]) -> bool:
-    """Whether a `gh` call only reads: a `gh api` call whose method is GET, named by `-X` or `--method`, else
-    GET unless a field or an input makes `gh` send a POST."""
+    """Whether a `gh` call only reads: a `gh api` call whose method is GET, named by `-X`, `-XGET`, `--method` or
+    `--method=GET`; with no method named, GET unless a field or an input makes `gh` send a POST. Any other
+    spelling of a method that is not GET is a write."""
 
     if args[:1] != ["api"]:
         return False
-    for flag in ("-X", "--method"):
-        if flag in args:
-            return args[args.index(flag) + 1:args.index(flag) + 2] == ["GET"]
+    for i, arg in enumerate(args):
+        if arg in ("-X", "--method"):
+            return args[i + 1:i + 2] == ["GET"]
+        if arg.startswith("--method="):
+            return arg[len("--method="):] == "GET"
+        if arg.startswith("-X"):
+            return arg[2:] == "GET"
     return not any(arg in ("-f", "-F", "--field", "--raw-field", "--input") for arg in args)
 
 

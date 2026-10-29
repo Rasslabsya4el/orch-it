@@ -75,6 +75,7 @@ def test_a_read_that_times_out_on_every_try_raises_the_same_timeout_after_one_tr
 
     assert raised.value.code == "gh_timeout"
     assert gh.times(ISSUE_PATH) == 3  # the first try and the default 2 retries
+    assert len(hub.pauses) == 2
 
 
 # --- reads: other failures are called once -----------------------------------------------------
@@ -142,3 +143,35 @@ def test_pull_comments_whose_reviews_page_times_out_once_still_returns_its_comme
     assert [c.body for c in comments] == ["first", "LGTM"]
     assert gh.times(REVIEWS_PATH) == 2
     assert len(hub.pauses) == 1
+
+
+# --- the spelling of a method -------------------------------------------------------------------
+
+@pytest.mark.parametrize("args, read", [
+    (["api", "-X", "GET", "p"], True),
+    (["api", "-XGET", "p"], True),
+    (["api", "--method=GET", "p"], True),
+    (["api", "--method", "GET", "-f", "a=b", "p"], True),
+    (["api", "p"], True),
+    (["api", "-XPOST", "p"], False),
+    (["api", "--method=POST", "p"], False),
+    (["api", "--method=DELETE", "p"], False),
+    (["api", "-X", "PATCH", "p"], False),
+    (["api", "p", "-f", "a=b"], False),
+    (["issue", "list"], False),
+])
+def test_only_a_call_that_names_or_implies_get_is_a_read(args, read):
+    from orch_it.tickets.hub import _is_read
+
+    assert _is_read(args) is read
+
+
+def test_a_write_spelled_with_an_attached_method_that_times_out_is_called_once():
+    path = "repos/owner-x/repo-y/issues/5/comments"
+    gh = Gh(([path], [timeout(path)]))
+    hub = hub_of(GhHub, gh)
+
+    with pytest.raises(GithubError):
+        hub._read(["api", "--method=POST", path])
+
+    assert gh.times(path) == 1
