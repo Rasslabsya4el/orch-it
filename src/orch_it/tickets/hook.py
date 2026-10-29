@@ -43,6 +43,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from orch_it import language
+
 HOOK = "tickets"
 WRITE_TICKET = "write-ticket"
 HOOK_CODES = ("write_ticket_missing", "park_by_hand", "body_unreadable", "command_unreadable", "issue_unreadable",
@@ -234,7 +236,6 @@ class _Call:
 
     def judge(self, payload: dict, hub, repo_of, cwd: str | None, values, memo: dict
               ) -> tuple[list[str], list[str], str | None]:
-        from orch_it import language
         from orch_it.tickets import shape
         from orch_it.tickets.model import PARKED_LABEL, READY_LABEL, parse
 
@@ -262,7 +263,7 @@ class _Call:
                 refuse("write_ticket_missing",
                        language.text_or_refusal("ticket_write_ticket_missing", skill=WRITE_TICKET))
             if PARKED_LABEL in labels or (body is not None and parse(body).park_lines):
-                refuse("park_by_hand", language.text_or_refusal("ticket_park_by_hand"))
+                refuse("park_by_hand", language.text_or_refusal("ticket_park_by_hand", python=sys.executable))
             if not problem:
                 found = shape.violations(parse(body or "", title=title))
                 found += shape.literal_violations(body or "", values=_values_of(values, memo),
@@ -299,8 +300,6 @@ class _Call:
 
     def _read(self) -> tuple[dict[str, list[str]], list[tuple[str | None, int]], str | None]:
         """(flag values by meaning, edit targets, the first word that could not be read)."""
-
-        from orch_it import language
 
         known = _VALUE_FLAGS[self.action]
         flags: dict[str, list[str]] = {}
@@ -341,8 +340,6 @@ class _Call:
 
     def _body(self, flags: dict[str, list[str]], here: str | None) -> tuple[str | None, str | None]:
         """(the body the command writes, or None when it writes none; the reason it is unreadable)."""
-
-        from orch_it import language
 
         if "body_file" in flags:
             name = flags["body_file"][-1]
@@ -460,8 +457,6 @@ def make_hub():  # the GitHub the hook reads; the tests replace it
 
 def main(text: str | None = None) -> int:
     """Read the PreToolUse payload (stdin), print a deny when refused; always exit 0."""
-
-    from orch_it import language
 
     try:
         payload = json.loads(sys.stdin.read() if text is None else text)

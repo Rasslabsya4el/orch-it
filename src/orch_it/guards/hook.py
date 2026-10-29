@@ -79,7 +79,7 @@ def decide(command: str, *, tool: str, cwd: str, env, windows: bool, session_id:
                                    action.segment, finding.path if finding else None))
                 if finding and deny_reason is None:
                     deny_reason = (f"{DELETE_GUARD}: {finding.rule}; "
-                                   f"{language.text_or_refusal('guard_refusal_way')}")
+                                   f"{language.text_or_refusal('guard_refusal_way', python=sys.executable)}")
             elif isinstance(action, triggers.Stop):
                 refusal = world.judge_stop(action)
                 verdict = "deny" if refusal else "pass"
@@ -88,7 +88,7 @@ def decide(command: str, *, tool: str, cwd: str, env, windows: bool, session_id:
                                    str(refusal.pid) if refusal and refusal.pid is not None else None))
                 if refusal and deny_reason is None:
                     deny_reason = (f"{STOP_GUARD}: {refusal.reason}; "
-                                   f"{language.text_or_refusal('guard_refusal_way')}")
+                                   f"{language.text_or_refusal('guard_refusal_way', python=sys.executable)}")
         except Exception as exc:  # a guard crashed on THIS action: fail open for it, record the
             # crash, but keep any deny already found and judge the rest (a crash never hides a deny)
             guard = DELETE_GUARD if isinstance(action, (triggers.Delete, triggers.Move)) else STOP_GUARD

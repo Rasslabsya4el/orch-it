@@ -12,6 +12,7 @@ file `notes.md`, repo `acme/example`, workflow `example-flow.yml`, run 4117.
 
 import json
 import re
+import sys
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,18 +35,18 @@ CYRILLIC = re.compile("[Ѐ-ӿ]")
 EN_TABLE = Path(language.__file__).parent / "language_tables" / "en.toml"
 SETTINGS = ("unset", "ru", "de", "fr")
 WAY_EN = ("the guard reads the object, not the command; to stop an own process with its tree use"
-          " `python -m orch_it stop <pid>`")
+         f" `{sys.executable} -m orch_it stop <pid>`")  # the interpreter running the code, not a bare `python`
 
 # the German of every key this unit moved; the other keys of the planted table are copied from en.toml
 DE = {
     "push_refused_private": "orch-it: Push abgelehnt, die Commits enthalten private Daten und das Remote ist öffentlich (oder seine Sichtbarkeit war nicht lesbar):",
     "push_more": "  ... und {count} weitere",
-    "push_take_out": "Werte aus den Commits entfernen (amend oder rebase) und erneut pushen; `python -m orch_it guards scan --range <remote>..<local>` listet dasselbe auf",
+    "push_take_out": "Werte aus den Commits entfernen (amend oder rebase) und erneut pushen; `{python} -m orch_it guards scan --range <remote>..<local>` listet dasselbe auf",
     "push_refused_closing": "orch-it: Push abgelehnt, eine Commit-Nachricht enthält ein Schlüsselwort zum Schließen vor einer Ticket-Referenz (GitHub schließt das Ticket, wenn der Commit den Standardbranch erreicht):",
     "push_closing_hit": '  {sha}, Zeile {number}, "{text}", {hit}',
     "push_closing_way": "`Refs <URL>` oder `Ticket: <URL>` an deren Stelle schreiben (amend oder rebase) und erneut pushen",
     "push_unreadable": "orch-it: Push abgelehnt, {file}: {reason}",
-    "guard_refusal_way": "der Guard liest das Objekt, nicht den Befehl; um einen eigenen Prozess mit seinem Baum zu stoppen, `python -m orch_it stop <pid>` verwenden",
+    "guard_refusal_way": "der Guard liest das Objekt, nicht den Befehl; um einen eigenen Prozess mit seinem Baum zu stoppen, `{python} -m orch_it stop <pid>` verwenden",
     "guard_refused": "vom orch-it-Guard abgelehnt",
     "guard_no_repo": "orch-it guard: kein Repo bekannt (die Einstellung `repo` oder ein GitHub-Origin): {what} nicht geschrieben",
     "guard_no_repo_events": "die Ereignisse des Guards",
@@ -63,11 +64,13 @@ DE = {
     "ticket_body_file_unreadable": "die Body-Datei {name} kann nicht gelesen werden ({error})",
     "ticket_body_way": "{problem}; den Body in eine Datei schreiben und mit --body-file deren Pfad übergeben",
     "ticket_write_ticket_missing": "den Skill-Tool mit `{skill}` aufrufen, bevor `gh issue create` läuft, dann das Ticket neu schreiben",
-    "ticket_park_by_hand": "ein Park wird nur von `python -m orch_it tickets park` geschrieben",
+    "ticket_park_by_hand": "ein Park wird nur von `{python} -m orch_it tickets park` geschrieben",
     "ticket_parked_label": "das Label `parked` wird nur von `tickets park` und `unpark` gesetzt und entfernt",
     "ticket_no_ticket": "die Bearbeitung nennt kein Ticket, das der Hook lesen kann",
     "ticket_not_read": "#{number} konnte für die Prüfung der Bearbeitung nicht von GitHub gelesen werden",
     "ticket_parked_line": "die Zeile `Parked:` wird nur von `tickets park` und `unpark` geschrieben und entfernt; lass sie, wie sie ist",
+    "watch_title": "Workflow {shown} nicht grün",
+    "watch_what": "Workflow `{shown}` nicht grün beendet: der letzte Lauf {run_id} endete ohne grünes Ergebnis.",
     "watch_comment": "Workflow `{workflow}` ist wieder nicht grün beendet worden: Lauf {run_id} endete als {how} bei {url}, beendet {ended_at}.",
     "watch_close": "Workflow `{workflow}` endet grün: Lauf {run_id} bei {url}, beendet {ended_at}. Diese Beobachtung wird geschlossen.",
     "watch_how_failure": "Fehler",
@@ -145,9 +148,9 @@ def test_the_push_refusal_takes_its_words_from_the_table(tmp_path, monkeypatch):
                " (or its visibility could not be read):\n"
                f"  {'ab' * 6} content notes.md:3 email{scanner.cited('email')}\n"
                "take the values out of the commits (amend or rebase) and push again;"
-               " `python -m orch_it guards scan --range <remote>..<local>` lists the same\n")
+               f" `{sys.executable} -m orch_it guards scan --range <remote>..<local>` lists the same\n")
     check(texts, english, sentences=["the commits hold private data", "take the values out of the commits"],
-          german=[DE["push_refused_private"], DE["push_take_out"]])
+          german=[DE["push_refused_private"], DE["push_take_out"].format(python=sys.executable)])
 
 
 def test_the_push_refusal_says_how_many_hits_it_does_not_show_in_the_table_words(tmp_path, monkeypatch):
@@ -194,7 +197,7 @@ def test_a_deny_says_the_way_in_the_table_words(tmp_path, monkeypatch):
 
     texts = in_each_language(tmp_path, monkeypatch, make)
     check(texts, f"worktree_delete: protected_root; {WAY_EN}", sentences=[WAY_EN],
-          german=[DE["guard_refusal_way"]])
+          german=[DE["guard_refusal_way"].format(python=sys.executable)])
 
 
 def test_a_deny_with_no_reason_says_its_fallback_in_the_table_words(tmp_path, monkeypatch):
@@ -336,8 +339,8 @@ TICKET_REASONS = [
      DE["ticket_body_way"].format(problem=DE["ticket_body_file_unreadable"].format(
          name="missing.md", error="FileNotFoundError"))),
     ("ticket_park_by_hand", ["gh", "issue", "create", "--label", "parked", "--title", "t", "--body", GOOD_BODY],
-     "park_by_hand: a park is written only by `python -m orch_it tickets park`",
-     DE["ticket_park_by_hand"]),
+     f"park_by_hand: a park is written only by `{sys.executable} -m orch_it tickets park`",
+     DE["ticket_park_by_hand"].format(python=sys.executable)),
     ("ticket_parked_label", ["gh", "issue", "edit", "5", "--add-label", "parked"],
      "park_by_hand: the `parked` label is set and taken off only by `tickets park` and `unpark`",
      DE["ticket_parked_label"]),
@@ -373,6 +376,59 @@ def test_a_tickets_hook_reason_takes_its_words_from_the_table(tmp_path, monkeypa
         return "\n".join(lines)
 
     texts = in_each_language(tmp_path, monkeypatch, make)
-    # the reason under test is among the lines: the body's human block is Russian (the shipped setting), so under
-    # the English setting the shape rules add their own lines, which this test does not judge
+    # the reason under test is among the lines: the fixture body's human block is Russian, while the default
+    # setting is English, so under the English setting the shape rules add their own lines, which this test does not judge
     check(texts, english, exact=False, sentences=[english.split(": ", 1)[1][:40]], german=[german])
+
+
+def watch_run(outcome="failure", jobs=3):
+    return watch.WorkflowRun("example-flow.yml", 4117, "https://github.com/acme/example/actions/runs/4117",
+                             "2026-10-28T09:00:00Z", outcome, jobs, 0)
+
+
+def test_the_watch_comment_takes_its_words_from_the_table(tmp_path, monkeypatch):
+    texts = in_each_language(tmp_path, monkeypatch, lambda: watch._comment(watch_run()))
+    english = ("Workflow `example-flow.yml` did not end green again: run 4117 ended as failure"
+               " at https://github.com/acme/example/actions/runs/4117, ended 2026-10-28T09:00:00Z.")
+    check(texts, english, sentences=["did not end green again"],
+          german=[DE["watch_comment"].format(workflow="example-flow.yml", run_id=4117, how=DE["watch_how_failure"],
+                                             url=watch_run().url, ended_at="2026-10-28T09:00:00Z")])
+    assert "ошибка" in texts["ru"]
+
+
+def test_the_watch_close_takes_its_words_from_the_table(tmp_path, monkeypatch):
+    texts = in_each_language(tmp_path, monkeypatch, lambda: watch._close(watch_run("success")))
+    english = ("Workflow `example-flow.yml` ends green: run 4117 at https://github.com/acme/example/actions/runs/4117,"
+               " ended 2026-10-28T09:00:00Z. Closing this watch.")
+    check(texts, english, sentences=["Closing this watch"],
+          german=[DE["watch_close"].format(workflow="example-flow.yml", run_id=4117, url=watch_run().url,
+                                           ended_at="2026-10-28T09:00:00Z")])
+
+
+@pytest.mark.parametrize("outcome,jobs,key,english", [
+    ("failure", 3, "watch_how_failure", "failure"),
+    ("cancelled", 3, "watch_how_cancelled", "cancelled"),
+    ("timed_out", 3, "watch_how_timed_out", "timed out"),
+    ("other", 0, "watch_how_no_job", "no job started"),
+], ids=["failure", "cancelled", "timed_out", "no_job_started"])
+def test_how_a_run_ended_takes_its_words_from_the_table(tmp_path, monkeypatch, outcome, jobs, key, english):
+    texts = in_each_language(tmp_path, monkeypatch, lambda: watch.how_ended(watch_run(outcome, jobs)))
+    check(texts, english, german=[DE[key]])
+
+
+@pytest.mark.parametrize("setting", ["unset", "ru", "de"])
+def test_the_watch_ticket_agent_block_stays_english_and_the_human_parts_follow_the_setting(
+        tmp_path, monkeypatch, no_machine_values, setting):
+    set_language(tmp_path, monkeypatch, setting, {})
+    title, body = watch.build(watch_run("timed_out"))
+    human, agent = body.split("## For the agent")
+    assert "ended its latest run 4117 at https://github.com/acme/example/actions/runs/4117 as timed out;" in agent
+    assert not CYRILLIC.search(agent)
+    assert DE["watch_how_timed_out"] not in agent and "превышено время" not in agent
+    if setting == "ru":
+        assert CYRILLIC.search(title) and CYRILLIC.search(human)
+    elif setting == "de":
+        assert title == DE["watch_title"].format(shown="example-flow")
+        assert DE["watch_what"].format(shown="example-flow", run_id=4117) in human
+    else:
+        assert title == "Workflow example-flow did not end green"

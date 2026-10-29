@@ -97,10 +97,12 @@ def green(run: WorkflowRun) -> bool:
     return run.outcome == "success" and run.jobs_started > 0
 
 
-def how_ended(run: WorkflowRun) -> str:
-    """How a non-green run ended, in the words of the language table (the watch ticket and its comments)."""
+def how_ended(run: WorkflowRun, *, record: bool = False) -> str:
+    """How a non-green run ended, in the words of the language table (a comment a person reads); `record`:
+    in English whatever the setting (the agent block of the watch ticket)."""
 
-    return language.text("watch_how_no_job") if run.jobs_started == 0 else language.text(HOW_KEY[run.outcome])
+    say = language.english if record else language.text
+    return say("watch_how_no_job") if run.jobs_started == 0 else say(HOW_KEY[run.outcome])
 
 
 def display_name(workflow: str) -> str:
@@ -153,7 +155,7 @@ def _checked(title: str, body: str) -> tuple[str, str]:
 def build(run: WorkflowRun) -> tuple[str, str]:
     """(title, body) of the watch ticket for the non-green latest `run` of its workflow."""
 
-    name, shown, how = run.workflow, display_name(run.workflow), how_ended(run)
+    name, shown, how = run.workflow, display_name(run.workflow), how_ended(run, record=True)
     title = language.text("watch_title", shown=shown)
     human = "\n".join(f"- **{field}:** {text}" for field, text in {
         "What": language.text("watch_what", shown=shown, run_id=run.run_id),

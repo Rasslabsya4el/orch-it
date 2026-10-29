@@ -129,7 +129,7 @@ def _refusal(hits: list[scanner.Hit]) -> str:
               for hit in hits[:SHOWN_HITS]]
     if len(hits) > SHOWN_HITS:
         lines.append(language.text_or_refusal("push_more", count=len(hits) - SHOWN_HITS))
-    lines.append(language.text_or_refusal("push_take_out"))
+    lines.append(language.text_or_refusal("push_take_out", python=sys.executable))
     return "\n".join(lines) + "\n"
 
 

@@ -26,7 +26,17 @@ def text(key: str, **fields: object) -> str:
     """The string `key` in the current language. With `fields` it is `str.format`ted with them;
     with none it is returned as written (a regex or a brace in it stays)."""
 
-    language = settings.human_language()
+    return _lookup(settings.human_language(), key, fields)
+
+
+def english(key: str, **fields: object) -> str:
+    """`text` in English under every setting: for what is written as a record for agents and scripts
+    (a ticket's agent block), which a person's language does not change."""
+
+    return _lookup("en", key, fields)
+
+
+def _lookup(language: str, key: str, fields: dict[str, object]) -> str:
     path = settings.table_path(language)
     try:
         table = tomllib.loads(path.read_text("utf-8"))
