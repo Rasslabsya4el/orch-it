@@ -104,6 +104,9 @@ class FakeHub:
         return [issue for (r, _), issue in sorted(self.issues.items())
                 if r == repo and issue.open and not issue.is_pr and label in issue.labels]
 
+    def open_issues(self, repo):
+        return [issue for (r, _), issue in sorted(self.issues.items()) if r == repo and issue.open and not issue.is_pr]
+
     def create(self, repo, title, body, labels):
         number = max([n for (r, n) in self.issues if r == repo] or [0]) + 1
         self.add(number, body, labels, repo=repo, title=title)

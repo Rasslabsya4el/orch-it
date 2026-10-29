@@ -15,21 +15,22 @@ the no-result ticket to the brain.
 
 from __future__ import annotations
 
+import json
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 from orch_it.events.store import Store
 from orch_it.merge import main_check
 from orch_it.merge.follow import ROLE
 from orch_it.merge.hub import PullHub
-from orch_it.tickets.hub import LAYER_MARK
+from orch_it.tickets.hub import LAYER_MARK, Issue
 from orch_it.tickets.model import CODE_WRITTEN_MARK
 from orch_it.tickets.reader import TRIAGE_LABEL
 
 BOUNDS_KEY = "place_bounds"
-DEFAULT_BOUNDS = {"run_minutes": {"linux": 6, "windows": 8}, "queue_minutes": 5}
-"""Measured per-change durations: a linux run 6 minutes, a windows run 8 minutes, a GitHub queue wait 5 minutes."""
+DEFAULTS_FILE = Path(__file__).with_name("bound_defaults.json")  # measured durations: linux 6, windows 8, queue 5 min
 
 LAST_RUNS = 10
 MEASURED = ("passed", "failed")
@@ -70,21 +71,26 @@ def run_bound_check(store: Store, hub: PullHub, settings: dict) -> BoundReport:
     opened, commented = [], []
     for crossing in _crossings(_recent_runs(store, repo), run_bounds, queue_bound):
         mark, note = _key_mark(crossing), _note_mark(crossing)
-        number = main_check.open_triage_with(hub, repo, mark)
-        if number is None:
+        ticket = _open_ticket_with(hub, repo, mark)
+        if ticket is None:
             title, body = _ticket(crossing, mark, note)
             opened.append(main_check.open_triage(hub, store, repo, ROLE, title, body, (TRIAGE_LABEL,)))
-        elif not _told(hub, repo, number, note):
-            hub.comment(repo, number, _comment(crossing, note))
-            commented.append(number)
+        elif not _told(hub, repo, ticket, note):
+            hub.comment(repo, ticket.number, _comment(crossing, note))
+            commented.append(ticket.number)
     return BoundReport(opened=opened, commented=commented)
 
 
+def default_bounds() -> dict:
+    """The default bounds of `bound_defaults.json`: `run_minutes` (OS -> minutes) and `queue_minutes`."""
+
+    return json.loads(DEFAULTS_FILE.read_text("utf-8"))
+
+
 def _bounds(settings: dict) -> tuple[dict, float]:
-    given = settings.get(BOUNDS_KEY, DEFAULT_BOUNDS)
-    run_bounds = given.get("run_minutes", DEFAULT_BOUNDS["run_minutes"])
-    queue_bound = given.get("queue_minutes", DEFAULT_BOUNDS["queue_minutes"])
-    return run_bounds, queue_bound
+    defaults = default_bounds()
+    given = settings.get(BOUNDS_KEY, {})
+    return given.get("run_minutes", defaults["run_minutes"]), given.get("queue_minutes", defaults["queue_minutes"])
 
 
 def _moment(text: str) -> datetime:
@@ -160,27 +166,30 @@ def _note_mark(c: _Crossing) -> str:
     return f"<!-- orch-it bound-note kind={c.kind} run={c.newest} -->"
 
 
+def _facts(c: _Crossing) -> str:
+    return (f"The median {KIND_WORDS[c.kind]} of the last {c.count} ended test runs at `{c.place}` on `{c.os}` is "
+            f"{c.median:.1f} min, over its bound of {c.bound:g} min. The newest of those runs is `{c.newest}`.")
+
+
 def _ticket(c: _Crossing, mark: str, note: str) -> tuple[str, str]:
     title = f"Test {KIND_WORDS[c.kind]} over its bound at {c.place} on {c.os}"
-    body = f"""{mark}
-{note}
-{CODE_WRITTEN_MARK}
-## Facts
-The median {KIND_WORDS[c.kind]} of the last {c.count} ended test runs at `{c.place}` on `{c.os}` is
-{c.median:.1f} min, over its bound of {c.bound:g} min. The newest of those runs is `{c.newest}`. The bound check
-opened this ticket; a later crossing by newer runs comments here instead of opening another.
-"""
+    body = (f"{mark}\n{note}\n{CODE_WRITTEN_MARK}\n## Facts\n{_facts(c)} The bound check opened this ticket; a later "
+            "crossing by newer runs comments here instead of opening another.\n")
     return title, body
 
 
 def _comment(c: _Crossing, note: str) -> str:
-    return (f"{LAYER_MARK}{note}\n"
-            f"The median {KIND_WORDS[c.kind]} of the last {c.count} ended test runs at `{c.place}` on `{c.os}` is "
-            f"{c.median:.1f} min, over its bound of {c.bound:g} min again. The newest of those runs is `{c.newest}`.")
+    return f"{LAYER_MARK}{note}\nCrossed again. {_facts(c)}"
 
 
-def _told(hub: PullHub, repo: str, number: int, note: str) -> bool:
-    issue = hub.issue(repo, number)
-    if issue is not None and note in issue.body:
+def _open_ticket_with(hub: PullHub, repo: str, mark: str) -> Issue | None:
+    """The lowest-numbered open issue, whatever its labels, whose body holds `mark`; None when there is none."""
+
+    found = sorted((issue for issue in hub.open_issues(repo) if mark in issue.body), key=lambda issue: issue.number)
+    return found[0] if found else None
+
+
+def _told(hub: PullHub, repo: str, ticket: Issue, note: str) -> bool:
+    if note in ticket.body:
         return True
-    return any(note in said.body for said in hub.comments(repo, number))
+    return any(note in said.body for said in hub.comments(repo, ticket.number))
