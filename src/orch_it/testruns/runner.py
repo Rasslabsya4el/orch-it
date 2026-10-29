@@ -32,7 +32,6 @@ WAIT_POLL_SECONDS = 15
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # the OS a run may need: any, or one of the closed set `test_os`
 NEED_OSES = ("any", *sorted(schema.codes_of("test_run.started", "run_os")))
-GITHUB_OSES = ("linux", "windows")  # the jobs of the `tests` workflow
 RUN_ERROR_CODES = ("ids_file_unreadable", "unknown_place", "bad_work_tree", "bad_os")
 
 
@@ -106,8 +105,8 @@ def offers_of(settings: TestSettings, places: dict) -> list[place_rule.Offer]:
                                settings.own_capacity)]
     offers += [place_rule.Offer(m.place, (m.os,), m.on and m.place in places, m.capacity)
                for m in settings.machines]
-    offers.append(place_rule.Offer("github", GITHUB_OSES, settings.github_tests and "github" in places,
-                                   settings.github_capacity))
+    offers.append(place_rule.Offer("github", settings.required_checks,
+                                   settings.github_tests and "github" in places, settings.github_capacity))
     return offers
 
 

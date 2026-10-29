@@ -1,7 +1,7 @@
 """The GitHub importer (#394 decision 7): the runs of the `tests` workflow become events.
 
-For each completed run, and for each job named in the setting `github_required_jobs` (default
-`linux` and `windows`) in every attempt of it, the importer writes a `test_run` step pair
+For each completed run, and for each job named in the setting `required_checks` (default in
+`defaults.json`, read by `config.required_checks`) in every attempt of it, the importer writes a `test_run` step pair
 (place `github`), the queue time as a `wait` pair with reason `github_queue`, and one
 `test.result` per case of the job's JUnit artifact. The artifact is read by `outcome.judge`
 like any other report; the job's GitHub conclusion decides the outcome:
@@ -53,11 +53,10 @@ from orch_it.events import schema
 from orch_it.events.ids import import_id
 from orch_it.events.store import Store
 from orch_it.testruns import outcome
+from orch_it.testruns.config import required_checks
 
 SOURCE = "github"
 WORKFLOW_FILE = "tests.yml"
-REQUIRED_JOBS_SETTING = "github_required_jobs"
-DEFAULT_REQUIRED_JOBS = ["linux", "windows"]
 JOB_TIMEOUT_SETTING = "github_job_timeout_minutes"
 DEFAULT_JOB_TIMEOUT_MINUTES = 9
 NEWEST_RUNS_SETTING = "github_live_newest_runs"  # how many of the newest runs the live import test judges
@@ -155,7 +154,7 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
     if newest is not None:
         _check_newest(newest, "newest")
     config = settings.load()
-    required = _required_jobs(config)
+    required = list(required_checks(config, repo))
     job_bound = _job_timeout_minutes(config)
 
     every_run = _items(gh(_list_runs_args(repo, floor, newest)), "workflow_runs")
@@ -230,14 +229,6 @@ def _since(since: str | None) -> datetime | None:
     except (TypeError, ValueError):
         raise GithubError("bad_since", str(since)) from None
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
-
-
-def _required_jobs(config: dict) -> list[str]:
-    names = config.get(REQUIRED_JOBS_SETTING, DEFAULT_REQUIRED_JOBS)
-    if (not isinstance(names, list) or not names
-            or not all(isinstance(name, str) and name and name == name.strip() for name in names)):
-        raise settings.SettingsError("bad_setting", REQUIRED_JOBS_SETTING)
-    return list(dict.fromkeys(names))
 
 
 def _job_timeout_minutes(config: dict) -> float:
