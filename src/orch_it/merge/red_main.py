@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from orch_it import language
 from orch_it.tickets import parse, violations
-from orch_it.tickets.model import PRIORITY_LABEL, READY_LABEL
+from orch_it.tickets.model import CODE_WRITTEN_MARK, PRIORITY_LABEL, READY_LABEL
 from orch_it.tickets.reader import TRIAGE_LABEL
 
 MARK = "<!-- orch-it red-main -->"
@@ -113,6 +113,7 @@ def build(ids: list[str], *, sha: str, run_id: str, pr: int | None) -> tuple[str
     more = len(ids) - len(listed)
     rest = f"\n... and {more} more failing tests of that run, not listed here.\n" if more else ""
     body = f"""{MARK}
+{CODE_WRITTEN_MARK}
 <!-- orch-it red-main-set count={count} sha={whole} -->
 ## For the human
 {human}
@@ -160,6 +161,7 @@ def build_no_result(*, sha: str, run_id: str, jobs: dict[str, str]) -> tuple[str
         "Undo": language.text("no_result_undo"),
     })
     body = f"""{NO_RESULT_MARK.format(run_id=run_id)}
+{CODE_WRITTEN_MARK}
 ## For the human
 {human}
 
