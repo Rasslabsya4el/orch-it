@@ -9,7 +9,7 @@ from orch_it.events.schema import EventError, validate
 def event(**over):
     base = {
         "id": "e1", "kind": "turn.used", "at": "2026-10-25T14:40:36+02:00",
-        "repo": "Rasslabsya4el/orch-it", "ticket": None, "role": "worker", "session": "s1",
+        "repo": "acme-x/widgets-y", "ticket": None, "role": "worker", "session": "s1",
         "parent_session": None, "turn": "m1", "step": None, "run": None, "machine": "m",
         "os": "Windows 10", "layer_version": "0.0.0", "note": None,
         "detail": {"model": "claude-opus-5-5", "usd": 0.5},

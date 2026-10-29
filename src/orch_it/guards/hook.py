@@ -13,19 +13,17 @@ import re
 import sys
 from dataclasses import dataclass, field
 
+from orch_it import language, settings
 from orch_it.events.schema import EventError
 from orch_it.events.store import StoreError
 from orch_it.guards import paths, processes, triggers
 
-DEFAULT_REPO = "Rasslabsya4el/orch-it"
 # the Claude Code tool names the hook fires for; a PowerShell tool reads the Windows dialect
 POWERSHELL_TOOLS = ("PowerShell",)
 
 # the guard a refusal is attributed to, by the action it came from
 DELETE_GUARD = "worktree_delete"
 STOP_GUARD = "foreign_process_stop"
-REFUSAL_WAY = ("the guard reads the object, not the command; to stop an own process with its "
-               "tree use `python -m orch_it stop <pid>`")
 
 
 @dataclass(frozen=True)
@@ -80,7 +78,8 @@ def decide(command: str, *, tool: str, cwd: str, env, windows: bool, session_id:
                 fired.append(Fired(DELETE_GUARD, verdict, finding.rule if finding else action.rule_id,
                                    action.segment, finding.path if finding else None))
                 if finding and deny_reason is None:
-                    deny_reason = f"{DELETE_GUARD}: {finding.rule}; {REFUSAL_WAY}"
+                    deny_reason = (f"{DELETE_GUARD}: {finding.rule}; "
+                                   f"{language.text_or_refusal('guard_refusal_way', python=sys.executable)}")
             elif isinstance(action, triggers.Stop):
                 refusal = world.judge_stop(action)
                 verdict = "deny" if refusal else "pass"
@@ -88,7 +87,8 @@ def decide(command: str, *, tool: str, cwd: str, env, windows: bool, session_id:
                                    action.segment,
                                    str(refusal.pid) if refusal and refusal.pid is not None else None))
                 if refusal and deny_reason is None:
-                    deny_reason = f"{STOP_GUARD}: {refusal.reason}; {REFUSAL_WAY}"
+                    deny_reason = (f"{STOP_GUARD}: {refusal.reason}; "
+                                   f"{language.text_or_refusal('guard_refusal_way', python=sys.executable)}")
         except Exception as exc:  # a guard crashed on THIS action: fail open for it, record the
             # crash, but keep any deny already found and judge the rest (a crash never hides a deny)
             guard = DELETE_GUARD if isinstance(action, (triggers.Delete, triggers.Move)) else STOP_GUARD
@@ -256,7 +256,11 @@ def _run_pre_tool_use(raw_stdin: str, store, platform: str) -> tuple[str, int]:
     return "", 0
 
 
-def _repo_of(cwd: str) -> str:
+def _repo_of(cwd: str) -> str | None:
+    """The repo this call's events are written under: the GitHub origin of cwd, else the setting
+    `repo`, else None. A bad setting is said on stderr and read as None. No repo is never a guessed
+    one: the decision is still made, its events are not written (`_no_repo` says so on stderr)."""
+
     try:
         import subprocess
 
@@ -269,16 +273,27 @@ def _repo_of(cwd: str) -> str:
             return found.group(1)
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
-    return DEFAULT_REPO
+    try:
+        return settings.default_repo()
+    except settings.SettingsError as exc:
+        print(language.text_or_refusal("guard_repo_setting", error=exc), file=sys.stderr)
+        return None
+
+
+def _no_repo(what: str) -> None:
+    print(language.text_or_refusal("guard_no_repo", what=what), file=sys.stderr)
 
 
 def _deny_json(reason: str | None) -> str:
     return json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "permissionDecision": "deny",
-        "permissionDecisionReason": reason or "refused by the orch-it guard"}})
+        "permissionDecisionReason": reason or language.text_or_refusal("guard_refused")}})
 
 
-def _write_events(store, decision: Decision, *, repo: str, session: str | None) -> None:
+def _write_events(store, decision: Decision, *, repo: str | None, session: str | None) -> None:
+    if repo is None:
+        _no_repo(language.text_or_refusal("guard_no_repo_events"))
+        return
     try:
         with store.writer() as writer:
             for f in decision.fired:
@@ -288,7 +303,7 @@ def _write_events(store, decision: Decision, *, repo: str, session: str | None) 
     except (OSError, StoreError, EventError) as e:
         # the store must never block a tool call; a lost event beats a stuck agent, but it is
         # said once on stderr so a validation slip does not vanish silently
-        print(f"orch-it guard: event not written: {e}", file=sys.stderr)
+        print(language.text_or_refusal("guard_event_not_written", error=e), file=sys.stderr)
 
 
 def _envelope(kind: str, repo: str, session: str | None, detail: dict) -> dict:
@@ -312,7 +327,10 @@ def _error_event(error, repo: str, session: str | None) -> dict:
                      {"component": component, "error_code": code, "failed_open": failed_open})
 
 
-def _safe_write_error(store, component, code, *, repo, session) -> None:
+def _safe_write_error(store, component, code, *, repo: str | None, session) -> None:
+    if repo is None:
+        _no_repo(language.text_or_refusal("guard_no_repo_error"))
+        return
     try:
         with store.writer() as writer:
             writer.write(_error_event((component, code, True), repo, session))

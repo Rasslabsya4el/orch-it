@@ -6,17 +6,23 @@ The ticket is read again through the `Hub` and judged as it stands now by `shape
 the same function the session hook calls. With violations, a comment lists every one (first,
 so a label is never taken off unexplained) and the `ready-for-agent` label comes off; the body
 is never edited. Any other event, a ticket no longer ready, or a pull request is skipped.
+
+The literal check (#413 unit 6) judges the same body with this run's values (`read_values`: on GitHub Actions
+the runner's own environment, the repo, owner and actor, the home folder, and the checkout's git setting) and
+the check names of the workflows in the workspace. A values line that is not checked is the comment's last line.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from orch_it import language
 from orch_it.tickets.hub import LAYER_MARK, Hub
 from orch_it.tickets.model import READY_LABEL, parse
-from orch_it.tickets.shape import violations
+from orch_it.tickets.shape import literal_violations, violations
 
 CHECK_ERROR_CODES = ("event_unreadable",)
 
@@ -53,8 +59,9 @@ def read_event(path: str | Path) -> dict:
     return found
 
 
-def check_event(event: object, hub: Hub) -> CheckResult:
-    """Judge the ticket of an `issues` event; take `ready-for-agent` off a ticket with violations."""
+def check_event(event: object, hub: Hub, *, env=None, run=None, home=None, host=None) -> CheckResult:
+    """Judge the ticket of an `issues` event; take `ready-for-agent` off a ticket with violations. `env`,
+    `run`, `home` and `host` go to `read_values` (defaults: this process's environment and machine)."""
 
     issue_part = event.get("issue") if isinstance(event, dict) else None
     repository = event.get("repository") if isinstance(event, dict) else None
@@ -74,14 +81,24 @@ def check_event(event: object, hub: Hub) -> CheckResult:
     ready = [label for label in issue.labels if label.lower() == READY_LABEL] if issue else []
     if issue is None or issue.is_pr or not ready:
         return CheckResult(number, "skipped")  # its label already came off, or it is gone
+    from orch_it.guards.kinds import read_job_names
+    from orch_it.guards.values import read_values
+
+    workspace = (os.environ if env is None else env).get("GITHUB_WORKSPACE") or os.getcwd()
+    values = read_values(env=env, run=run, home=home, host=host)
+    checks = read_job_names(str(Path(workspace) / ".github" / "workflows"))
     found = violations(parse(issue.body, title=issue.title, labels=issue.labels))
+    found += literal_violations(issue.body, values=values, checks=checks)
     if not found:
         return CheckResult(number, "kept")
+    # the comment's words are read before the label moves: a language that cannot be read never leaves a label
+    # off without its comment (text_or_refusal writes the error's own words in that case)
+    notice = language.text_or_refusal("check_took_label", label=READY_LABEL)
+    listed = "\n".join(f"- `{v.code}`: {_quiet(v.rule)}" for v in found)
+    tail = values.render_not_checked()
     # the label first: a comment never says it came off when it did not; a failed comment fails the run
     hub.remove_label(repo, number, ready[0])
-    listed = "\n".join(f"- `{v.code}`: {_quiet(v.rule)}" for v in found)
-    hub.comment(repo, number, f"{LAYER_MARK}\nThe shape check took `{READY_LABEL}` off this ticket. Write it again "
-                              f"with the `write-ticket` skill, then set the label again:\n\n{listed}\n")
+    hub.comment(repo, number, f"{LAYER_MARK}\n{notice}\n\n{listed}\n" + (f"{tail}\n" if tail else ""))
     return CheckResult(number, "removed", list(dict.fromkeys(v.code for v in found)))
 
 

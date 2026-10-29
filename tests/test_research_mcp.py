@@ -24,28 +24,34 @@ ENTRY = json.loads((REPO / ".mcp.json").read_text("utf-8"))["mcpServers"]["orch-
 KEY_ENV_IN_MCP = next(name for name in ENTRY["env"] if not name.startswith("ORCH_IT_"))
 
 
+def fill(text: str, base: dict) -> str:
+    """`text` with each `${VAR}` / `${VAR:-default}` filled from `base`, as Claude Code fills `.mcp.json`."""
+
+    def one(match):
+        name, _, default = match.group(1).partition(":-")
+        return base.get(name) or default
+    return re.sub(r"\$\{([^}]+)\}", one, text)
+
+
 def expanded_env(base: dict) -> dict:
     """The server's environment as Claude Code makes it from `.mcp.json`: its `env` with each
     `${VAR}` / `${VAR:-default}` filled from `base`, over the few variables any process needs."""
-
-    def fill(text):
-        def one(match):
-            name, _, default = match.group(1).partition(":-")
-            return base.get(name) or default
-        return re.sub(r"\$\{([^}]+)\}", one, text)
-
     keep = {name: value for name, value in base.items()
             if name.upper() in ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE",
                                 "LOCALAPPDATA", "APPDATA", "OPENCODE_STUB_SCENARIO", "PYTHONPATH")}
-    return keep | {name: fill(value) for name, value in ENTRY.get("env", {}).items()}
+    return keep | {name: fill(value, base) for name, value in ENTRY.get("env", {}).items()}
 
 
 class McpServer:
     """The server process and a JSON-RPC conversation with it, every read bounded."""
 
     def __init__(self, env: dict, cwd: Path):
-        assert ENTRY["command"] == "python" and ENTRY["args"] == ["-m", "orch_it", "research-mcp"]
-        self.process = subprocess.Popen([sys.executable, *ENTRY["args"]], cwd=cwd, env=env,
+        # the entry as `.mcp.json` names it: command `${ORCH_IT_PYTHON}`, args `-m orch_it research-mcp`;
+        # this interpreter is what ORCH_IT_PYTHON names, so it is the command the server really runs under
+        assert ENTRY["command"] == "${ORCH_IT_PYTHON}" and ENTRY["args"] == ["-m", "orch_it", "research-mcp"]
+        command = fill(ENTRY["command"], {"ORCH_IT_PYTHON": sys.executable})
+        self.process = subprocess.Popen([command, *ENTRY["args"]],
+                                        cwd=cwd, env=env | {"ORCH_IT_PYTHON": sys.executable},
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                         creationflags=NO_WINDOW)
         self.lines: list[str] = []

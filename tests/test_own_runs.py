@@ -19,7 +19,7 @@ from orch_it.testruns.places import PlaceRefused, PlaceVanished
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 from orch_it.testruns.runner import run_tests
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 
 
 def suite(tmp_path, **files: str):

@@ -12,10 +12,22 @@ from pathlib import Path
 
 import pytest
 
+from orch_it import language
 from orch_it.skills import copies, update
 from orch_it.skills.copies import Manifest, SkillsError
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def goal_in_english(monkeypatch):
+    """The Goal of the issue's human block comes out in English under the Russian table, so the shape refuses it
+    (#413 unit 10b: `update.HUMAN_KEYS` names the table key of each field; the key's text is what the test replaces)."""
+    real = language.text
+    goal_key = update.HUMAN_KEYS["Goal"]
+    monkeypatch.setattr(language, "text", lambda key, **fields: "the copies match his upstream" if key == goal_key
+                        else real(key, **fields))
 
 
 def git(cwd, *args, check=True):
@@ -234,7 +246,7 @@ def test_a_copy_removed_renamed_or_changed_in_contract_opens_no_pr(world, files)
 
 
 def test_a_text_change_whose_issue_breaks_a_shape_rule_opens_no_pr(world, monkeypatch):
-    monkeypatch.setitem(update.HUMAN_LINES, "Goal", "the copies match his upstream")  # English: the shape refuses it
+    goal_in_english(monkeypatch)  # the Goal in English under the Russian table: the shape refuses it
     newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
     forge = FakeForge()
     done = run_update(world, forge)
@@ -649,13 +661,13 @@ def test_the_issue_of_a_renamed_copy_is_a_ticket_with_no_shape_violation(world):
 
 
 def test_a_bad_template_gives_an_issue_without_ready_for_agent_that_lists_its_violations(world, monkeypatch):
-    monkeypatch.setitem(update.HUMAN_LINES, "Goal", "the copies match his upstream")  # English: the shape refuses it
+    goal_in_english(monkeypatch)  # the Goal in English under the Russian table: the shape refuses it
     newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
     forge = FakeForge()
     done = report(world, forge)
     [(_, body, label)] = forge.opened
     assert label != "ready-for-agent" and done.labels == [label]
-    assert "human_field_not_russian" in body
+    assert "human_field_wrong_language" in body
 
 
 def test_a_body_with_violations_on_a_later_run_leaves_the_brains_labels(world, monkeypatch):
@@ -663,9 +675,9 @@ def test_a_body_with_violations_on_a_later_run_leaves_the_brains_labels(world, m
     forge = FakeForge()
     report(world, forge)
     forge.issues[0]["labels"] = ["ready-for-agent"]
-    monkeypatch.setitem(update.HUMAN_LINES, "Goal", "the copies match his upstream")
+    goal_in_english(monkeypatch)
     assert report(world, forge).status == "already_open"
-    assert forge.issues[0]["labels"] == ["ready-for-agent"] and "human_field_not_russian" in forge.edited[-1][1]
+    assert forge.issues[0]["labels"] == ["ready-for-agent"] and "human_field_wrong_language" in forge.edited[-1][1]
 
 
 def test_a_huge_change_stays_inside_a_github_body_and_its_shape():

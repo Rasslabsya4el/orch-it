@@ -15,6 +15,7 @@ from orch_it.events.store import Store
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    (tmp_path / "settings.json").write_text('{"repo": "acme-x/widgets-y"}', "utf-8")  # the repo the events are written under
     monkeypatch.delenv("ORCH_IT_STORE", raising=False)
 
 

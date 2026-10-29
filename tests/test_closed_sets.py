@@ -1,6 +1,6 @@
 """The closed sets match the event list of #388 (sections 2, 3, 4, 8 of
 docs/research/2026-10-25-event-list-355.md on branch research/event-list-355 of
-Rasslabsya4el/orchestration-layer). The expected names below are copied from that list
+the layer's repo). The expected names below are copied from that list
 by hand, so this test is the check against it, not against the file itself."""
 
 from orch_it.events import schema

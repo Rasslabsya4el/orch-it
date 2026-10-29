@@ -11,7 +11,7 @@ from orch_it import settings
 from orch_it.cli import main
 from orch_it.events.store import Store
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 
 
 @pytest.fixture(autouse=True)

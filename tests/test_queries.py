@@ -9,8 +9,8 @@ from orch_it import settings
 from orch_it.events import queries
 from orch_it.events.store import Store
 
-REPO = "Rasslabsya4el/orch-it"
-OTHER = "Rasslabsya4el/other"
+REPO = "acme-x/widgets-y"
+OTHER = "acme-x/other"
 DAY = "2026-10-25"
 
 

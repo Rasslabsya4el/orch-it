@@ -32,13 +32,14 @@ MESSAGE_37FA812 = (
     "login without admin keep raising; two tests for them; docstring says exactly this; the ticket URL and the\n"
     "duplicate test left the permissions test file.")
 # what the hook reads off the machine is not under test here: the closing check needs none of it
-PATTERNS = Patterns.machine_independent()
+PATTERNS = Patterns()
 REFUSAL_WAY = "write `Refs <URL>` or `Ticket: <URL>`"
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    (tmp_path / "settings.json").write_text('{"repo": "acme-x/widgets-y"}', "utf-8")  # the repo the events are written under
     monkeypatch.delenv("ORCH_IT_STORE", raising=False)
 
 
@@ -312,11 +313,10 @@ def hooked(tmp_path, repo):
     """`repo` with the tracked hook as its hooks folder and a bare remote; the hook runs under this
     interpreter on this checkout's source."""
 
-    exe = sys.executable.replace("\\", "/")
     hooks = tmp_path / "hooks"
     hooks.mkdir()
-    script = HOOK.read_text("utf-8").replace("python -m orch_it", f'"{exe}" -m orch_it')
-    (hooks / "pre-push").write_bytes(script.encode("utf-8"))
+    for name in ("pre-push", "orch-it"):  # the hook and the interpreter shim it calls, beside it
+        (hooks / name).write_bytes((ROOT / "hooks" / name).read_bytes())
     (hooks / "pre-push").chmod(0o755)
     bare = tmp_path / "bare.git"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True,
@@ -324,7 +324,7 @@ def hooked(tmp_path, repo):
     repo.git("config", "core.hooksPath", str(hooks))
     repo.git("remote", "add", "origin", str(bare))
     repo.env = repo.env | {"PYTHONPATH": str(ROOT / "src"), "ORCH_IT_STORE": str(tmp_path / "hook-store"),
-                           "PYTHONIOENCODING": "utf-8"}
+                           "PYTHONIOENCODING": "utf-8", "ORCH_IT_PYTHON": sys.executable}
     return repo
 
 

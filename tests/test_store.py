@@ -11,7 +11,7 @@ from orch_it.events.store import Store, StoreError
 
 def envelope(**over):
     base = {
-        "kind": "value.measured", "repo": "Rasslabsya4el/orch-it", "ticket": None,
+        "kind": "value.measured", "repo": "acme-x/widgets-y", "ticket": None,
         "role": "script", "session": None, "parent_session": None, "turn": None,
         "step": None, "run": None, "note": None,
         "detail": {"name": "ram", "value": 16, "unit": "GB", "source": "test"},
@@ -57,7 +57,7 @@ def test_a_written_event_is_queryable_with_its_envelope_as_columns(tmp_path):
     with store.writer() as writer:
         e = writer.write(envelope(ticket=393))
     rows = store.query("SELECT id, kind, repo, ticket, name, value FROM events").rows
-    assert rows == [(e["id"], "value.measured", "Rasslabsya4el/orch-it", 393, "ram", 16)]
+    assert rows == [(e["id"], "value.measured", "acme-x/widgets-y", 393, "ram", 16)]
 
 
 def test_an_unknown_detail_field_is_accepted_and_queryable(tmp_path):

@@ -175,6 +175,18 @@ _Avoid_: secret, PII, sensitive data
 A guard refusal a human or the brain marks as wrong; counted from the store through `guard.reversed`, never from memory.
 _Avoid_: false positive, misfire, bad block
 
+**Finding**:
+One place (file, line, kind) where the scan meets a value of a kind the coding standard refuses, outside an allowed place; a push or a ticket with a finding is refused.
+_Avoid_: hit, match, leak
+
+**Exceptions list**:
+`guards-exceptions.toml` at the repo root; each entry names a file, a line pattern, the kinds of finding it excuses and its reason; an entry with no kinds or no reason, or a malformed file, refuses the push.
+_Avoid_: exemption, ignore file, waiver
+
+**Allowed place**:
+Where a value of a kind the coding standard refuses may stand: the settings file, the records (`docs/research/` and `docs/adr/`), an entry of the exceptions list. A path inside the repo is not a value.
+_Avoid_: safe place, exempt path, excluded folder
+
 ## Tickets
 
 **Ticket**:
