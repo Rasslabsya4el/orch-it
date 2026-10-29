@@ -198,8 +198,18 @@ def left_reason(comments: Iterable[Comment]) -> str | None:
     return reason
 
 
-def follow_mark(outcome: str) -> str:
-    return f"{LAYER_MARK}\n<!-- orch-it follow outcome={outcome} -->\n"
+def follow_mark(outcome: str, pr: int | None = None) -> str:
+    """`pr`: the pull request the outcome is about, for an outcome written once per pull request."""
+
+    named = f" pr={pr}" if pr is not None else ""
+    return f"{LAYER_MARK}\n<!-- orch-it follow outcome={outcome}{named} -->\n"
+
+
+def part_landed(comments: Iterable[Comment], pr: int) -> bool:
+    """Whether the ticket already says that a part, pull request `pr`, landed (#434)."""
+
+    return any(fields.get("outcome") == "part_landed" and fields.get("pr") == str(pr)
+               for _, fields in _marked(comments, "follow"))
 
 
 def follows(comments: Iterable[Comment]) -> list[Followed]:

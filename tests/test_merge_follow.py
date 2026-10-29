@@ -8,11 +8,12 @@ from datetime import timedelta
 
 import pytest
 from fake_github import FAILED, NO_RESULT, PASSED, PENDING, REPO
-from follow_world import BODY, ROWS, world
+from follow_world import BODY, ROWS, ROWS_NO_AFTER, Git, world
 
 from orch_it import tickets
 from orch_it.merge import marks, red_main
 from orch_it.merge.follow import follow
+from orch_it.merge.pr_open import open_pr
 from orch_it.merge.settings import MergeSettings
 
 
@@ -107,6 +108,63 @@ def test_a_merged_pull_request_with_no_ticket_ends_its_step_only(tmp_path):
     pr = hub.open_pull(body="A hand change")
     merged(hub, pr)
     assert run(hub, store, pr).outcome == "merged_alone"
+
+
+# merged: a part of a ticket (#434)
+
+
+def open_part(hub, store, branch, part, number=10):
+    hub.branches[branch] = [*hub.branches["main"], hub.sha(f"{branch}-")]
+    return open_pr(hub, store, REPO, number, acceptance=ROWS_NO_AFTER, branch=branch, base="main", git=Git(hub),
+                   settings=MergeSettings(), now=hub.now, part=part).pr
+
+
+def test_a_merged_part_before_the_last_says_it_landed_and_leaves_the_ticket_open_and_unparked(tmp_path):
+    hub, store, prs = world(tmp_path, part=(1, 2))
+    merged(hub, prs[10])
+    done = run(hub, store, prs[10])
+    assert (done.outcome, done.ticket, done.detail) == ("part_landed", 10, "part 1 of 2")
+    held, issue = ticket(hub)
+    assert issue.open and issue.state_reason is None and not held.park_lines and not held.parked
+    assert issue.labels == ("ready-for-agent",)
+    said = last_comment(hub, 10)
+    assert "part 1 of 2 landed" in said and f"#{prs[10]}" in said and hub.pulls[prs[10]].merge_sha[:12] in said
+    assert marks.follows(hub.comments(REPO, 10))[-1].outcome == "part_landed"
+    assert not events(store, "ticket.closed")
+    ended = [row[:4] for row in events(store, "step.ended")]
+    assert ("step.ended", "pr", "passed", "merged") in ended and ("step.ended", "close", "passed", None) in ended
+    assert any(row[4]["returned_as"] == "due" for row in events(store, "ticket.unparked"))
+
+
+def test_the_next_part_can_be_opened_after_the_one_before_landed_and_the_last_closes_the_ticket(tmp_path):
+    hub, store, prs = world(tmp_path, part=(1, 2))
+    merged(hub, prs[10])
+    run(hub, store, prs[10])
+    second = open_part(hub, store, "ticket-10-b", (2, 2))
+    assert marks.part_of(hub.pull(REPO, second).body) == (2, 2)
+    merged(hub, second)
+    done = run(hub, store, second)
+    assert (done.outcome, done.ticket) == ("closed", 10)
+    held, issue = ticket(hub)
+    assert not issue.open and issue.state_reason == "completed" and not held.park_lines
+    assert f"#{second}" in last_comment(hub, 10) and "| 1 | pass |" in last_comment(hub, 10)
+
+
+def test_a_merged_last_part_alone_closes_the_ticket_as_a_whole_pull_request_does(tmp_path):
+    hub, store, prs = world(tmp_path, part=(2, 2))
+    merged(hub, prs[10])
+    assert run(hub, store, prs[10]).outcome == "closed"
+    assert not ticket(hub)[1].open
+
+
+def test_a_merged_part_pull_request_follow_run_twice_acts_once(tmp_path):
+    hub, store, prs = world(tmp_path, part=(1, 2))
+    merged(hub, prs[10])
+    run(hub, store, prs[10])
+    comments, calls = len(hub.comments(REPO, 10)), len(hub.calls)
+    again = run(hub, store, prs[10])
+    assert again.outcome == "already_landed" and len(hub.comments(REPO, 10)) == comments and len(hub.calls) == calls
+    assert ticket(hub)[1].open
 
 
 # closed unmerged

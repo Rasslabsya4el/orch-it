@@ -92,6 +92,8 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
     """`notes`: ORCH's report lines, put in the body of a pull request it opens, under its rows.
     `part`: the (k, n) of a part's pull request (#434), written as `Part: k of n` in a new body; a
     reused pull request keeps its body."""
+    if part is not None and not 1 <= part[0] <= part[1]:
+        raise PrError("bad_part", f"{part[0]}/{part[1]} is not K/N with 1 <= K <= N")
     for name in (branch, base):
         if not branch_ok(name):
             raise PrError("branch_bad", f"{name[:60]!r} is no branch name git would read as one")
@@ -216,6 +218,6 @@ def _pr_body(number: int, title: str, rows: list[marks.ResultRow], notes: str,
              part: tuple[int, int] | None = None) -> str:
     table = "".join(f"| {row.id} | {row.result} |\n" for row in rows)
     tail = f"\n{notes.strip()}\n" if notes.strip() else ""
-    refs = f"Refs #{number}\n" + (f"Part: {part[0]} of {part[1]}\n" if part else "")
-    return (f"{refs}\n{title}\n\nThe acceptance rows, checked before this pull request "
+    header = f"Refs #{number}\n" + (f"Part: {part[0]} of {part[1]}\n" if part else "")
+    return (f"{header}\n{title}\n\nThe acceptance rows, checked before this pull request "
             f"(the ticket's acceptance comment holds their evidence):\n\n| row | result |\n|---|---|\n{table}{tail}")

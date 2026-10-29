@@ -315,6 +315,14 @@ def test_a_bad_part_is_refused_before_anything_is_written(text):
     assert caught.value.code == "bad_part"
 
 
+@pytest.mark.parametrize("part", [(3, 2), (0, 2), (1, 0), (-1, 2)])
+def test_the_library_refuses_a_part_outside_one_to_n_and_writes_nothing(world, part):
+    hub, _ = world
+    with pytest.raises(PrError) as caught:
+        opened(world, part=part)
+    assert caught.value.code == "bad_part" and not hub.pulls and not hub.writes
+
+
 def test_a_good_part_argument_is_read_as_k_and_n():
     assert parse_part("1/2") == (1, 2) and parse_part("2/2") == (2, 2)
 
