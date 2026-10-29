@@ -92,3 +92,44 @@ def test_contenders_for_one_slot_lock_leave_one_holder_and_seven_busy_per_round(
     assert holders == {1}
     assert busy == {CONTENDERS - 1}
     assert released == ROUNDS
+
+
+TRIES = 300
+
+
+def _churn(path: str, tries: int, results) -> None:
+    """Take and at once release the lock `tries` times: creates race the releases of the others."""
+
+    taken = busy = refused = 0
+    for _ in range(tries):
+        try:
+            if remote._lock(path, STALE_SECONDS):
+                taken += 1
+                remote._unlink(path)
+            else:
+                busy += 1
+        except PermissionError:
+            refused += 1
+    results.put((taken, busy, refused))
+
+
+def test_contenders_taking_and_releasing_at_once_never_see_a_permission_error(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    path = str(tmp_path / ("slot" + remote.LOCK_SUFFIX))
+    results = ctx.Queue()
+    workers = [ctx.Process(target=_churn, args=(path, TRIES, results)) for _ in range(CONTENDERS)]
+    for worker in workers:
+        worker.start()
+    totals = [0, 0, 0]
+    try:
+        for _ in workers:
+            for i, n in enumerate(results.get(timeout=WAIT_SECONDS)):
+                totals[i] += n
+    finally:
+        for worker in workers:
+            worker.join(WAIT_SECONDS)
+            if worker.is_alive():
+                worker.terminate()
+    print(f"tries={CONTENDERS * TRIES} taken={totals[0]} busy={totals[1]} permission_errors={totals[2]}")
+    assert totals[0] > 0
+    assert totals[2] == 0
