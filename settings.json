@@ -1,0 +1,1 @@
+{"research": {"provider": {"id": "acme-llm", "name": "Acme LLM"}, "models": {"small": "acme-llm/acme-1"}}}
