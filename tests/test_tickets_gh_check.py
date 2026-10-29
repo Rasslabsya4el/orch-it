@@ -93,7 +93,10 @@ def test_the_hook_and_the_github_check_give_the_same_violations(name, tmp_path):
     command = f"gh issue create --repo {REPO} --title {shlex.quote(title)} --body-file {shlex.quote(str(path))}"
     in_session = hook.judge({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path),
                              "transcript_path": str(TRANSCRIPT)}, hub=FakeHub(), repo_of=lambda folder: REPO)
-    assert on_github.codes == [code for code in in_session.codes if code in tickets.RULES] == EXPECTED[name]
+    # the shape codes of both sides; a literal code (#413 unit 6) is judged by the same check on both, and a real
+    # ticket with a bare `python` command has one on each side, so it is left out of this comparison
+    assert [code for code in on_github.codes if code in tickets.RULES] \
+        == [code for code in in_session.codes if code in tickets.RULES] == EXPECTED[name]
 
 
 @pytest.mark.parametrize("bad", [

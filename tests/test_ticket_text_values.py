@@ -85,8 +85,8 @@ def create_payload(tmp, body, title=TITLE):
             "transcript_path": str(WITH_SKILL)}
 
 
-def judge_create(tmp, body, values=VALUES):
-    return hook.judge(create_payload(tmp, body), hub=FakeHub(), repo_of=lambda folder: REPO, values=values)
+def judge_create(tmp, body, values=VALUES, title=TITLE):
+    return hook.judge(create_payload(tmp, body, title), hub=FakeHub(), repo_of=lambda folder: REPO, values=values)
 
 
 def judge_edit(tmp, body, values=VALUES):
@@ -94,7 +94,8 @@ def judge_edit(tmp, body, values=VALUES):
     hub.add(10, BODY, ["ready-for-agent"], title=TITLE)
     path = tmp / "edit.md"
     path.write_text(body, "utf-8")
-    payload = {"tool_name": "Bash", "tool_input": {"command": f"gh issue edit 10 --repo {REPO} --body-file {path}"},
+    payload = {"tool_name": "Bash",
+               "tool_input": {"command": f"gh issue edit 10 --repo {REPO} --body-file {shlex.quote(str(path))}"},
                "cwd": str(tmp), "transcript_path": str(WITH_SKILL)}
     return hook.judge(payload, hub=hub, repo_of=lambda folder: REPO, values=values)
 

@@ -99,10 +99,15 @@ def judge(payload: dict, *, hub, repo_of, values=None) -> Refusal | None:
     codes: list[str] = []
     said: list[str] = []
     repo = None
+    memo: dict = {}  # the setup's values and check names, read once, when the first body is judged
     for call in judged:
-        found, lines, repo = call.judge(payload, hub, repo_of, cwd)
+        found, lines, repo = call.judge(payload, hub, repo_of, cwd, values, memo)
         codes += [code for code in found if code not in codes]
         said += [line for line in lines if line not in said]
+    if codes and "values" in memo:  # a refusal whose literal check ran ends with what that check could not check
+        tail = memo["values"].render_not_checked()
+        if tail:
+            said.append(tail)
     return Refusal(codes, "\n".join(said), repo)
 
 
@@ -227,7 +232,8 @@ class _Call:
         action = {"create": "create", "new": "create", "edit": "edit"}.get(rest[0] if rest and rest[0] else "")
         return cls(action, before + rest[1:], cwd) if action else None
 
-    def judge(self, payload: dict, hub, repo_of, cwd: str | None) -> tuple[list[str], list[str], str | None]:
+    def judge(self, payload: dict, hub, repo_of, cwd: str | None, values, memo: dict
+              ) -> tuple[list[str], list[str], str | None]:
         from orch_it.tickets import shape
         from orch_it.tickets.model import PARKED_LABEL, READY_LABEL, parse
 
@@ -256,7 +262,10 @@ class _Call:
             if PARKED_LABEL in labels or (body is not None and parse(body).park_lines):
                 refuse("park_by_hand", "a park is written only by `python -m orch_it tickets park`")
             if not problem:
-                for violation in shape.violations(parse(body or "", title=title)):
+                found = shape.violations(parse(body or "", title=title))
+                found += shape.literal_violations(body or "", values=_values_of(values, memo),
+                                                  checks=_checks(here, memo))
+                for violation in found:
                     refuse(violation.code, violation.rule)
             return codes, lines, repo or repo_of(here)
         if PARKED_LABEL in labels | unlabels:
@@ -280,9 +289,10 @@ class _Call:
                                        "`unpark`; keep it as it is")
             if problem:
                 continue
-            judged = parse(body if body is not None else current.body,
-                           title=title if title is not None else current.title)
-            for violation in shape.violations(judged):
+            text = body if body is not None else current.body
+            found = shape.violations(parse(text, title=title if title is not None else current.title))
+            found += shape.literal_violations(text, values=_values_of(values, memo), checks=_checks(here, memo))
+            for violation in found:
                 refuse(violation.code, violation.rule)
         return list(dict.fromkeys(codes)), list(dict.fromkeys(lines)), repo
 
@@ -354,6 +364,30 @@ def _current(hub, repo: str | None, number: int):
         return hub.issue(repo, number)
     except GithubError:
         return None
+
+
+def _values_of(given, memo: dict):
+    """The setup's values for the literal check: the caller's when it gave them, else this machine's, read
+    the first time a body is judged (the hook reads nothing for a command that judges no body)."""
+
+    if "values" not in memo:
+        if given is not None:
+            memo["values"] = given
+        else:
+            from orch_it.guards.values import read_values
+
+            memo["values"] = read_values()
+    return memo["values"]
+
+
+def _checks(folder: str | None, memo: dict) -> frozenset[str]:
+    """The GitHub check names of the work tree's workflows, read the first time a body is judged."""
+
+    if "checks" not in memo:
+        from orch_it.guards.kinds import read_job_names
+
+        memo["checks"] = read_job_names(str(Path(folder or os.getcwd()) / ".github" / "workflows"))
+    return memo["checks"]
 
 
 def _write_ticket_called(transcript: object) -> bool:
