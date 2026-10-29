@@ -63,7 +63,7 @@ def tools(research: ResearchSettings) -> list[dict]:
         model["enum"] = list(research.models)
     return [
         {"name": "research_start",
-         "description": ("Start a web research by a GPT model through opencode (it can open Reddit and forums). "
+         "description": ("Start a web research by a research model (it can open Reddit and forums). "
                          "Returns a job at once; the run takes minutes: then call research_job."),
          "inputSchema": {"type": "object", "required": ["brief"], "properties": {
              "brief": {"type": "string", "description": "the whole brief; a `docs/research/<name>.md` path in "

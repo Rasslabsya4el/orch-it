@@ -2,13 +2,16 @@
 variable, the bounds and the state folder are read from the `research` setting; no provider
 model id, key or path of a machine is in the code."""
 
+import json
 import re
 from pathlib import Path
 
 import pytest
 
+from orch_it.research.names import find_names, refused_names
 from orch_it.research.settings import ResearchRefused, ResearchSettings
 from orch_it.settings import SettingsError
+from test_research_names import KNOWN_FAMILIES
 
 SRC = Path(__file__).parents[1] / "src"
 PROVIDER = {"id": "test-provider", "npm": "@ai-sdk/openai-compatible", "options": {"baseURL": "http://127.0.0.1:9/v1"}}
@@ -82,6 +85,22 @@ def test_the_key_is_read_from_the_variable_the_setting_names():
         assert refused.value.code == "key_missing" and "ORCH_IT_TEST_KEY" in str(refused.value)
 
 
+def test_the_key_variable_defaults_to_a_neutral_name_and_the_mcp_front_passes_that_name():
+    unset = ResearchSettings.from_settings({"research": {k: v for k, v in RESEARCH.items() if k != "key_env"}})
+    assert unset.key_env == "RESEARCH_API_KEY"
+    env = json.loads((Path(__file__).parents[1] / ".mcp.json").read_text("utf-8"))["mcpServers"]["orch-it-research"]["env"]
+    assert [name for name in env if not name.startswith("ORCH_IT_")] == ["RESEARCH_API_KEY"]
+
+
+def test_a_key_variable_of_another_name_in_the_settings_is_the_one_read():
+    chosen = settings(key_env="ACME_LLM_KEY")
+    assert chosen.key({"ACME_LLM_KEY": "k-2"}) == "k-2"
+    with pytest.raises(ResearchRefused) as refused:
+        chosen.key({"RESEARCH_API_KEY": "k-2"})
+    assert refused.value.code == "key_missing" and "ACME_LLM_KEY" in str(refused.value)
+    assert chosen.opencode_config()["provider"]["test-provider"]["options"]["apiKey"] == "{env:ACME_LLM_KEY}"
+
+
 def test_the_opencode_config_names_the_key_by_its_variable_and_lists_every_model():
     config = settings().opencode_config()
     provider = config["provider"]["test-provider"]
@@ -110,23 +129,35 @@ def test_the_state_folder_is_the_setting_or_beside_the_store(tmp_path):
 # #395 read long paths through ctypes on Windows: neither is the bridge.)
 BRIDGE = [SRC / "orch_it" / "research", SRC / "orch_it" / "proctree.py"]
 SOURCE_RULES = {
-    "a provider model id": re.compile(r"gpt-\d|-luna\b|-terra\b|deepseek-|gemini-\d|claude-(opus|sonnet|haiku|fable)-\d"),
+    # the known families (gpt, deepseek, gemini, ...) are the names check's job: see the test below
+    "a model id of the Luna, Terra or Claude families": re.compile(r"-luna\b|-terra\b|claude-(opus|sonnet|haiku|fable)-\d"),
     "the Windows registry": re.compile(r"\bwinreg\b"),
     "ctypes.windll": re.compile(r"\bwindll\b"),
     "a drive-letter path": re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(\\\\|\\|/)(?!/)"),
 }
 
 
+def _bridge_files() -> list[Path]:
+    files = [path for place in BRIDGE for path in ([place] if place.is_file() else place.rglob("*"))
+             if path.is_file() and path.suffix in (".py", ".json", ".sql", ".md")]
+    assert any(path.name == "settings.py" for path in files)
+    return files
+
+
 @pytest.mark.parametrize("rule", SOURCE_RULES, ids=list(SOURCE_RULES))
 def test_the_source_holds_no(rule):
     """Rows 5 and 6: the code is the same on any machine with any provider."""
 
-    files = [path for place in BRIDGE for path in ([place] if place.is_file() else place.rglob("*"))
-             if path.is_file() and path.suffix in (".py", ".json", ".sql", ".md")]
-    assert any(path.name == "settings.py" for path in files)
-    hits = [f"{path}: {line}" for path in files
+    hits = [f"{path}: {line}" for path in _bridge_files()
             for line in path.read_text("utf-8", "replace").splitlines() if SOURCE_RULES[rule].search(line)]
     assert hits == []
+
+
+def test_the_source_names_no_known_family():
+    """Rows 5 and 6, by the names check (#412 unit 5): no family of the fixed list is named in the bridge's code."""
+
+    files = {path.relative_to(SRC.parent).as_posix(): path.read_text("utf-8", "replace") for path in _bridge_files()}
+    assert find_names(files, refused_names(None, KNOWN_FAMILIES)) == []
 
 
 def test_the_task_tool_is_denied_last_so_no_earlier_rule_lets_it_through():
