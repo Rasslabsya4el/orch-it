@@ -355,6 +355,10 @@ def test_of_machine_measures_the_home_the_host_and_the_words_file(tmp_path, monk
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setattr(socket, "gethostname", lambda: HOST_LONG)
+    # a GitHub Actions job adds the runner's own home, temp parent and computer name: this test measures a machine
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(home))
     words = tmp_path / "words.txt"
     words.write_text("# my words\n\n  Blue" + "Heron  \nsecond" + " word\n", "utf-8", newline="\n")
     patterns = Patterns.of_machine(words_file=words)

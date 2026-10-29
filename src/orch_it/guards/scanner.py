@@ -339,23 +339,23 @@ def sha_of(work_tree: Path, rev: str = "HEAD") -> str:
 
 def _tree_files(work_tree: Path, rev: str | None):
     """(a call that loads the exceptions list, the job names) of the work tree, or of the tree of commit `rev`
-    (its `guards-exceptions.toml` and the `*.yml` / `*.yaml` of `.github/workflows`, read by `git show`)."""
+    (its `guards-exceptions.toml` and the `*.yml` / `*.yaml` of `.github/workflows`, read as raw blobs by `git cat-file blob`, no filter applied)."""
 
     if rev is None:
         return (lambda: exceptions_list.load_exceptions(work_tree / exceptions_list.FILE_NAME),
                 pattern_kinds.read_job_names(str(work_tree / ".github" / "workflows")))
     folder = Path(tempfile.mkdtemp(prefix="orch-it-tree-"))
     try:
-        (folder / "workflows").mkdir()
+        (folder / "workflows").mkdir(exist_ok=True)  # the folder is new from mkdtemp: nothing to refuse
         try:
             (folder / exceptions_list.FILE_NAME).write_bytes(
-                _git_output(work_tree, "show", f"{rev}:{exceptions_list.FILE_NAME}"))
+                _git_output(work_tree, "cat-file", "blob", f"{rev}:{exceptions_list.FILE_NAME}"))
         except ScanError:  # the commit has no such file
             pass
         listing = _git_output(work_tree, "ls-tree", "-r", "--name-only", "-z", rev, ".github/workflows")
         for name in filter(None, listing.decode("utf-8", "replace").split("\x00")):
             if name.endswith((".yml", ".yaml")):
-                (folder / "workflows" / Path(name).name).write_bytes(_git_output(work_tree, "show", f"{rev}:{name}"))
+                (folder / "workflows" / Path(name).name).write_bytes(_git_output(work_tree, "cat-file", "blob", f"{rev}:{name}"))
         names = pattern_kinds.read_job_names(str(folder / "workflows"))
         try:
             loaded, error = exceptions_list.load_exceptions(folder / exceptions_list.FILE_NAME), None
