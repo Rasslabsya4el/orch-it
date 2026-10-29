@@ -16,7 +16,7 @@ import sys
 import textwrap
 import tomllib
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -343,6 +343,11 @@ SCAN_ENV = {
     "AUTHOR": "${{ github.event.pull_request.user.login }}",
     "OWNER": "${{ github.repository_owner }}",
 }
+# what the runner gives the job's processes (GitHub Actions, Linux): invented names, built at run time
+RUNNER_HOME = str(PurePosixPath("/home") / "runner-zz")
+RUNNER_ENV = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "acme-x/widgets-y",
+              "GITHUB_REPOSITORY_OWNER": "acme-x", "GITHUB_ACTOR": "acme-x",
+              "HOME": RUNNER_HOME, "RUNNER_TEMP": str(PurePosixPath(RUNNER_HOME) / "work" / "_temp")}
 
 
 def step_env(step: list[str]) -> dict[str, str]:
@@ -410,8 +415,9 @@ def pull_request_with(tmp_path, head_files):
 
 def run_scan_step(tmp_path, repo, base, head):
     """The step's own script under bash, in the repository, with the step's environment filled
-    in for a pull request of fake logins; `python` is the interpreter running the tests, on this
-    checkout's source, and `gh` can reach nothing."""
+    in for a pull request of fake logins, and the runner's own environment (RUNNER_ENV) as GitHub
+    gives it, so the values of the run are the runner's and none is this machine's; `python` is the
+    interpreter running the tests, on this checkout's source, and `gh` can reach nothing."""
 
     step = step_named(steps_of(job_lines(WORKFLOW.read_text("utf-8"))["linux"]), PRIVATE_DATA_STEP)
     filled = {"BASE": base, "HEAD": head, "AUTHOR": "fake-author", "OWNER": "fake-owner"}
@@ -419,8 +425,8 @@ def run_scan_step(tmp_path, repo, base, head):
     script = 'python() { "$PYTHON_FOR_TEST" "$@"; }\n' + run_script(step)
     quiet = {key: value for key, value in os.environ.items()
              if key not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")}
-    env = quiet | filled | {"PYTHON_FOR_TEST": sys.executable, "PYTHONPATH": str(ROOT / "src"),
-                            "GH_CONFIG_DIR": str(tmp_path / "gh"), "PYTHONIOENCODING": "utf-8"}
+    env = quiet | RUNNER_ENV | filled | {"PYTHON_FOR_TEST": sys.executable, "PYTHONPATH": str(ROOT / "src"),
+                                         "GH_CONFIG_DIR": str(tmp_path / "gh"), "PYTHONIOENCODING": "utf-8"}
     return subprocess.run([a_bash(), "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
                           capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=repo.path,
                           env=env, creationflags=NO_WINDOW)
