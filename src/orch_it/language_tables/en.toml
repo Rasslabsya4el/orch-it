@@ -2,7 +2,8 @@
 
 # The shape check of a ticket (src/orch_it/tickets/shape.py): the rule for the human block's language.
 human_field_language_rule = "the text of each human field is English"
-# A character class matching the letters of this language's script; the check counts them.
+# A character class matching the letters of this language's script; the check counts them. It tests the script, not the
+# language: text in another language of the same script passes, and only text mostly in another script is refused.
 human_field_letters = "[A-Za-z]"
 
 # notices to the owner (unit 10b)
@@ -40,3 +41,5 @@ skills_result = "the pull request is green on both systems, 100 % of the copies 
 skills_undo = "two-way door (one revert of the pull request brings back the previous copies); touches all roles that call these skills."
 skills_plan_brain = "ORCH opens no pull request for this ticket: the brain decides each class from the table below, and `python -m orch_it skills update` prints `waits_for_brain` and moves nothing."
 skills_result_brain = "the brain wrote its decision for each class in this ticket, and no copy is moved without it."
+# A regex (word boundaries included) of the Undo field's fixed words; the check leaves them out, they are the form, not text.
+undo_words = '\b(?:two-way door|one-way door|one revert|touches)\b'

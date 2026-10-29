@@ -31,8 +31,8 @@
   "bad_human_field_order": [
     "human_field_order"
   ],
-  "bad_human_field_not_russian": [
-    "human_field_not_russian"
+  "bad_human_field_wrong_language": [
+    "human_field_wrong_language"
   ],
   "bad_human_field_path": [
     "human_field_path"

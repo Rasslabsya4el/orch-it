@@ -54,7 +54,7 @@ LINES = {
     "repo": "clone acct-x/proj-y now",
     "host": "ssh testbox-17 -p 22",
     "home": f"cd {HOME_WIN}\\src",
-    "user": "logged in as tester9",
+    "user": "USER=tester9",
     "projects_folder": "cd /srv/ws/other",
     "git_name": "Author: Tess Tester",
     "git_email": "mail to T9@Example.Invalid please",
@@ -110,6 +110,39 @@ def test_a_posix_home_is_found_and_a_longer_name_is_not():
     assert "home" not in kinds_in(HOME_WIN + "99", machine())
 
 
+def identity_lines(name):
+    return [
+        str(PureWindowsPath("C:/") / "Users" / name / "x"),
+        str(PurePosixPath("/") / "home" / name / "x"),
+        str(PurePosixPath("/") / "srv" / name),  # at the end of a path
+        f"/{name}/",
+        f"ssh {name}@box",
+        f"USER={name}",
+        f"set USERNAME={name}",
+        f"RUNNER_USER: {name}",
+        f"docker run --user {name} img",
+        f"user={name}",
+        f"user.name = {name}",
+        f'{{"USER": "{name}"}}',
+    ]
+
+
+@pytest.mark.parametrize("name", ["tester9", "user"])
+def test_a_user_name_is_found_in_its_identity_contexts(name):
+    values = machine(env={"USERNAME": name})
+    for line in identity_lines(name):
+        assert "user" in kinds_in(line, values), line
+
+
+@pytest.mark.parametrize("name", ["tester9", "user"])
+def test_a_user_name_as_a_bare_word_is_not_a_hit(name):
+    values = machine(env={"USERNAME": name})
+    for line in (f"the {name} runs it", f"each {name}, then the {name}s", f"{name} {name}",
+                 f"{name}.json", f"Users of {name}-x", f"@{name} wrote this"):
+        assert "user" not in kinds_in(line, values), line
+    assert "user" not in kinds_in(f"x{name}@box and {name}9@box", values)
+
+
 def test_a_name_inside_a_longer_word_is_not_a_hit():
     values = machine()
     assert "host" not in kinds_in("xtestbox-179", values)
@@ -163,7 +196,7 @@ def test_github_actions_gives_the_runner_values_no_list_wrote_down():
     assert kinds_in("by actor-q", values) == {"account"}
     assert kinds_in("repo acct-x/proj-y", values) == {"repo", "account"}
     assert kinds_in("on ci-host-5", values) == {"host"}
-    assert kinds_in("as runneradm", values) == {"user"}
+    assert kinds_in("USER=runneradm", values) == {"user"}
 
 
 def test_the_env_of_a_plain_machine_is_not_read_as_a_runner():
@@ -179,6 +212,6 @@ def test_no_value_of_the_real_machine_stands_in_this_file():
         return default_run(cmd)
 
     real = read_values(run=run)
-    unscanned = {"user"}  # a short common word as a user name would hit this file's prose
+    unscanned = {"user"}  # the cases above write the name `user` in its identity contexts
     scanned = Values(**{kind: (getattr(real, kind) if kind not in unscanned else None) for kind in KINDS})
     assert find_in(Path(__file__).read_text("utf-8"), scanned) == []

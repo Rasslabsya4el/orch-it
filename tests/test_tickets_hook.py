@@ -14,11 +14,20 @@ from ticket_fixtures import EXPECTED, fixture
 from orch_it import tickets
 from orch_it.tickets import hook
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+
 TRANSCRIPTS = Path(__file__).parent / "fixtures" / "transcripts"
 WITH_SKILL = TRANSCRIPTS / "write_ticket_called.jsonl"
 WITHOUT_SKILL = TRANSCRIPTS / "write_ticket_not_called.jsonl"
 BODY = fixture("good_basic")[1]
 PARKED = "Parked: pr_ended #12 until 2026-11-30"
+
+
+@pytest.fixture(autouse=True)
+def no_values_of_this_machine(monkeypatch):
+    """The bodies of these tests are judged as text: no value of this machine is read (#413 unit 6)."""
+    from orch_it.guards.values import Values
+    monkeypatch.setattr("orch_it.guards.values.read_values", lambda **kwargs: Values())
 
 
 @pytest.fixture

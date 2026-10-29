@@ -174,8 +174,25 @@ def _pattern(kind: str, value: str) -> re.Pattern | None:
         return None
     if kind in _PATH_KINDS:
         return _path_pattern(value)
+    if kind == "user":
+        return _user_pattern(value)
     words = r"\s+".join(re.escape(word) for word in value.split())
     return re.compile(rf"(?<![A-Za-z0-9]){words}(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def _user_pattern(value: str) -> re.Pattern:
+    """A user name is often an ordinary word (`user`, `runner`), so it matches only where it names
+    an identity: as a path component (the name between two slashes, or last in a path), before
+    `@host`, or as the value of `USER=`, `RUNNER_USER: `, `user=`, `user.name=` or `--user `. The
+    matched value is group `v`."""
+
+    name = re.escape(value)
+    quote = "[\"']?"
+    after = (r"(?<=[\\/])"
+             rf"|(?<![A-Za-z0-9])(?:[A-Za-z_]*user(?:name)?|user\.name|logname){quote}\s*[=:]\s*{quote}"
+             rf"|--user(?:\s+|=){quote}")
+    before_host = rf"(?<![A-Za-z0-9_.-])(?={name}@[A-Za-z0-9])"
+    return re.compile(rf"(?:{after}|{before_host})(?P<v>{name})(?![A-Za-z0-9_-])", re.IGNORECASE)
 
 
 def _path_pattern(value: str) -> re.Pattern | None:
@@ -202,6 +219,6 @@ def find_in(text: str, values: Values) -> list[Finding]:
     for number, line in enumerate(text.split("\n"), 1):
         for kind, pattern in patterns:
             for match in pattern.finditer(line):
-                matched = match.group().strip()
+                matched = (match.group("v") if "v" in pattern.groupindex else match.group()).strip()
                 findings.append(Finding(kind, f"{matched[0]}..{matched[-1]}", number))
     return findings
