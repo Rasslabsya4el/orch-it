@@ -100,6 +100,14 @@ def test_the_required_jobs_keep_their_names():
     assert {"linux", "windows"} <= set(job_lines(WORKFLOW.read_text("utf-8")))
 
 
+def test_the_linux_job_lints_every_workflow_file_before_pytest_and_never_skips_it():
+    steps = steps_of(job_lines(WORKFLOW.read_text("utf-8"))["linux"])
+    lint = step_named(steps, "lint the workflows")
+    assert re.search(r"^\s+run: actionlint$", "\n".join(lint), re.M)  # no file arguments: actionlint finds them all
+    assert not any(line.strip().startswith("if:") for line in lint)
+    assert steps.index(lint) < steps.index(step_named(steps, "pytest"))
+
+
 def test_each_job_uploads_its_junit_report_even_when_red():
     for name, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
         steps = steps_of(lines)
