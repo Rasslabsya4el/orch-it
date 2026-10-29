@@ -15,6 +15,9 @@ from orch_it.guards.values import read_values
 from orch_it.tickets import gh_check, hook
 from orch_it.tickets.hub import LAYER_MARK
 
+# the bodies of these tests are written in Russian
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")
+
 ACCOUNT = "acme-dev"
 REPO_NAME = "acme-dev/orch-tools"
 HOST = "build-box-7"
