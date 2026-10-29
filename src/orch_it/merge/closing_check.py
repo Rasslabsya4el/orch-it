@@ -1,5 +1,6 @@
-"""The closing check (https://github.com/Rasslabsya4el/orchestration-layer/issues/422): a closing word before a reference (`fixes <URL>`, `Resolves #N`, the word and the
-reference across a line break too) in the text a pull request lands with is refused before GitHub reads it.
+"""The closing check (the home repo's ticket): a closing word before a reference (`fixes <URL>`, `Resolves #N`,
+the word and the reference across a line break too) in the text a pull request lands with is refused before
+GitHub reads it.
 GitHub closes the ticket when such a text reaches the default branch: by a commit's message, or by the title
 and body that become the merge commit's text.
 
@@ -28,8 +29,6 @@ class ClosingError(RuntimeError):
     """`code`: `git_failed` (the commits of the pull request could not be read)."""
 
     def __init__(self, code: str, detail: str = ""):
-        if code != "git_failed":
-            raise ValueError(f"not a closing check error code: {code}")
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
 
