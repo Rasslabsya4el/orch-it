@@ -61,15 +61,15 @@ def threshold(raw: dict | None = None) -> float:
     return float(value)
 
 
-def poll_interval(base_seconds: float, remaining: int | None, limit: int | None, threshold: float) -> float:
-    """The wait before a poller's next read. `base_seconds` while `remaining` is at least `threshold` times
+def poll_interval(base_seconds: float, remaining: int | None, limit: int | None, threshold_share: float) -> float:
+    """The wait before a poller's next read. `base_seconds` while `remaining` is at least `threshold_share` times
     `limit` (or nothing is known). Under it the interval doubles at each halving of the threshold level the remaining
-    has fallen to: `1 + floor(log2(threshold * limit / remaining))` doublings, never past `MAX_POLL_SECONDS`
+    has fallen to: `1 + floor(log2(threshold_share * limit / remaining))` doublings, never past `MAX_POLL_SECONDS`
     (and never below `base_seconds`). An exhausted budget waits the cap."""
 
     if remaining is None or limit is None or limit <= 0:
         return float(base_seconds)
-    level = threshold * limit
+    level = threshold_share * limit
     if remaining >= level:
         return float(base_seconds)
     if remaining <= 0:
@@ -129,7 +129,7 @@ def hourly_totals(store: Store, account: str, *, budget: str = "account") -> dic
 
     rows = store.query(
         f"SELECT substr(at, 1, 13) AS hour, COUNT(*) FROM events WHERE kind = '{KIND}' AND budget = ? AND account = ?"
-        " GROUP BY hour ORDER BY hour", (budget, account.lower())).rows
+        " GROUP BY hour ORDER BY hour", (budget, _account_key(account))).rows
     return {hour: count for hour, count in rows}
 
 
@@ -151,12 +151,18 @@ def would_cross(repo: str, calls: int, *, store: Store | None = None, now: datet
     return remaining - calls < threshold(raw) * limit
 
 
+def _account_key(name: str) -> str:
+    """The account a repo or an account name belongs to, lowercase: the part before `/`, as the store keeps it."""
+
+    return name.split("/", 1)[0].lower()
+
+
 def _write(store: Store, repo: str, budget: str, remaining: int | None, limit: int | None,
            at: datetime | None) -> None:
     event = {
         "kind": KIND, "repo": repo, "ticket": None, "role": ROLE, "session": None, "parent_session": None,
         "turn": None, "step": None, "run": None, "note": None,
-        "detail": {"budget": budget, "account": repo.split("/", 1)[0].lower(),
+        "detail": {"budget": budget, "account": _account_key(repo),
                    "budget_remaining": remaining, "budget_limit": limit},
     }
     if at is not None:
