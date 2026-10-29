@@ -12,7 +12,7 @@ machine (`bring_events`), it also brings into the store the events the workflows
 own runs' stores (their `orch-it-events-*` artifacts): each file of a store's day folder copied
 once, under its own name.
 
-Each repair is one code of `repair`: `closed` (a ticket closed), `unparked` (a ticket returned to
+Each repair is one code of `repair`: `closed` (a ticket or a skills issue closed), `unparked` (a ticket returned to
 ready or sent to the brain), `rerun` (a run run again or cancelled to be: a pull request's, or
 main's), `red_ticket_opened`. A pull request it cannot follow, or a main check that breaks, is an
 `error.raised` and the sweep goes on; the step then ends `failed`. An artifact already brought in
@@ -43,7 +43,7 @@ from orch_it.tickets.model import parse
 from orch_it.tickets.park import ROLE
 # the store's own layout: `<YYYY-MM-DD>/<writer id>.jsonl` (orch_it.events.store)
 _STORE_FILE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}/[A-Za-z0-9._-]{1,120}\.jsonl")
-_REPAIR = {"closed": "closed", "rerun": "rerun", "stuck": "rerun"}
+_REPAIR = {"closed": "closed", "closed_skills": "closed", "rerun": "rerun", "stuck": "rerun"}
 # a follow that changed nothing of its ticket; every other outcome returned it or sent it to the brain
 _NO_REPAIR = ("idle", "waiting", "green", "behind", "raced", "merged_alone", "merged_other", "already_closed",
               "withdrawn")

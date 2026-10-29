@@ -106,3 +106,67 @@ class RacingGh(FakeGh):
 def test_a_label_another_run_made_at_the_same_moment_is_no_failure():
     gh = RacingGh({("label", "list"): "[]", ("issue", "create"): "https://github.com/o/r/issues/3\n"})
     assert GithubForge("o/r", gh=gh).create_issue("t", "b", "needs-triage") == "https://github.com/o/r/issues/3"
+
+
+HEAD = "c" * 40
+PULL = "https://github.com/o/r/pull/5"
+
+
+class PullGh(FakeGh):
+    """Pull request 5 of o/r at `head`: the comments posted to it are read back, `pr merge` is answered."""
+
+    def __init__(self, head, *, fail=()):
+        super().__init__(fail=fail)
+        self.head, self.posted = head, []
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        if tuple(args[:2]) in self.fail:
+            raise GithubError("gh_failed", "refused")
+        path = next((a for a in args if a.startswith("repos/")), "")
+        if args[:3] == ["api", "-X", "POST"]:
+            self.posted.append(json.loads(Path(args[args.index("--input") + 1]).read_text("utf-8"))["body"])
+            return ""
+        if args[:2] == ["api", "--paginate"]:
+            if "/issues/" in path and path.endswith("/comments?per_page=100"):
+                return json.dumps([{"user": {"login": "o", "type": "User"}, "body": body,
+                                    "created_at": "2026-11-02T09:00:00Z"} for body in self.posted])
+            return "[]"
+        if path == "repos/o/r/pulls/5":
+            return json.dumps({"number": 5, "title": "t", "body": "Refs #10", "state": "open", "draft": False,
+                               "head": {"sha": self.head, "ref": "ticket-10", "repo": {"full_name": "o/r"}},
+                               "base": {"ref": "main"}, "created_at": "2026-11-02T08:00:00Z",
+                               "merged_at": None, "auto_merge": None, "mergeable": True})
+        if "/compare/" in path:
+            return json.dumps({"behind_by": 0})
+        return ""
+
+
+def merges(gh):
+    return [c for c in gh.calls if c[:2] == ["pr", "merge"]]
+
+
+def test_mark_ready_writes_one_ready_mark_at_the_head_and_turns_auto_merge_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))  # no settings: the default `merge`
+    gh = PullGh(HEAD)
+    GithubForge("o/r", gh=gh).mark_ready(PULL)
+    [body] = gh.posted
+    assert f"<!-- orch-it ready head={HEAD} -->" in body and "ticket=" not in body
+    assert merges(gh) == [["pr", "merge", "5", "--repo", "o/r", "--auto", "--merge"]]
+
+
+def test_mark_ready_twice_writes_one_mark_and_still_sets_auto_merge(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
+    gh = PullGh(HEAD)
+    forge = GithubForge("o/r", gh=gh)
+    forge.mark_ready(PULL)
+    forge.mark_ready("5")
+    assert len(gh.posted) == 1
+    assert len(merges(gh)) == 2
+
+
+def test_a_refused_mark_ready_is_forge_failed(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
+    with pytest.raises(SkillsError) as e:
+        GithubForge("o/r", gh=PullGh(HEAD, fail={("pr", "merge")})).mark_ready(PULL)
+    assert e.value.code == "forge_failed"
