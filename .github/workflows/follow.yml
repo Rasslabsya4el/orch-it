@@ -39,8 +39,6 @@ jobs:
       contains(github.event.issue.labels.*.name, 'parked')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      ORCH_IT_STORE: ${{ runner.temp }}/orch-it-events
     steps:
       # the layer's code of the default branch, never the pull request's own
       - uses: actions/checkout@v4
@@ -53,6 +51,7 @@ jobs:
       - name: follow
         env:
           GH_TOKEN: ${{ github.token }}
+          ORCH_IT_STORE: ${{ runner.temp }}/orch-it-events
         run: python -m orch_it follow --event "$GITHUB_EVENT_PATH" --repo "$GITHUB_REPOSITORY" --role github
       - name: upload the events
         if: always()

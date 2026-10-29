@@ -26,8 +26,6 @@ jobs:
       github.event.workflow_run.event != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      ORCH_IT_STORE: ${{ runner.temp }}/orch-it-events
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,6 +38,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ github.event.repository.default_branch }}
+          ORCH_IT_STORE: ${{ runner.temp }}/orch-it-events
         run: python -m orch_it main check --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" --role github
       - name: upload the events
         if: always()
