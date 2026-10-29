@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from fake_github import FAILED, PASSED, REPO
-from follow_world import world
+from follow_world import NOW, world
 
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
@@ -152,3 +152,31 @@ def test_a_workflow_watch_that_breaks_never_stops_the_sweep(tmp_path, monkeypatc
     assert len(done.failed) == 1 and done.failed[0].startswith("workflows:")
     assert store.query("SELECT outcome FROM events WHERE kind = 'step.ended' AND step = 'reconcile'").rows == [
         ("failed",)]
+
+
+def test_a_sweep_on_the_workflow_token_runs_though_the_actions_setting_is_refused_to_it(tmp_path):
+    """The real hub over a scripted `gh`: the workflow's own token has no administration scope, so
+    `repos/<r>/actions/permissions` answers 403 there; the sweep still ends, as with a login that reads it."""
+
+    from orch_it.merge.gh import GhPullHub
+    from orch_it.testruns.github import GithubError
+
+    _, store, _ = world(tmp_path)
+    calls = []
+
+    def gh(args):
+        calls.append(args[1])
+        path = args[args.index("api") + 1 if "--paginate" not in args else args.index("--paginate") + 1]
+        if path.endswith("/actions/permissions"):
+            raise GithubError("gh_failed", f"api {path}: gh: Resource not accessible by integration (HTTP 403)")
+        if "search/issues" in args:
+            return json.dumps({"items": []})
+        if path.startswith(f"repos/{REPO}/actions/"):
+            return json.dumps({"workflows": [], "workflow_runs": []})
+        if path == f"repos/{REPO}":
+            return json.dumps({"default_branch": "main"})
+        return "[]"  # the issue and pull request lists
+
+    done = reconcile(GhPullHub(gh), store, REPO, "main", settings=MergeSettings(), now=NOW)
+    assert done.actions is True and done.failed == []
+    assert f"repos/{REPO}/actions/permissions" in calls

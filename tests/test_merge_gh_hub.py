@@ -741,6 +741,10 @@ def test_actions_enabled_reads_the_permission_and_a_repo_without_it_is_off():
     assert GhPullHub(Gh(([permissions], {"enabled": True, "allowed_actions": "all"}))).actions_enabled(REPO) is True
     assert GhPullHub(Gh(([permissions], {"enabled": False}))).actions_enabled(REPO) is False
     assert GhPullHub(Gh(([permissions], NOT_FOUND))).actions_enabled(REPO) is False
+    # the workflow's own token has no administration scope: GitHub answers 403, and a sweep that runs there is
+    # running on Actions, so a refusal reads as "on"; the login of a person is unchanged (answers above)
+    refused = failed(403, "Resource not accessible by integration")
+    assert GhPullHub(Gh(([permissions], refused))).actions_enabled(REPO) is True
     for answer in ("nope", "{}", '{"enabled": "yes"}'):
         with pytest.raises(GithubError) as error:
             GhPullHub(Gh(([permissions], answer))).actions_enabled(REPO)

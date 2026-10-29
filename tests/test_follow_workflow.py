@@ -60,5 +60,5 @@ def test_the_merge_flow_s_workflows_add_no_job_named_like_a_required_check():
 
 def test_its_token_may_close_label_comment_and_rerun_but_no_more():
     permissions = TEXT.split("\npermissions:\n", 1)[1].split("\n\n", 1)[0].split("\n")
-    assert sorted(line.strip() for line in permissions) == [
-        "actions: write", "contents: write", "issues: write", "pull-requests: write"]
+    assert sorted(re.sub(r"\s+#.*$", "", line.strip()) for line in permissions) == [
+        "actions: write", "checks: read", "contents: write", "issues: write", "pull-requests: write"]

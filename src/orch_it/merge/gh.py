@@ -428,7 +428,15 @@ class GhPullHub(GhHub):
         return found
 
     def actions_enabled(self, repo: str) -> bool:
-        found = self._object(["api", f"repos/{repo}/actions/permissions"], missing_ok=True)
+        """Whether Actions is on for the repo. The workflow's own token holds no administration scope, so GitHub
+        refuses it this read (403): a sweep that runs there is running on Actions, so a refusal reads as on."""
+
+        try:
+            found = self._object(["api", f"repos/{repo}/actions/permissions"], missing_ok=True)
+        except GithubError as e:
+            if "HTTP 403" in str(e):
+                return True
+            raise
         if found is None:
             return False
         if not isinstance(found.get("enabled"), bool):

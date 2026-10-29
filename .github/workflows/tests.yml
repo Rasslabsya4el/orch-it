@@ -22,8 +22,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: read
-  actions: read
+  contents: read  # check out the code
+  actions: read  # the nightly live test reads this repo's tests runs and their jobs
 
 env:
   MARKS_LEFT_OUT_OF_CHANGE_RUNS: "not slow and not live"
