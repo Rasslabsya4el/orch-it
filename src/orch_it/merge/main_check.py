@@ -117,12 +117,25 @@ def _close(hub: PullHub, store: Store, repo: str, number: int, run: MainRun, rol
 
 def _to_the_brain(hub: PullHub, store: Store, repo: str, run: MainRun, role: str) -> list[int]:
     mark = red_main.NO_RESULT_MARK.format(run_id=run.run_id)
+    if open_triage_with(hub, repo, mark) is not None:
+        return []  # one ticket per run
+    title, body = red_main.build_no_result(sha=run.sha, run_id=run.run_id, jobs=run.jobs)
+    return [open_triage(hub, store, repo, role, title, body, red_main.NO_RESULT_LABELS)]
+
+
+def open_triage_with(hub: PullHub, repo: str, mark: str) -> int | None:
+    """The lowest-numbered open `needs-triage` ticket whose body holds `mark`; None when there is none."""
+
     for number in hub.issues_with_label(repo, TRIAGE_LABEL):
         issue = hub.issue(repo, number)
         if issue is not None and mark in issue.body:
-            return []  # one ticket per run
-    title, body = red_main.build_no_result(sha=run.sha, run_id=run.run_id, jobs=run.jobs)
-    number = hub.create_issue(repo, title, body, list(red_main.NO_RESULT_LABELS))
-    record.write(store, repo, number, role, None, None, [_opened(title, body, red_main.NO_RESULT_LABELS,
-                                                                 priority=False)])
-    return [number]
+            return number
+    return None
+
+
+def open_triage(hub: PullHub, store: Store, repo: str, role: str, title: str, body: str, labels) -> int:
+    """Open a ticket to the brain with `labels` and write its `ticket.opened`; returns its number."""
+
+    number = hub.create_issue(repo, title, body, list(labels))
+    record.write(store, repo, number, role, None, None, [_opened(title, body, labels, priority=False)])
+    return number
