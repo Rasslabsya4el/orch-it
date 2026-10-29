@@ -437,6 +437,23 @@ def commits_of_range(work_tree: Path, rev_range: str) -> list[str]:
     return out.decode("ascii", "replace").split()
 
 
+# a message is read between its NULs and the end marker, so any text of a body is read whole
+_MESSAGES = ("log", "--no-walk=unsorted", "--format=%x00COMMIT%x00%H%x00%B%x00ENDMSG")
+_MESSAGE = re.compile(rb"\x00COMMIT\x00([0-9a-f]{40,64})\x00(.*?)\x00ENDMSG", re.DOTALL)
+
+
+def messages_of_commits(work_tree: Path, commits: list[str]):
+    """Yields (full sha, message) of each commit in `commits` (full shas, as `commits_of_revs` gives
+    them), in the order given, a batch of `_BATCH` commits per `git log`. A batch read before a git
+    failure has been yielded already; the failure is raised as `ScanError` at the batch it reached.
+    Nothing is asked of git for no commit (git would then read HEAD)."""
+
+    for start in range(0, len(commits), _BATCH):
+        out = _git_output(work_tree, *_MESSAGES, "--end-of-options", *commits[start:start + _BATCH])
+        for m in _MESSAGE.finditer(out):
+            yield m.group(1).decode("ascii", "replace"), m.group(2).decode("utf-8", "replace")
+
+
 def emails_of_commits(work_tree: Path, commits: Iterable[str]) -> list[tuple[str, str, str]]:
     """(sha, author e-mail, committer e-mail) of each commit, in the order given, a hundred commits
     per git call. Nothing is asked of git for no commit (git would then read HEAD)."""
