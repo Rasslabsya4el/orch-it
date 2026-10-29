@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 from fake_hub import REPO, FakeHub
+from language_tree import git_tree, write_language
 from test_hook_decide import FakeWorld
 from ticket_fixtures import fixture
 
@@ -109,11 +110,12 @@ def set_language(tmp_path, monkeypatch, setting: str, extra: dict) -> None:
         lines = [f"{key} = {json.dumps(DE.get(key, value), ensure_ascii=False)}\n" for key, value in en.items()]
         (folder / "de.toml").write_text("".join(lines), "utf-8")
         values["language_tables_dir"] = str(folder)
-    if setting != "unset":
-        values["human_language"] = setting
     path = tmp_path / "settings.json"
     path.write_text(json.dumps(values), "utf-8")
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(path))
+    tree = git_tree(tmp_path / "tree")  # the language is the tree file's, read from the cwd (#453 unit 1)
+    monkeypatch.chdir(tree)
+    write_language(tree, None if setting == "unset" else setting)
 
 
 def in_each_language(tmp_path, monkeypatch, make, extra: dict | None = None) -> dict[str, str]:

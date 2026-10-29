@@ -4,12 +4,12 @@ written by code on the machine of the writer, in the writer's `human_language`, 
 workflow `ticket-shape` judges them with what a runner has: no settings file (the default language) and the
 workflows of the checkout. They must keep `ready-for-agent`; a ticket a person wrote must not."""
 
-import json
 import os
 from pathlib import Path
 
 import pytest
 from fake_hub import REPO, FakeHub
+from language_tree import git_tree, write_language
 
 from orch_it.merge import red_main
 from orch_it.merge import workflow_watch as watch
@@ -56,12 +56,13 @@ def runner(tmp_path, monkeypatch):
 
 
 def written_by_a_ru_owner(build, tmp_path, monkeypatch):
-    """The body as the owner's machine writes it: `human_language` ru."""
-    mine = tmp_path / "mine.json"
-    mine.write_text(json.dumps({"human_language": "ru"}), "utf-8")
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(mine))
+    """The body as the owner's machine writes it: `human_language` ru, in the settings.json of the owner's work tree."""
+    runner = Path.cwd()
+    owner = git_tree(tmp_path / "owner")
+    write_language(owner, "ru")
+    monkeypatch.chdir(owner)
     built = build()
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "no-settings-here.json"))
+    monkeypatch.chdir(runner)  # the runner after it: no language file in its work tree
     return built
 
 
