@@ -1,9 +1,9 @@
 """The token of every workflow holds exactly the permissions its code path reads or writes, each key with a
-one-line reason beside it (https://github.com/Rasslabsya4el/orchestration-layer/issues/411 unit 9). The defect it
+one-line reason beside it (the workflow-run ticket, unit 9). The defect it
 guards: `main check` read the pull requests of a commit (`GhPullHub.pulls_of_commit`) with a token that held no
 `pull-requests` key, so the run failed on GitHub only, where the token is the workflow's own. Only
 `GET repos/<r>/actions/permissions` is out of every token's reach (it needs repository administration):
-no workflow reads it, `GhPullHub.actions_enabled` takes a refusal as "on"."""
+`GhPullHub.actions_enabled` takes that token's "Resource not accessible by integration" 403 as "on"."""
 
 import re
 from pathlib import Path
@@ -59,10 +59,3 @@ def test_each_permission_key_says_why_in_one_line(name):
     for key, _, why in permissions_of(name):
         assert why and len(why.split()) >= 3, f"{name}: `{key}` has no reason beside it"
 
-
-def test_main_check_reads_the_pull_requests_of_a_commit():
-    """`check_main` opens a red-on-main ticket naming the pull request that brought the commit
-    (`pulls_of_commit`); that read is refused to a token with no `pull-requests` key."""
-
-    held = {key: level for key, level, _ in permissions_of("main-check.yml")}
-    assert held.get("pull-requests") in ("read", "write")

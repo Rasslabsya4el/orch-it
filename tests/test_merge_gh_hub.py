@@ -745,6 +745,10 @@ def test_actions_enabled_reads_the_permission_and_a_repo_without_it_is_off():
     # running on Actions, so a refusal reads as "on"; the login of a person is unchanged (answers above)
     refused = failed(403, "Resource not accessible by integration")
     assert GhPullHub(Gh(([permissions], refused))).actions_enabled(REPO) is True
+    # any other 403 is not the workflow token's refusal and still raises
+    for text in ("API rate limit exceeded for user ID 1", "Must have admin rights to Repository"):
+        with pytest.raises(GithubError):
+            GhPullHub(Gh(([permissions], failed(403, text)))).actions_enabled(REPO)
     for answer in ("nope", "{}", '{"enabled": "yes"}'):
         with pytest.raises(GithubError) as error:
             GhPullHub(Gh(([permissions], answer))).actions_enabled(REPO)
