@@ -9,9 +9,12 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
+
+from orch_it.events.schema import is_repo
 
 
 class SettingsError(ValueError):
@@ -151,6 +154,57 @@ def save_in_repo(repo: str, key: str, value: object) -> Path:
         spelling = next((name for name in repos if str(name).lower() == repo.lower()), repo)
         repos[spelling] = {**repos.get(spelling, {}), key: value}
         return _write(raw)
+
+
+def default_repo() -> str | None:
+    """The repo a command takes when it is given no `--repo` and its work tree has no GitHub origin:
+    the top-level setting `repo` (`owner/name`), or None when the setting is absent. A value that is
+    no `owner/name` is `bad_setting`. The callers, each reading the origin before this setting:
+    cli `_repo_of` (flag, then origin, then this); hook `_repo_of` (origin, then this, a bad value
+    printed to stderr and read as None); prepush (remote url, then hook `_repo_of`). Never a literal."""
+
+    chosen = load().get("repo")
+    if chosen is None:
+        return None
+    if not is_repo(chosen):
+        raise SettingsError("bad_setting", f"repo: {chosen!r} is no owner/name")
+    return chosen
+
+
+PACKAGE_TABLES = Path(__file__).parent / "language_tables"  # the tables orch-it ships (`en.toml`, `ru.toml`)
+_LANGUAGE = re.compile(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})*")  # a table's file stem: never a path
+
+
+def language_tables_dirs() -> list[Path]:
+    """The folders searched for a language table, first match wins: the folder of the setting
+    `language_tables_dir` (an installation adds or replaces a table there), then the package's own."""
+
+    chosen = load().get("language_tables_dir")
+    if chosen is None:
+        return [PACKAGE_TABLES]
+    if not isinstance(chosen, str) or not chosen:
+        raise SettingsError("bad_setting", f"language_tables_dir: {chosen!r} is no folder")
+    return [Path(chosen), PACKAGE_TABLES]
+
+
+def table_path(language: str) -> Path | None:
+    """The table file of a language in the first folder that has one, or None."""
+
+    return next((p for folder in language_tables_dirs() if (p := folder / f"{language}.toml").is_file()), None)
+
+
+def human_language() -> str:
+    """The language of text written to a human: the setting `human_language`, default `en`. A value
+    with no table (`<language>.toml` in a folder of `language_tables_dirs`) is `bad_setting` naming
+    the files looked for: no other language is written instead."""
+
+    chosen = load().get("human_language", "en")
+    if not isinstance(chosen, str) or not _LANGUAGE.fullmatch(chosen):
+        raise SettingsError("bad_setting", f"human_language: {chosen!r} is no language code")
+    if table_path(chosen) is None:
+        expected = " or ".join(str(folder / f"{chosen}.toml") for folder in language_tables_dirs())
+        raise SettingsError("bad_setting", f"human_language: no table for {chosen!r} (expected {expected})")
+    return chosen
 
 
 def store_path() -> Path:

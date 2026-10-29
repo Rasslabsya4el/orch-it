@@ -6,7 +6,7 @@ import pytest
 from orch_it.settings import SettingsError
 from orch_it.testruns.config import DEFAULT_COMMAND, Machine, TestSettings
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 
 
 def test_no_settings_give_the_defaults():
@@ -85,5 +85,5 @@ def test_an_absurd_bound_or_a_nul_is_refused_as_a_bad_setting(raw, field):
 
 
 def test_a_repo_s_override_matches_its_name_whatever_the_case():
-    raw = {"repos": {"rasslabsya4el/ORCH-IT": {"test_run_bound_minutes": 3}}}
+    raw = {"repos": {"acme-x/WIDGETS-Y": {"test_run_bound_minutes": 3}}}
     assert TestSettings.from_settings(raw, REPO).bound_minutes == 3

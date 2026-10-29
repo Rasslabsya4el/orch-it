@@ -1,4 +1,4 @@
-"""Every exclusive create in src/orch_it handles the refusal it can get (Rasslabsya4el/orchestration-layer#418).
+"""Every exclusive create in src/orch_it handles the refusal it can get (the layer's repo#418).
 
 A lock is made by an exclusive create: a folder made with mkdir, a file made with O_EXCL or mode "x". On
 Windows a create racing a removal of the same name is refused with PermissionError, not FileExistsError, so a

@@ -28,7 +28,7 @@ from orch_it.brain import commands as brain_commands
 from orch_it.brain.handoff import HandoffError
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
-from orch_it.guards import hook, install, prepush, scanner
+from orch_it.guards import exceptions, hook, install, prepush, scanner
 from orch_it.guards import status as guards_status
 from orch_it.merge import commands as merge_commands
 from orch_it.research import mcp as research_mcp
@@ -47,7 +47,6 @@ from orch_it.tickets import hook as ticket_hook
 from orch_it.tickets.gh_check import CheckError
 from orch_it.tickets.park import ParkError
 
-DEFAULT_REPO = "Rasslabsya4el/orch-it"
 EXIT_ERROR = 2
 EXIT_INTERRUPTED = 130
 # `tests run` exits 0 on passed, 1 on failed, 3 on any other outcome (no result, refused, lost,
@@ -65,7 +64,7 @@ _DECIMAL = re.compile(r"-?(0|[1-9][0-9]*)\.[0-9]+")
 
 class CommandError(Exception):
     """A command given a value it cannot use. `code`: `bad_pct` (a weekly percent outside
-    0-100), `repo_unknown` (no `--repo` and no GitHub origin in the work tree), `bad_options`
+    0-100), `repo_unknown` (no `--repo`, no `repo` setting and no GitHub origin in the work tree), `bad_options`
     (`guards scan` options that do not go together)."""
 
     def __init__(self, code: str, detail: str = ""):
@@ -122,7 +121,7 @@ def _parser() -> argparse.ArgumentParser:
 
     p = command("measure-limit", "record a reading of the usage card's weekly percent")
     p.add_argument("pct", type=float)
-    p.add_argument("--repo", default=DEFAULT_REPO)
+    p.add_argument("--repo")
     p.add_argument("--role", default="owner")
     p.add_argument("--note")
 
@@ -141,7 +140,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet-minutes", type=float, default=30)
 
     p = command("import-github", "import the runs of the repo's `tests` workflow from GitHub")
-    p.add_argument("--repo", default=DEFAULT_REPO)
+    p.add_argument("--repo")
     p.add_argument("--since", metavar="ISO")
 
     p = command("test-places", "runs, outcomes and median run and GitHub queue minutes per place and OS")
@@ -168,7 +167,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--rev", metavar="REV", help="the revision --tree reads (default: HEAD)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p.add_argument("--machine-independent", action="store_true",
-                   help="only what holds on any machine: no home, host name or word of this one")
+                   help="the run's own setup only: values read from the environment it runs in (on GitHub: "
+                        "the account, repo and the runner's home, user and host), no private words file")
     p.add_argument("--require-noreply-email", action=argparse.BooleanOptionalAction, default=None,
                    help="every commit's author and committer e-mail is a GitHub noreply address, with --range "
                         "(default: on when the repo's setting commit_identity is noreply; --all is never checked)")
@@ -303,11 +303,14 @@ def _store(args) -> Store:
 
 
 def _repo_of(work_tree: str) -> str:
-    """`owner/name` of the work tree's `origin` on GitHub, or `CommandError("repo_unknown")`."""
+    """The repo a command acts on when it is given no `--repo`: the work tree's GitHub `origin`, else
+    the setting `repo` (a bad value is `bad_setting`, exit 2), else `CommandError("repo_unknown")`
+    naming the three ways to give it."""
 
-    found = ticket_hook.repo_of(work_tree)
+    found = ticket_hook.repo_of(work_tree) or settings.default_repo()
     if not found:
-        raise CommandError("repo_unknown", f"{work_tree}: give --repo")
+        raise CommandError("repo_unknown", f"{work_tree}: give --repo, or the setting `repo` "
+                                           "(owner/name), or a GitHub origin in the work tree")
     return found
 
 
@@ -356,8 +359,7 @@ def _guards_status(args) -> tuple[str, int]:
     any is not (a protection that cannot be read is a failed fact, not an error)."""
 
     work_tree = Path(args.work_tree)
-    report = guards_status.status(_store(args), args.repo or _repo_or_none(work_tree) or DEFAULT_REPO,
-                                  work_tree)
+    report = guards_status.status(_store(args), args.repo or _repo_of(str(work_tree)), work_tree)
     rows = [[fact.name, "yes" if fact.ok else "no", fact.detail] for fact in report.facts]
     return render(QueryResult(["fact", "ok", "detail"], rows)), 0 if report.ok else 1
 
@@ -367,8 +369,7 @@ def _guards_install(args) -> tuple[str, int]:
     (`hooks_path_taken`, exit 2) that leaves it as it was."""
 
     work_tree = Path(args.work_tree)
-    done = install.install(work_tree, _store(args),
-                           repo=args.repo or _repo_or_none(work_tree) or DEFAULT_REPO)
+    done = install.install(work_tree, _store(args), repo=args.repo or _repo_of(str(work_tree)))
     return (f"pre-push hook: {'installed' if done.changed else 'already installed'}"
             f" (core.hooksPath={done.hooks_path})\n"
             f"claude code hook: {'present' if done.claude_hook else 'missing'}"
@@ -428,19 +429,22 @@ def _require_noreply(args, work_tree: Path) -> bool:
 
 
 def _guards_scan(args) -> tuple[str, int]:
-    """`guards scan`: one line per hit, then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits."""
+    """`guards scan`: one line per hit, then `hits=<n> commits=<n>`, then the kinds of values the setup lacked
+    (`not checked: ...`) when there are any, clean or not; exit 0 with no hit, 1 with hits, 2 for an exceptions
+    list with an entry that cannot be used."""
 
     if args.rev and not args.tree:
         raise CommandError("bad_options", "--rev goes with --tree")
     if args.words_file and args.machine_independent:
         raise CommandError("bad_options", "--words-file goes with the machine's own patterns")
     allowed = [*args.allow_email, *filter(None, map(_email_of, args.allow_email_of))]
+    work_tree = Path(args.work_tree)
     if args.machine_independent:
-        patterns = scanner.Patterns.machine_independent(allowed_emails=allowed)
+        patterns = scanner.Patterns.of_run(allowed_emails=allowed, work_tree=work_tree)
     else:
         patterns = scanner.Patterns.of_machine(
-            allowed_emails=allowed, words_file=Path(args.words_file) if args.words_file else None)
-    work_tree = Path(args.work_tree)
+            allowed_emails=allowed, words_file=Path(args.words_file) if args.words_file else None,
+            work_tree=work_tree)
     unnamed: list[tuple[str, str]] = []  # (sha, author | committer) of a non-noreply e-mail
     if args.tree:
         hits, commits = scanner.scan_tree(work_tree, patterns, args.rev or "HEAD"), 1
@@ -451,9 +455,11 @@ def _guards_scan(args) -> tuple[str, int]:
         if args.rev_range is not None and _require_noreply(args, work_tree):
             unnamed = identity.noreply_failures(work_tree, shas)
     lines = [f"{hit.commit[:12]} {hit.where} {_one_line(hit.file)}:"
-             f"{'-' if hit.line is None else hit.line} {hit.kind}\n" for hit in hits]
+             f"{'-' if hit.line is None else hit.line} {hit.kind}{scanner.cited(hit.kind)}\n" for hit in hits]
     lines += [f"{sha[:12]} {role} -:- not_noreply\n" for sha, role in unnamed]
     text = "".join(lines) + f"hits={len(hits) + len(unnamed)} commits={commits}\n"
+    if patterns.not_checked_line():
+        text += patterns.not_checked_line() + "\n"
     # a console that cannot show a file name's letters shows them escaped, not an error
     text = text.encode(sys.stdout.encoding or "utf-8", "backslashreplace").decode(
         sys.stdout.encoding or "utf-8")
@@ -542,7 +548,7 @@ def _run(args) -> str:
             raise CommandError("bad_pct", str(args.pct))
         with _store(args).writer() as writer:
             writer.write({
-                "kind": "value.measured", "repo": args.repo, "ticket": None, "role": args.role,
+                "kind": "value.measured", "repo": args.repo or _repo_of("."), "ticket": None, "role": args.role,
                 "session": None, "parent_session": None, "turn": None, "step": None, "run": None,
                 "note": args.note,
                 "detail": {"name": "weekly_limit_pct", "value": args.pct, "unit": "%",
@@ -562,7 +568,7 @@ def _run(args) -> str:
                 f" pending_lines={done.pending_lines} refused_events={done.refused_events}"
                 f" unreadable_files={done.unreadable_files}\n")
     if command == "import-github":
-        done = github.import_github(_store(args), args.repo, since=args.since)
+        done = github.import_github(_store(args), args.repo or _repo_of("."), since=args.since)
         failed = f" failure_codes={','.join(done.failure_codes)}" if done.failure_codes else ""
         return (f"runs_read={done.runs_read} jobs={done.jobs} written={done.written}"
                 f" already_stored={done.already_stored} reports_missing={done.reports_missing}"
@@ -653,7 +659,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError,
+            exceptions.ExceptionsError, queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError,
+            ParkError, CheckError,
             SkillsError, SpawnRefused, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
             ResearchRefused, HandoffError, identity.IdentityError, *merge_commands.ERRORS) as e:
         print(f"error: {e}", file=sys.stderr)

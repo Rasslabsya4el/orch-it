@@ -154,7 +154,7 @@ def test_survey_past_its_line_writes_context_crossed(tmp_path):
 def test_the_repo_s_settings_run_the_hold_at_every_subagent_stop():
     settings = json.loads((Path(__file__).resolve().parents[1] / ".claude" / "settings.json").read_text("utf-8"))
     commands = [h["command"] for entry in settings["hooks"]["SubagentStop"] for h in entry["hooks"]]
-    assert commands == ["python -m orch_it hook subagent-stop"]
+    assert commands == ['sh "$CLAUDE_PROJECT_DIR"/hooks/orch-it -m orch_it hook subagent-stop']
 
 
 def test_the_hook_command_blocks_through_a_real_process(tmp_path):

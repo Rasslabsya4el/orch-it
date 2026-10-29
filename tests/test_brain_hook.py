@@ -167,8 +167,9 @@ def test_the_repo_s_settings_run_one_hook_at_session_start_and_on_every_prompt()
     wired = json.loads((Path(__file__).resolve().parents[1] / ".claude" / "settings.json").read_text("utf-8"))["hooks"]
     commands = {event: [h["command"] for entry in wired[event] for h in entry["hooks"]]
                 for event in ("SessionStart", "UserPromptSubmit")}
-    assert commands["UserPromptSubmit"] == ["python -m orch_it hook brain"]
-    assert "python -m orch_it hook brain" in commands["SessionStart"]
+    shim = 'sh "$CLAUDE_PROJECT_DIR"/hooks/orch-it -m orch_it hook brain'
+    assert commands["UserPromptSubmit"] == [shim]
+    assert shim in commands["SessionStart"]
 
 
 def test_two_prompts_of_one_session_at_once_give_the_rules_once(world):

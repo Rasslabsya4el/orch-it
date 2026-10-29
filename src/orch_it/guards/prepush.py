@@ -23,7 +23,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from orch_it.guards import hook, scanner
+from orch_it import language
+from orch_it.guards import exceptions, hook, scanner
 from orch_it.testruns import github
 
 GUARD = "private_data_public"
@@ -123,24 +124,23 @@ def _fired(hit: scanner.Hit) -> hook.Fired:
 
 
 def _refusal(hits: list[scanner.Hit]) -> str:
-    lines = ["orch-it: push refused, the commits hold private data and the remote is public"
-             " (or its visibility could not be read):"]
-    lines += [f"  {hit.commit[:12]} {hit.where} {_where(hit)} {hit.kind}" for hit in hits[:SHOWN_HITS]]
+    lines = [language.text_or_refusal("push_refused_private")]
+    lines += [f"  {hit.commit[:12]} {hit.where} {_where(hit)} {hit.kind}{scanner.cited(hit.kind)}"
+              for hit in hits[:SHOWN_HITS]]
     if len(hits) > SHOWN_HITS:
-        lines.append(f"  ... and {len(hits) - SHOWN_HITS} more")
-    lines.append("take the values out of the commits (amend or rebase) and push again;"
-                 " `python -m orch_it guards scan --range <remote>..<local>` lists the same")
+        lines.append(language.text_or_refusal("push_more", count=len(hits) - SHOWN_HITS))
+    lines.append(language.text_or_refusal("push_take_out", python=sys.executable))
     return "\n".join(lines) + "\n"
 
 
 def _closing_refusal(closing: list[tuple[str, int, str, str]]) -> str:
-    lines = ["orch-it: push refused, a commit message holds a closing keyword before a ticket reference"
-             " (GitHub closes the ticket when the commit reaches its default branch):"]
-    lines += [f'  {sha}, line {number}, "{text[:LINE_BOUND]}", {" ".join(hit.split())}'
+    lines = [language.text_or_refusal("push_refused_closing")]
+    lines += [language.text_or_refusal("push_closing_hit", sha=sha, number=number, text=text[:LINE_BOUND],
+                                       hit=" ".join(hit.split()))
               for sha, number, text, hit in closing[:SHOWN_HITS]]
     if len(closing) > SHOWN_HITS:
-        lines.append(f"  ... and {len(closing) - SHOWN_HITS} more")
-    lines.append("write `Refs <URL>` or `Ticket: <URL>` in its place (amend or rebase) and push again")
+        lines.append(language.text_or_refusal("push_more", count=len(closing) - SHOWN_HITS))
+    lines.append(language.text_or_refusal("push_closing_way"))
     return "\n".join(lines) + "\n"
 
 
@@ -158,7 +158,7 @@ def _closing_in(sha: str, message: str, marks) -> list[tuple[str, int, str, str]
     return found
 
 
-def _closing_hits(work_tree: Path, commits: list[str], store, repo: str) -> list[tuple[str, int, str, str]]:
+def _closing_hits(work_tree: Path, commits: list[str], store, repo: str | None) -> list[tuple[str, int, str, str]]:
     """The closing keyword hits in the messages of the commits this push sends. The import of the
     matcher is inside the fail-open read, so a failure of it is written like any other. A git failure
     of a batch ends the read there: the hits of the batches before it still refuse, and the unread
@@ -198,7 +198,7 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
     try:
         repo = github_repo_of(remote_url) or hook._repo_of(str(work_tree))
     except Exception:
-        repo = hook.DEFAULT_REPO
+        repo = None  # no repo known: the scans still run, their events are not written (hook._no_repo)
     try:
         commits = list(dict.fromkeys(
             sha for local, remote in _pushes(raw_stdin)
@@ -208,29 +208,37 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
         return "", 0
     if not commits:
         return "", 0
-    # the closing check applies to every push, the private-data scan only to a public remote; a
-    # failure of one never skips the other, and a hit of either always refuses
+    # the closing check and the coding standard's kinds (#413: the setup's values, the pattern kinds)
+    # apply to every push; the kinds of private data (#395) only to a public remote; a failure of one
+    # never skips the other, and a hit of any always refuses
     closing = _closing_hits(work_tree, commits, store, repo)
-    hits, scanned = [], False
+    hits, scanned, not_checked, broken = [], False, "", None
     try:
-        if not _is_private(visibility or visibility_of, remote_url):
-            if patterns is None:
-                patterns = scanner.Patterns.of_machine(allowed_emails=_profile_emails(repo))
-            hits = scanner.scan_commits(work_tree, commits, patterns)
-            scanned = True
+        private = _is_private(visibility or visibility_of, remote_url)
+        if patterns is None:
+            patterns, broken = _machine_patterns(work_tree, raw_stdin, () if private else _profile_emails(repo))
+        if private:
+            patterns = patterns.without_old_kinds()
+        hits = scanner.scan_commits(work_tree, commits, patterns)
+        scanned = True
+        not_checked = patterns.not_checked_line()
     except Exception as exc:  # a guard that crashes lets the push through, and says so
         _write_crash(store, exc, repo)
     # a closing hit writes no guard.fired: the store's closed guard set names no code for it, and
     # a clean scan of a refused push is no pass
     fired = [_fired(hit) for hit in hits]
-    if scanned and not hits and not closing:
+    if scanned and not hits and not closing and broken is None:
         fired = [hook.Fired(GUARD, "pass", "clean", f"{len(commits)} commits scanned", None)]
     if fired:
         try:
             hook._write_events(store, hook.Decision(bool(hits), None, fired), repo=repo, session=None)
         except Exception:  # the store never decides a push
             pass
-    if hits or closing:
+    if not_checked:  # a clean push never goes without what was not checked
+        _say(not_checked + "\n")
+    if broken is not None:  # a list nobody can read refuses the push; the scan above ran without it
+        _say(language.text_or_refusal("push_unreadable", file=exceptions.FILE_NAME, reason=broken) + "\n")
+    if hits or closing or broken is not None:
         if hits:
             _say(_refusal(hits))
         if closing:
@@ -239,13 +247,29 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
     return "", 0
 
 
-def _profile_emails(repo: str) -> tuple[str, ...]:
+def _machine_patterns(work_tree: Path, raw_stdin: str, emails) -> tuple[scanner.Patterns, Exception | None]:
+    """The patterns of this machine for a push, and the `ExceptionsError` of an exceptions list that cannot
+    be used (then the patterns hold no list, so the other kinds still run). The list and the workflow job
+    names are read from the tree of the first pushed commit when the work tree is not at it."""
+
+    rev = None
+    pushes = _pushes(raw_stdin)
+    if pushes and scanner.sha_of(work_tree) != pushes[0][0]:
+        rev = pushes[0][0]
+    try:
+        return scanner.Patterns.of_machine(allowed_emails=emails, work_tree=work_tree, rev=rev), None
+    except exceptions.ExceptionsError as exc:
+        return scanner.Patterns.of_machine(allowed_emails=emails, work_tree=work_tree, rev=rev,
+                                           exceptions=exceptions.Exceptions()), exc
+
+
+def _profile_emails(repo: str | None) -> tuple[str, ...]:
     """The public profile emails that are NOT private data (decision 4): the authenticated
     account's and the repo owner's, read from GitHub now; a reader that fails adds nothing, so
     at worst that address is treated as private. The scanner already exempts noreply addresses."""
 
     logins = ["user"]  # `gh api user` is the authenticated account
-    owner = repo.split("/", 1)[0] if "/" in repo else ""
+    owner = repo.split("/", 1)[0] if repo and "/" in repo else ""
     if owner:
         logins.append(f"users/{owner}")
     found: list[str] = []
@@ -259,7 +283,7 @@ def _profile_emails(repo: str) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _write_crash(store, exc: BaseException, repo: str) -> None:
+def _write_crash(store, exc: BaseException, repo: str | None) -> None:
     try:
         hook._safe_write_error(store, COMPONENT, getattr(exc, "code", type(exc).__name__),
                                repo=repo, session=None)

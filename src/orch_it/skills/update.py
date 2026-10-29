@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
-from orch_it import settings
+from orch_it import language, settings
 from orch_it.identity import commit_env
 from orch_it.skills import copies, references
 from orch_it.skills.classify import Change, classify
@@ -284,25 +284,19 @@ def pr_body(found: Check, problems: list[str]) -> str:
         _class_table(found), refs, "Written by `python -m orch_it skills update`."])
 
 
-# the human block of the issue (#398 decision 2: five fields, Russian, no file path; the Undo field's fixed English
-# words, "two-way door" and "touches", are the ones the shape's Russian test leaves out); `{old}`, `{new}`,
-# `{changed}`, `{copies}` filled in per issue
-HUMAN_LINES = {
-    "What": "апстрим навыков Покока перешёл с `{old}` на `{new}`: изменилось навыков: {changed}, из них скопировано"
-            " в репо: {copies}.",
-    "Goal": "копии навыков в репо совпадают с новой версией его апстрима, и ни одна роль не теряет вызываемый навык молча.",
-    "Plan": "ORCH под `gh` владельца запускает `python -m orch_it skills update`; тот открывает один пулл-реквест с"
-            " новыми копиями, а тесты репо проверяют копии и ссылки на навыки.",
-    "Result": "пулл-реквест зелёный на обеих ОС, у 100 % копий хэши совпадают с манифестом новой версии, и каждый навык в нём"
-              " отнесён к своему классу.",
-    "Undo": "two-way door (один откат пулл-реквеста возвращает прежние копии); touches все роли, которые вызывают эти навыки.",
+# the human block of the issue (#398 decision 2: five fields, no file path): the field name -> its key in the
+# language table (`language_tables/`, the words of `human_language`); the Undo field's fixed English words,
+# "two-way door" and "touches", stay in every table (the shape's language test leaves them out).
+# `{old}`, `{new}`, `{changed}`, `{copies}` are filled in per issue.
+HUMAN_KEYS = {
+    "What": "skills_what",
+    "Goal": "skills_goal",
+    "Plan": "skills_plan",
+    "Result": "skills_result",
+    "Undo": "skills_undo",
 }
 # the Plan and the Result of an issue that waits for the brain (`needs-triage`): no pull request opens for it
-HUMAN_LINES_BRAIN = {
-    "Plan": "ORCH не открывает пулл-реквест по этому тикету: мозг решает по каждому классу из таблицы ниже, а"
-            " `python -m orch_it skills update` печатает `waits_for_brain` и ничего не переносит.",
-    "Result": "мозг записал своё решение по каждому классу в этом тикете, и ни одна копия не перенесена без него.",
-}
+HUMAN_KEYS_BRAIN = {"Plan": "skills_plan_brain", "Result": "skills_result_brain"}
 
 
 WEIGHT_TRIAGE, WEIGHT_PLAIN = 3, 2  # a copy that moves in what it takes or returns asks the brain first
@@ -318,9 +312,9 @@ def issue(found: Check, *, waits: bool = False) -> tuple[str, str]:
     old, new = found.manifest.commit[:12], found.new_commit[:12]
     copies_changed = sum(1 for c in found.changed if found.held(c) == "copy")
     waiting = found.needs_triage or waits
-    texts = {**HUMAN_LINES, **(HUMAN_LINES_BRAIN if waiting else {})}
-    filled = {name: text.format(old=old, new=new, changed=len(found.changed), copies=copies_changed)
-              for name, text in texts.items()}
+    keys = {**HUMAN_KEYS, **(HUMAN_KEYS_BRAIN if waiting else {})}
+    filled = {name: language.text(key, old=old, new=new, changed=len(found.changed), copies=copies_changed)
+              for name, key in keys.items()}
     human = "\n".join(f"- **{name}:** {text}" for name, text in filled.items())
     if waiting:
         because = ("a skill is added, or a copy is renamed, removed or changed in what it takes or returns"

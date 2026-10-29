@@ -95,7 +95,7 @@ def test_an_assignment_expands_in_a_later_target():
 
 
 def test_tilde_and_env_expand():
-    assert deletes("rm -rf ~/wt", env={"HOME": "/home/me"})[0].targets == ("/home/me/wt",)
+    assert deletes("rm -rf ~/wt", env={"HOME": "/work/me"})[0].targets == ("/work/me/wt",)
 
 
 def test_a_substitution_inside_a_command_contributes_its_own_delete():

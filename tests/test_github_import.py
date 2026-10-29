@@ -21,8 +21,9 @@ from orch_it.cli import main
 from orch_it.events.store import Store
 from orch_it.testruns import github
 from orch_it.testruns.github import GithubError, import_github
+from orch_it.tickets import hook as ticket_hook
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 BASE = datetime(2026, 10, 26, 10, 0, tzinfo=UTC)
 NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 GREEN = [("tests.test_a", "test_one", "passed"), ("tests.test_a", "test_two", "passed"),
@@ -750,14 +751,14 @@ def test_a_push_run_is_superseded_by_a_newer_push_run_of_the_same_branch(store, 
 
 
 def test_a_cancelled_job_that_ran_to_the_bound_is_no_result_cut(store, gh):
-    gh.add_run(100, linux={"conclusion": "cancelled", "cases": RED, "completed": 60 + 15 * 60})
+    gh.add_run(100, linux={"conclusion": "cancelled", "cases": RED, "completed": 60 + github.DEFAULT_JOB_TIMEOUT_MINUTES * 60})
     run_import(store, gh)
     ended = ended_of(store, "linux")
     assert (ended["outcome"], ended["reason"]) == ("no_result", "cut")
 
 
 def test_a_cancelled_job_that_stopped_short_of_the_bound_is_stopped(store, gh):
-    gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "completed": 60 + 15 * 60 - 1})
+    gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "completed": 60 + github.DEFAULT_JOB_TIMEOUT_MINUTES * 60 - 1})
     run_import(store, gh)
     assert ended_of(store, "linux")["outcome"] == "stopped"
 
@@ -881,11 +882,12 @@ def test_the_runs_list_call_may_take_longer_than_the_other_calls(monkeypatch):
 def test_the_command_prints_the_counts_of_the_import(tmp_path, gh, monkeypatch, capsys):
     gh.add_run(100)
     monkeypatch.setattr(github, "run_gh", gh)
-    assert main(["--store", str(tmp_path / "cli-store"), "events", "import-github"]) == 0
+    assert main(["--store", str(tmp_path / "cli-store"), "events", "import-github",
+                 "--repo", REPO]) == 0
     printed = capsys.readouterr().out
     assert "runs_read=1" in printed and "jobs=2" in printed and "reports_missing=0" in printed
     assert "written=" in printed and "already_stored=0" in printed
-    assert "repos/Rasslabsya4el/orch-it/" in " ".join(gh.calls[0])
+    assert "repos/acme-x/widgets-y/" in " ".join(gh.calls[0])
 
 
 def test_the_command_takes_the_repo_and_since(tmp_path, gh, monkeypatch, capsys):
@@ -920,6 +922,9 @@ def summary_count(log: str) -> int | None:
 
     total, seen = 0, False
     for line in log.splitlines():
+        columns = line.split("\t", 2)
+        if len(columns) == 3 and columns[1] != github.TEST_STEP:
+            continue  # only the test step's lines: a pull request body printed by another step says "143 passed in 2.03s" too
         found = SUMMARY_LINE.search(line)
         if found:
             seen = True
@@ -931,6 +936,12 @@ def test_the_summary_count_sums_the_summary_lines_of_both_phases_of_a_job():
     log = "linux\tpytest\t3156 passed, 3 skipped in 95.25s (0:01:35)\nlinux\tpytest\t3159 deselected in 0.40s\n"
     assert summary_count(log) == 3159
     assert summary_count("1 failed, 3 passed in 5.00s\n1 passed in 1.00s\nno tests ran in 0.10s\n") == 5
+
+
+def test_the_summary_count_reads_only_the_pytest_step_of_a_log():
+    log = ("linux\tclosing words\t2026-10-29T17:49:41Z Tests: tests/test_x.py: 143 passed in 2.03s on the branch\n"
+           "linux\tpytest\t2026-10-29T17:51:47Z 3271 passed, 3 skipped in 117.11s (0:01:57)\n")
+    assert summary_count(log) == 3274
 
 
 def test_the_summary_count_sums_what_ran_and_leaves_deselected_out():
@@ -1032,6 +1043,10 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if auth.returncode != 0:
         pytest.skip("gh is not signed in")
+    # the checkout's own GitHub origin: the live test reads the real repo, never an invented one
+    live_repo = ticket_hook.repo_of(str(Path(__file__).resolve().parent.parent))
+    if not live_repo:
+        pytest.skip("no GitHub origin in this checkout")
     since = "2026-10-25T20:40:00Z"
     # the runner's clock minus 60 s of margin for skew with GitHub: a run completed after it is not judged
     moment = (datetime.now(UTC) - CLOCK_SKEW_MARGIN).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1048,8 +1063,8 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
         return github.run_gh(args)
 
     store = Store.open(tmp_path / "live-store")
-    first_import = import_github(store, REPO, gh=counted_gh, since=since, newest=listed)
-    listing = json.loads(counted_gh(github._list_runs_args(REPO, github._since(since), listed)))
+    first_import = import_github(store, live_repo, gh=counted_gh, since=since, newest=listed)
+    listing = json.loads(counted_gh(github._list_runs_args(live_repo, github._since(since), listed)))
     runs, completed_since = listing["workflow_runs"], listing["total_count"]
     judged = newest_judged(runs, moment, since, newest)
     require_enough_judged(judged, runs, completed_since, newest)
@@ -1059,7 +1074,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     jobs_of = {}
     for run in judged:
         jobs = github._items(counted_gh(
-            ["api", "--paginate", f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=all&per_page=100"]),
+            ["api", "--paginate", f"repos/{live_repo}/actions/runs/{run['id']}/jobs?filter=all&per_page=100"]),
             "jobs")
         jobs_of[run["id"]] = [j for j in jobs if j["name"] in required and j["conclusion"] != "skipped"]
         for job in jobs_of[run["id"]]:
@@ -1078,7 +1093,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
             key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
             if job["conclusion"] not in ("success", "failure") or not run_pairs[key][1]["summary_seen"]:
                 continue
-            log = counted_gh(["run", "view", str(run["id"]), "-R", REPO, "--log", "--job", str(job["id"])])
+            log = counted_gh(["run", "view", str(run["id"]), "-R", live_repo, "--log", "--job", str(job["id"])])
             rows = store.query("SELECT count(*) FROM events WHERE kind = 'test.result' AND run = ?",
                                (key,)).rows[0][0]
             assert rows == summary_count(log), key
@@ -1086,7 +1101,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     assert compared, "no pull request job with a report to count"
     judged_ids = [r["id"] for r in judged]
     before = rows_per_run(store)
-    import_github(store, REPO, gh=counted_gh, since=since, newest=listed)
+    import_github(store, live_repo, gh=counted_gh, since=since, newest=listed)
     after = rows_per_run(store)
     changed = {i: (before.get(i, 0), after.get(i, 0)) for i in judged_ids
                if before.get(i, 0) != after.get(i, 0)}

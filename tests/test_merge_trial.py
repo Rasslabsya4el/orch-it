@@ -337,6 +337,7 @@ def test_the_arguments_are_checked(args, tmp_path):
     assert caught.value.code == 2
 
 
+@pytest.mark.usefixtures("ticket_language_ru")  # the trial bodies are Russian (#413 unit 10a)
 def test_the_trial_tickets_are_in_the_ticket_shape_and_only_the_second_body_has_an_after_merge_row():
     for body in (merge_trial.BODY, merge_trial.FULL_BODY):
         found = tickets.parse(body, title=merge_trial.TITLE, labels=("ready-for-agent",))

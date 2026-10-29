@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from orch_it.events.store import Store
 from orch_it.testruns.place_rule import LIVE_GRACE_MINUTES, Measured, read_facts
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 NOW = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
 
 

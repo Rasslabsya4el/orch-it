@@ -16,11 +16,11 @@ import sys
 import textwrap
 import tomllib
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
-from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo
+from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo, default_host
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
@@ -281,12 +281,12 @@ def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_do
     assert "ORCH_IT_REQUIRE_SSHD" not in windows
 
 
-# --- the job bounds (#411 unit 4): 15 minutes per change, the night's bound from measured full runs ---
+# --- the job bounds (#411 unit 4): 9 minutes per change and 16 for the night, each ceil(longest measured job x 1.5) (#421 rule 6) ---
 
-PER_CHANGE_BOUND = 15
-NIGHT_BOUND = {"linux": 27, "windows": 59}  # ceil(17.4 x 1.5), ceil(39.3 x 1.5)
-MEASURED_MINUTES = {"linux": "17.4", "windows": "39.3"}  # the longest full run of each OS
-MEASURED_RUNS = ("40870600022", "40870569933")  # the two dispatched runs the minutes come from
+PER_CHANGE_BOUND = 9
+NIGHT_BOUND = {"linux": 16, "windows": 16}  # ceil(10.4 x 1.5): both jobs share it, the importer reads one setting
+MEASURED_MINUTES = {"linux": "10.4", "windows": "10.4"}  # the longest full job of either OS (622 s)
+MEASURED_RUNS = ("40946107649", "40932163943")  # the longest full run and the longest per-change run the minutes come from
 MEASURED_ON = "2026-10-29"
 
 
@@ -305,7 +305,7 @@ def timeout_of(text: str, job: str) -> tuple[str, list[str]]:
     return raw[at].removeprefix("    timeout-minutes: "), comment
 
 
-def test_each_job_keeps_the_per_change_bound_of_15_minutes_outside_the_night():
+def test_each_job_keeps_the_measured_per_change_bound_outside_the_night():
     text = WORKFLOW.read_text("utf-8")
     for job in ("linux", "windows"):
         value, _ = timeout_of(text, job)
@@ -344,6 +344,11 @@ SCAN_ENV = {
     "AUTHOR": "${{ github.event.pull_request.user.login }}",
     "OWNER": "${{ github.repository_owner }}",
 }
+# what the runner gives the job's processes (GitHub Actions, Linux): invented names, built at run time
+RUNNER_HOME = str(PurePosixPath("/home") / "runner-zz")
+RUNNER_ENV = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "acme-x/widgets-y",
+              "GITHUB_REPOSITORY_OWNER": "acme-x", "GITHUB_ACTOR": "acme-x",
+              "HOME": RUNNER_HOME, "RUNNER_TEMP": str(PurePosixPath(RUNNER_HOME) / "work" / "_temp")}
 
 
 def step_env(step: list[str]) -> dict[str, str]:
@@ -411,8 +416,9 @@ def pull_request_with(tmp_path, head_files):
 
 def run_scan_step(tmp_path, repo, base, head):
     """The step's own script under bash, in the repository, with the step's environment filled
-    in for a pull request of fake logins; `python` is the interpreter running the tests, on this
-    checkout's source, and `gh` can reach nothing."""
+    in for a pull request of fake logins, and the runner's own environment (RUNNER_ENV) as GitHub
+    gives it, so the values of the run are the runner's and none is this machine's; `python` is the
+    interpreter running the tests, on this checkout's source, and `gh` can reach nothing."""
 
     step = step_named(steps_of(job_lines(WORKFLOW.read_text("utf-8"))["linux"]), PRIVATE_DATA_STEP)
     filled = {"BASE": base, "HEAD": head, "AUTHOR": "fake-author", "OWNER": "fake-owner"}
@@ -420,8 +426,8 @@ def run_scan_step(tmp_path, repo, base, head):
     script = 'python() { "$PYTHON_FOR_TEST" "$@"; }\n' + run_script(step)
     quiet = {key: value for key, value in os.environ.items()
              if key not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")}
-    env = quiet | filled | {"PYTHON_FOR_TEST": sys.executable, "PYTHONPATH": str(ROOT / "src"),
-                            "GH_CONFIG_DIR": str(tmp_path / "gh"), "PYTHONIOENCODING": "utf-8"}
+    env = quiet | RUNNER_ENV | filled | {"PYTHON_FOR_TEST": sys.executable, "PYTHONPATH": str(ROOT / "src"),
+                                         "GH_CONFIG_DIR": str(tmp_path / "gh"), "PYTHONIOENCODING": "utf-8"}
     return subprocess.run([a_bash(), "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
                           capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=repo.path,
                           env=env, creationflags=NO_WINDOW)
@@ -445,8 +451,8 @@ def test_the_scan_step_passes_a_pull_request_whose_own_commits_are_clean(tmp_pat
     assert (done.returncode, done.stdout) == (0, "hits=0 commits=1\n"), done.stderr
 
 
-# a default host name, put together at run time so none stands in this committed file
-DEFAULT_HOST_NAME = "WI" + "N-OHK3JQ5AM84"
+# a default host name, made at run time (a WIN name of its shape) so none stands in this committed file
+DEFAULT_HOST_NAME = default_host("WIN", 12)
 
 
 def test_the_scan_step_fails_on_a_pull_request_that_adds_a_default_host_name_without_printing_it(tmp_path):

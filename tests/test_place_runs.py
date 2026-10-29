@@ -13,7 +13,7 @@ from orch_it.testruns.config import Machine, TestSettings
 from orch_it.testruns.places import OwnPlace, PlaceRefused, PlaceVanished
 from orch_it.testruns.runner import RunError, run_tests
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 
 
 def green(tmp_path):

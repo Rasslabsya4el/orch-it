@@ -1059,7 +1059,7 @@ def _pkill(rest, simple, segment):
             exact = True
         elif word in ("-P", "--parent", "-s", "--session", "-g", "--pgroup", "-u", "-U", "-G", "-t",
                       "--signal", "-n", "-o"):
-            opaque = True  # selects by parent/user/session/newest, not by name: more than we read
+            opaque = True  # selects by parent, login, session or newest, not by name: more than we read
             i += 2
             continue
         elif re.fullmatch(r"-[a-zA-Z0-9]+", word):

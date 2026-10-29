@@ -11,6 +11,8 @@ from ticket_fixtures import fixture
 from orch_it.events.store import Store
 from orch_it.tickets import park as parks
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+
 TODAY = date(2026, 11, 2)
 BODY = fixture("good_basic")[1]
 
@@ -39,7 +41,7 @@ def park(hub, store, kind, ref, until="2026-11-30", number=10):
 
 @pytest.mark.parametrize("line, kind, ref", [
     ("Parked: pr_ended #12 until 2026-11-30", "pr_ended", "#12"),
-    ("Parked: ticket_closed Rasslabsya4el/orch-it#7 until 2026-11-30", "ticket_closed", "Rasslabsya4el/orch-it#7"),
+    ("Parked: ticket_closed acme-x/widgets-y#7 until 2026-11-30", "ticket_closed", "acme-x/widgets-y#7"),
     ("Parked: date 2026-11-20 until 2026-11-21", "date", "2026-11-20"),
     ("Parked: run_ended 18865432101 until 2026-11-30", "run_ended", "18865432101"),
     ("Parked: run_ended 019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b until 2026-11-30", "run_ended",
