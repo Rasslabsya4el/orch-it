@@ -189,6 +189,53 @@ def scripted_gh(asked, *, run_conclusion="failure", jobs=(STARTED, NOT_STARTED),
     return scripted
 
 
+def scripted_runs(asked, listed):
+    """A scripted `gh` whose workflow 1 lists `listed`, newest first, as (run_id, conclusion, jobs, ended); each run's
+    jobs are the ones given for it. Workflow 2 has no run. `asked` collects the text of every runs or jobs call."""
+
+    def scripted(args):
+        text = " ".join(args)
+        if args == ["api", f"repos/{REPO}"]:
+            return json.dumps({"default_branch": "main", "private": False})
+        if "actions/workflows?" in text:
+            return json.dumps({"total_count": 2, "workflows": [
+                {"id": 1, "name": "example-flow", "path": FLOW_PATH},
+                {"id": 2, "name": None, "path": X_PATH}]})
+        if "actions/workflows/1/runs?" in text:
+            asked.append(text)
+            return json.dumps({"total_count": len(listed), "workflow_runs": [
+                {"id": run_id, "status": "completed", "conclusion": conclusion, "updated_at": ended,
+                 "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
+                for run_id, conclusion, _, ended in listed]})
+        if "actions/workflows/2/runs?" in text:
+            return json.dumps({"total_count": 0, "workflow_runs": []})
+        for run_id, _, jobs, _ in listed:
+            if f"actions/runs/{run_id}/jobs" in text:
+                asked.append(text)
+                return json.dumps({"total_count": len(jobs), "jobs": list(jobs)})
+        raise AssertionError(f"no answer for {args}")
+
+    return scripted
+
+
+def test_the_real_hub_reads_past_a_replaced_newest_run_to_the_success_run_under_it():
+    success = {"started_at": "2026-10-28T08:59:00Z", "conclusion": "success"}
+    hub = GhPullHub(gh=scripted_runs([], [
+        (4118, "cancelled", (NOT_STARTED,), "2026-10-28T10:00:00Z"),
+        (4117, "success", (success,), "2026-10-28T09:00:00Z")]))
+    assert hub.latest_workflow_runs(REPO) == [
+        watch.WorkflowRun(FLOW_PATH, 4117, f"https://github.com/{REPO}/actions/runs/4117",
+                          "2026-10-28T09:00:00Z", "success", 1)]
+
+
+def test_the_real_hub_leaves_out_a_workflow_whose_ten_newest_runs_were_all_replaced():
+    listed = [(4100 + i, "cancelled", (NOT_STARTED,), f"2026-10-28T10:{i:02d}:00Z") for i in range(10)]
+    hub = GhPullHub(gh=scripted_runs([], listed))
+    latest = hub.latest_workflow_runs(REPO)
+    assert latest == []
+    assert watch.decide(latest, [], skip=frozenset()) == []
+
+
 def test_the_real_hub_reads_the_listed_workflows_their_latest_run_and_the_watch_tickets():
     asked = []
     hub = GhPullHub(gh=scripted_gh(asked))

@@ -84,9 +84,12 @@ Action = Open | Comment | Close
 
 def skipped(run: WorkflowRun) -> bool:
     """A run GitHub skipped by its `if:`: its conclusion is `skipped`, or no job of it started and every job of
-    it was skipped with no non-green conclusion. Neither green nor non-green; the watch looks past it."""
+    it was skipped with no non-green conclusion. A run replaced: GitHub cancelled it before any job of it started
+    (a newer run took its place in the concurrency queue), so its conclusion is `cancelled` with no job started.
+    Neither green nor non-green; the watch looks past it."""
 
-    return run.outcome == "skipped" or (run.outcome not in NON_GREEN and run.jobs_started == 0 and run.jobs_skipped > 0)
+    return (run.outcome == "skipped" or (run.outcome not in NON_GREEN and run.jobs_started == 0 and run.jobs_skipped > 0)
+            or (run.outcome == "cancelled" and run.jobs_started == 0))
 
 
 def non_green(run: WorkflowRun) -> bool:
