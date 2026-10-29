@@ -6,8 +6,11 @@ name: follow
 # `tests` run follows the open pull requests whose head is the run's commit: a pull request with a
 # ready mark and no auto-merge on a base that requires no check (#424) is merged there once its
 # checks are green, and nothing else fires when they turn green. The workflow's token closes,
-# labels, comments and merges, and nothing downstream needs to start from what it writes. Not a required
-# check. The events it writes stay in the run's own store and are uploaded as an artifact, which
+# labels, comments and merges, and nothing downstream needs to start from what it writes. Known limits: a
+# merge made with GITHUB_TOKEN starts no workflow, so a `push` run of `tests` / `main-check` does not fire
+# for a merge the follow makes on a base with no required checks (a known limit of that class of base); and
+# the concurrency group below may drop a waiting `workflow_run` follow for a newer one, which the hourly
+# `reconcile` then picks up. Not a required check. The events it writes stay in the run's own store and are uploaded as an artifact, which
 # `reconcile` on the machine brings into the machine's store.
 on:
   pull_request:

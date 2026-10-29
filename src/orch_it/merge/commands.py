@@ -179,7 +179,8 @@ def _follow(args, store_of, repo_of, now: datetime) -> str:
     lines = []
     for number in numbers:
         done = follow(hub, store_of(), repo, number, base=args.base, settings=MergeSettings.from_settings(raw, repo),
-                      now=now, role=args.role, required=required_jobs(raw), owner=owner_login(raw))
+                      now=now, role=args.role, required=required_jobs(raw), owner=owner_login(raw),
+                      merge=args.pr is None)  # only the workflow's `--event` merges; a bare `follow <pr>` never does
         ticket = f"#{done.ticket}" if done.ticket else "-"
         said = f"#{done.pr} {done.outcome} ticket={ticket} {done.detail}".rstrip()
         lines.append(said + (" merged_by_follow" if done.merged_by_follow else ""))
