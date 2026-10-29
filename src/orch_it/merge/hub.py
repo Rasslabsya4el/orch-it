@@ -70,6 +70,10 @@ class MainRun:
 class PullHub(Hub, Protocol):
     def pull(self, repo: str, number: int) -> Pull | None: ...
 
+    def rate_limit(self) -> tuple[int, int] | None:
+        """The account's core request budget GitHub reports now: (remaining, limit); None when it cannot be read
+        (a poller then keeps its interval, #414 decision 9)."""
+
     def open_pulls(self, repo: str, base: str) -> list[Pull]:
         """Every open pull request into `base`, drafts and forks too, oldest first."""
 

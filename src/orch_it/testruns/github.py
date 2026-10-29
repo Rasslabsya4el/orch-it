@@ -51,6 +51,7 @@ from pathlib import Path
 from orch_it import settings
 from orch_it.events import schema
 from orch_it.events.ids import import_id
+from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns import outcome
 
@@ -108,7 +109,17 @@ class ImportReport:
 
 
 def run_gh(args: list[str]) -> str:
-    """The default `gh` runner: `gh <args>` bounded by a timeout, its stdout as text."""
+    """The default `gh` runner: `_call_gh`, then the call counted in the store (#414 decision 9) whatever its outcome.
+    The count is written after the call and never fails it."""
+
+    try:
+        return _call_gh(args)
+    finally:
+        github_budget.count_call(github_budget.repo_of(args))
+
+
+def _call_gh(args: list[str]) -> str:
+    """`gh <args>` bounded by a timeout, its stdout as text."""
 
     if args[:1] == ["run"]:
         timeout = DOWNLOAD_TIMEOUT_S
