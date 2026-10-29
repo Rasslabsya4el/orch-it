@@ -37,4 +37,3 @@ def test_the_exceptions_list_is_in_the_repo_and_every_entry_has_its_reason():
     listed = exceptions.load_exceptions(ROOT / exceptions.FILE_NAME)  # raises for an entry with no reason
 
     assert listed.entries
-    assert all(entry.reason for entry in listed.entries)
