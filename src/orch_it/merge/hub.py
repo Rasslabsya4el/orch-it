@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun
 from orch_it.tickets.hub import Comment, Hub
 
 PENDING, PASSED, FAILED, NO_RESULT = "pending", "passed", "failed", "no_result"
@@ -120,6 +121,15 @@ class PullHub(Hub, Protocol):
 
     def close_issue(self, repo: str, number: int, reason: str) -> None:
         """Close an issue as `completed` or `not_planned`."""
+
+    def latest_workflow_runs(self, repo: str) -> list[WorkflowRun]:
+        """The latest completed run of each workflow GitHub lists; a workflow with none is left out."""
+
+    def workflow_files(self, repo: str) -> dict[str, str]:
+        """Every workflow GitHub lists: its name (its file path when it has none) to its file path."""
+
+    def watch_issues(self, repo: str) -> list[WatchIssue]:
+        """The open `needs-triage` issues that are workflow watch tickets, with the run each last named."""
 
     def actions_enabled(self, repo: str) -> bool: ...
 
