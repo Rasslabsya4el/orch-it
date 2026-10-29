@@ -19,10 +19,11 @@ on:
     types: [edited, closed]
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  actions: write
+  contents: write  # git fetch of a pull request's head, the compare behind it, auto-merge on the pull request
+  pull-requests: write  # read a pull request, its reviews and comments; turn auto-merge on or off
+  issues: write  # comment on, label and close the ticket
+  actions: write  # rerun or cancel a tests run, read its reports and jobs
+  checks: read  # read the check runs of a pull request's head
 
 # one follow at a time in the repo (a pull request event and its ticket's event never race); a
 # follow waiting behind another may be dropped for a newer one, which reads the state as it stands

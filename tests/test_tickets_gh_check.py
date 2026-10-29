@@ -131,7 +131,7 @@ def test_check_github_reads_the_event_file_and_prints_what_it_did(tmp_path, monk
 def test_the_workflow_runs_the_check_on_labeled_and_edited_issues_with_write_access_to_issues_only():
     text = WORKFLOW.read_text("utf-8")
     assert re.search(r"issues:\s*\n\s*types:\s*\[labeled, edited\]", text)
-    assert re.search(r"permissions:\s*\n\s*issues: write\s*\n\s*contents: read", text)
+    assert re.search(r"permissions:\s*\n\s*issues: write[^\n]*\n\s*contents: read", text)
     assert "python -m orch_it tickets check-github --event \"$GITHUB_EVENT_PATH\"" in text
     assert "ready-for-agent" in text  # the job starts only for the ready label or a ready ticket's edit
     assert "linux:" not in text and "windows:" not in text  # never a second job of the required names

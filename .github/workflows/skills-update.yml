@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
-  issues: write
+  contents: read  # check out the code
+  issues: write  # keep one issue per upstream commit, and the labels it carries
 
 jobs:
   update:
