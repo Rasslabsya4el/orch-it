@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 import pytest
+from orch_it.testruns.junit import MARKER_PROPERTY
 
 
 @pytest.fixture(autouse=True)
@@ -42,5 +43,5 @@ def pytest_collection_modifyitems(items):
     of the report alone, the nightly's unmarked-failure check (#414 unit 4), sees which failures the marker covers."""
 
     for item in items:
-        if item.get_closest_marker("os_touching") is not None:
-            item.user_properties.append(("os_touching", "1"))
+        if item.get_closest_marker(MARKER_PROPERTY) is not None:  # the pytest marker and the report property share a name
+            item.user_properties.append((MARKER_PROPERTY, "1"))

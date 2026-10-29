@@ -43,7 +43,6 @@ def _default_required_checks() -> tuple[str, ...]:
 
 
 DEFAULT_REQUIRED_CHECKS = _default_required_checks()
-WINDOWS_THIN_KEYS = ("windows_check", "windows_os", "windows_change_minutes", "windows_change_runs", "windows_slowest_listed")
 
 
 def required_checks(raw: dict, repo: str) -> tuple[str, ...]:
@@ -77,7 +76,7 @@ class WindowsThin:
 
 
 def windows_thin(raw: dict, repo: str) -> WindowsThin:
-    """The settings of the thin Windows job: each of `WINDOWS_THIN_KEYS` from the settings (a repo's own section
+    """The settings of the thin Windows job: each of its five keys from the settings (a repo's own section
     overriding the top level), else its default in `defaults.json`. A value of the wrong shape raises
     `SettingsError("bad_setting")` naming the key."""
 
