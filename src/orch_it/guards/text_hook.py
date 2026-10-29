@@ -68,6 +68,18 @@ class Hit:
     line: int
 
 
+GH_SECONDS = 5  # the bound of the hook's `gh api user`: a login that is not read in time is a value not checked
+
+
+def _bounded_run(cmd: list[str]) -> str:
+    """The output of `cmd` as `values.default_run` gives it, with `gh` bounded to `GH_SECONDS` in this hook (the
+    default bound for every other command)."""
+
+    from orch_it.guards.values import COMMAND_SECONDS, default_run
+
+    return default_run(cmd, timeout=GH_SECONDS if cmd[:1] == ["gh"] else COMMAND_SECONDS)
+
+
 def repo_roots(folder: str | None) -> tuple[str, ...]:
     """The roots of the repo around `folder`: its worktrees and its common git folder; `()` outside a repo."""
 
@@ -86,7 +98,7 @@ def read_context(folder: str | None) -> Context:
     work = folder or os.getcwd()
     roots = repo_roots(work)
     # git lists the main checkout first, before the linked worktrees and the common folder
-    return Context(values=read_values(), job_names=read_job_names(str(Path(work) / ".github" / "workflows")),
+    return Context(values=read_values(run=_bounded_run), job_names=read_job_names(str(Path(work) / ".github" / "workflows")),
                    roots=roots, repo=roots[0] if roots else "")
 
 

@@ -324,6 +324,24 @@ def test_the_hook_entry_point_prints_the_deny_when_the_check_cannot_run(monkeypa
     assert "pip install" in out["permissionDecisionReason"]
 
 
+def test_the_hook_bounds_the_gh_login_read_to_five_seconds_and_the_git_reads_to_the_default(monkeypatch):
+    import subprocess
+
+    from orch_it.guards import values
+
+    seconds = []
+
+    def fake_run(cmd, **kwargs):
+        seconds.append(kwargs["timeout"])
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(values.subprocess, "run", fake_run)
+    text_hook._bounded_run(["gh", "api", "user", "--jq", ".login"])
+    text_hook._bounded_run(["git", "config", "user.email"])
+    assert seconds == [5, values.COMMAND_SECONDS]
+    assert text_hook.GH_SECONDS == 5
+
+
 def test_the_hook_entry_point_prints_nothing_for_a_clean_call(capsys):
     assert text_hook.main(call("Agent", {"prompt": "fix the parser"})) == 0
     assert capsys.readouterr().out == ""
