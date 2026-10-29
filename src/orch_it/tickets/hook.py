@@ -267,7 +267,7 @@ class _Call:
                                                   checks=_checks(here, memo))
                 for violation in found:
                     refuse(violation.code, violation.rule)
-            return codes, lines, repo or repo_of(here)
+            return list(dict.fromkeys(codes)), lines, repo or repo_of(here)
         if PARKED_LABEL in labels | unlabels:
             refuse("park_by_hand", "the `parked` label is set and taken off only by `tickets park` and `unpark`")
         needs_ticket = body is not None or READY_LABEL in labels

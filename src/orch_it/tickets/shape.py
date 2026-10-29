@@ -13,14 +13,15 @@ import re
 from dataclasses import dataclass
 
 from orch_it.guards.kinds import find_in_ticket_text
+from orch_it.shipped import RULE_FIRST_SENTENCE
 from orch_it.guards.values import Values, find_in
 from orch_it.tickets.model import HUMAN_FIELDS, Ticket, none_reason
 
 TITLE_MAX = 80
 WEIGHT_RANGE = range(1, 11)
-# the first sentence of CODING_STANDARDS.md, word for word: a finding cites it by that sentence
-LITERAL_RULE = ("A value that differs per repo, account, machine or OS is a setting with its default, never a literal "
-                "in code, tests, rules or tickets.")
+# the first sentence of CODING_STANDARDS.md, word for word: a finding cites it by that sentence (the one copy of
+# it is the shipped package's)
+LITERAL_RULE = RULE_FIRST_SENTENCE
 # the literal findings of a body (rule 3 of the check, #413 unit 6); not shape rules, so not in `RULES`
 LITERAL_RULES: dict[str, str] = {"literal_value": LITERAL_RULE, "literal_pattern": LITERAL_RULE}
 
