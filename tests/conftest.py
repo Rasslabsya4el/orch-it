@@ -35,3 +35,12 @@ def templates(tmp_path_factory):
     from repo_templates import Templates
 
     return Templates(tmp_path_factory.getbasetemp())
+
+
+def pytest_collection_modifyitems(items):
+    """A test carrying the `os_touching` marker says so in its JUnit report (a `<property>` of its case), so a reader
+    of the report alone, the nightly's unmarked-failure check (#414 unit 4), sees which failures the marker covers."""
+
+    for item in items:
+        if item.get_closest_marker("os_touching") is not None:
+            item.user_properties.append(("os_touching", "1"))
