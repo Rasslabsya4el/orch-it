@@ -134,12 +134,13 @@ def test_a_literal_and_a_shape_violation_are_reported_together_in_one_refusal(re
 def test_the_refusal_ends_with_the_not_checked_line_when_a_kind_has_no_value(repo):
     no_email = values_from({k: v for k, v in ANSWERS.items() if k != ("git", "config", "user.email")})
     refused = judge_create(repo, body_with(LINES["account"][0]), values=no_email)
-    assert refused.message.splitlines()[-1] == "not checked: git_email (not set)"
+    # the setting is `ru` here (pytestmark): the line is the shipped table's, the words of guards/values.py's table
+    assert refused.message.splitlines()[-1] == "не проверено: git_email (не задано)"
 
 
 def test_a_clean_refusal_of_the_body_without_values_carries_no_not_checked_line(repo):
     refused = judge_create(repo, body_with(LINES["account"][0]))
-    assert "not checked" not in refused.message
+    assert "не проверено" not in refused.message
 
 
 # GitHub: the run's own environment gives the values; nothing of this machine is read
@@ -168,8 +169,8 @@ def test_a_ready_issue_edited_to_hold_a_value_of_the_run_loses_ready_and_gets_th
     [said] = hub.notes[(REPO, 1)]
     assert LAYER_MARK in said.body and "`literal_value`" in said.body
     # this run's environment names no host, user, git identity or projects folder: each is said, never clean
-    assert said.body.splitlines()[-1] == ("not checked: host (not set), user (not set), projects_folder (not set), "
-                                          "git_name (not set), git_email (not set)")
+    assert said.body.splitlines()[-1] == ("не проверено: host (не задано), user (не задано), projects_folder (не задано), "
+                                          "git_name (не задано), git_email (не задано)")
 
 
 def test_a_clean_ready_issue_on_github_keeps_its_label_and_gets_no_comment(repo):

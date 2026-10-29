@@ -14,7 +14,7 @@ never a literal. `Patterns.of_machine` and `Patterns.of_run` read the setup's va
 and the pattern kinds of `kinds.py` (bare python, a one-OS call, a check name) go through
 `Patterns.find_in_file`, beside the line rules above. It judges the text of a whole file (a
 pattern kind needs the lines around the one added) and leaves out the allowed places and the
-exceptions list. A hit of those kinds is cited with `RULE`, and
+exceptions list. A hit of those kinds is cited with the table's `coding_rule` (`cited`), and
 `Patterns.not_checked_line` names the kinds the setup lacked.
 """
 
@@ -34,7 +34,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from orch_it import settings
+from orch_it import language, settings
 from orch_it.guards import exceptions as exceptions_list
 from orch_it.guards import kinds as pattern_kinds
 from orch_it.guards import values as setup_values
@@ -43,7 +43,8 @@ KINDS = ("home_path", "host_name", "github_token", "anthropic_key", "openai_key"
          "private_key", "email", "private_word")
 # the kinds of `find_in_file`, beside the nine of `KINDS`
 FILE_KINDS = (*setup_values.KINDS, *pattern_kinds.KINDS)
-# the first sentence of CODING_STANDARDS.md, word for word: every finding of a value that varies cites it
+# the first sentence of CODING_STANDARDS.md, word for word, in English: the reference the tests hold the en table's
+# `coding_rule` and the standard to; no printer reads it, `cited` and `coding_rule` read the sentence from the setting's table
 RULE = ("A value that differs per repo, account, machine or OS is a setting with its default, never a literal"
         " in code, tests, rules or tickets.")
 # the setup's own values `find` matches in every line, path, message and author
@@ -309,10 +310,20 @@ class Patterns:
         return "".join(out) + text[end:]
 
 
-def cited(kind: str) -> str:
-    """The text a line naming a hit of `kind` ends with: the rule, for a kind it judges, else nothing."""
+def coding_rule() -> str:
+    """The rule a finding is cited with, in the setting's language (the table's `coding_rule`). It is read from the
+    table on each call, so a printer of many hits takes it once and passes it to `cited`."""
 
-    return f" - {RULE}" if kind in RULE_KINDS else ""
+    return language.text_or_refusal("coding_rule")
+
+
+def cited(kind: str, rule: str | None = None) -> str:
+    """The text a line naming a hit of `kind` ends with: the rule, for a kind it judges, else nothing. `rule` is
+    what `coding_rule()` gave, when the printer took it already; left out, it is read here."""
+
+    if kind not in RULE_KINDS:
+        return ""
+    return f" - {coding_rule() if rule is None else rule}"
 
 
 def _git_in(work_tree: Path):

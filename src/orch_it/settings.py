@@ -27,6 +27,11 @@ class SettingsError(ValueError):
         super().__init__(f"{code}: {detail}" if detail else code)
 
 
+class HumanLanguageError(SettingsError):
+    """`human_language` with no language code or no table: `bad_setting`, the one named bad setting the tickets
+    hook refuses instead of failing open (D4 amd 2). Every other settings error keeps failing open."""
+
+
 def data_folder() -> Path:
     """The per-user data folder of orch-it on this OS (#393 decision 3)."""
 
@@ -200,10 +205,10 @@ def human_language() -> str:
 
     chosen = load().get("human_language", "en")
     if not isinstance(chosen, str) or not _LANGUAGE.fullmatch(chosen):
-        raise SettingsError("bad_setting", f"human_language: {chosen!r} is no language code")
+        raise HumanLanguageError("bad_setting", f"human_language: {chosen!r} is no language code")
     if table_path(chosen) is None:
         expected = " or ".join(str(folder / f"{chosen}.toml") for folder in language_tables_dirs())
-        raise SettingsError("bad_setting", f"human_language: no table for {chosen!r} (expected {expected})")
+        raise HumanLanguageError("bad_setting", f"human_language: no table for {chosen!r} (expected {expected})")
     return chosen
 
 

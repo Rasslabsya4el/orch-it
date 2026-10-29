@@ -36,6 +36,7 @@ _TICKET_COMMAND = re.compile(
 # (b) an OS-only call, and the OS test that guards it
 _OS_CALL = re.compile(
     r"\b(?:ctypes\.windll|os\.startfile|os\.getuid|os\.fork)\b"
+    r"|\b(?i:taskkill|tskill|Stop-Process|wmic)\b"  # the Windows-only process tools, any casing (CODING_STANDARDS.md kind 4)
     r"|\b(?:winreg|msvcrt|fcntl|termios)\b(?!\s*=[^=])"  # a bare name bound by `msvcrt = None` is no use of it
 )
 _OS_TEST = re.compile(r"\s*(?:if|elif)\s.*\b(?:sys\.platform|os\.name|platform\.system\()")
