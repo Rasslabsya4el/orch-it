@@ -2,6 +2,8 @@
 newer one, give each skill one class: `same`, `added`, `renamed`, `removed`, `text_changed` or
 `contract_changed`."""
 
+import time
+
 from orch_it.skills.classify import classify
 
 
@@ -260,14 +262,43 @@ def test_a_longer_fence_holding_a_shorter_one_does_not_hide_the_headings_after_i
     assert one(inline, inline.replace("one", "two")) == ("contract_changed", ["section Inputs"])
 
 
+def adversarial(lines: int, width: int) -> tuple[str, str]:
+    """A text of `lines` repeated lines and a heading `width` spaces wide, each with one more line added."""
+
+    many = NOTES + "\n" + "\n".join("the Skill tool and more words" for _ in range(lines)) + "\n"
+    wide = NOTES + "\n## a" + " " * width + "x\n"
+    return many, wide
+
+
+def least_time(clock, old: str, new: str, repeat: int) -> float:
+    """The least time, on `clock`, of `repeat` reads of the change `old` -> `new`: the least of a few reads, so a
+    read that waited for a core on a shared machine does not count (#421 unit 10)."""
+
+    best = float("inf")
+    for _ in range(repeat):
+        start = clock()
+        one(old, new)
+        best = min(best, clock() - start)
+    return best
+
+
 def test_long_adversarial_text_is_read_in_bounded_time():
-    import time
-    many = NOTES + "\n" + "\n".join("the Skill tool and more words" for _ in range(20_000)) + "\n"
-    wide = NOTES + "\n## a" + " " * 40_000 + "x\n"
-    start = time.perf_counter()
-    one(many, many + "x\n")
-    one(wide, wide + "x\n")
-    assert time.perf_counter() - start < 5
+    """The bound is the growth, not a number of seconds (#421 unit 10: 5 s failed on a shared core): a read that
+    is linear in the text takes about ten times as long for ten times the text (10.5 on Windows, measured), a
+    quadratic one about a hundred times. Each of the two reads is bounded on its own: the long many-line text and
+    the long wide heading each must stay under 30 times the same read of the text one tenth as long. Both sizes of
+    a read take the least of the same number of reads."""
+
+    long_many, long_wide = adversarial(20_000, 40_000)
+    short_many, short_wide = adversarial(2_000, 4_000)
+    # a many-line read is about 0.2 s at 2,000 lines: CPU time (process_time) sits far above its 15.6 ms tick
+    many_long = least_time(time.process_time, long_many, long_many + "x\n", 2)
+    many_short = least_time(time.process_time, short_many, short_many + "x\n", 2)
+    assert many_long < 30 * many_short, (many_long, many_short)
+    # a wide read is about 0.1 ms at 4,000 characters, below the process_time tick, so it is timed with perf_counter
+    wide_long = least_time(time.perf_counter, long_wide, long_wide + "x\n", 20)
+    wide_short = least_time(time.perf_counter, short_wide, short_wide + "x\n", 20)
+    assert wide_long < 30 * wide_short, (wide_long, wide_short)
 
 
 def test_a_heading_with_a_verb_of_writing_is_no_contract_section():
