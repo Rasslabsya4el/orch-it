@@ -21,7 +21,6 @@ from orch_it import identity, settings
 from orch_it.cli import DEFAULT_REPO, main
 from orch_it.skills import update
 from orch_it.testruns import remote
-from repo_templates import templates
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 LOGIN = "example-user"

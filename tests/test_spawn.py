@@ -13,7 +13,7 @@ import pytest
 from orch_it.events.store import Store
 from orch_it.roles import RoleSet
 from orch_it.roles.spawn import SpawnRefused, SpawnRequest, spawn
-from repo_templates import empty_repo, templates
+from repo_templates import empty_repo
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # #380's per-role findings: the inputs each spawned role needs (decision 1, decision 3)

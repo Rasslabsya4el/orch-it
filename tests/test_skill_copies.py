@@ -10,7 +10,6 @@ import pytest
 
 from orch_it.skills import copies
 from orch_it.skills.copies import Manifest, SkillsError
-from repo_templates import templates
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 UPSTREAM = "https://github.com/mattpocock/skills"

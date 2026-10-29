@@ -12,7 +12,7 @@ import pytest
 from orch_it.cli import main
 from orch_it.events.store import Store
 from orch_it.guards import install
-from repo_templates import clone_of, templates
+from repo_templates import clone_of
 from scan_repos import NO_WINDOW
 
 CLAUDE_SETTINGS = {"hooks": {"PreToolUse": [{"matcher": "Bash|PowerShell", "hooks": [

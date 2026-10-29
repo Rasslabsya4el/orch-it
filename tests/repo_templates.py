@@ -12,14 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from scan_repos import NO_WINDOW, Repo
-
-
-@pytest.fixture(scope="session")
-def templates(tmp_path_factory):
-    return Templates(tmp_path_factory.getbasetemp())
 
 
 class Templates:
