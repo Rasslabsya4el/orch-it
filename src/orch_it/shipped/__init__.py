@@ -1,4 +1,4 @@
-"""The instructions every agent in a repo gets, shipped with the package (#410 unit 1).
+"""The instructions every agent in a repo gets, shipped with the package.
 
 `CLAUDE.md` and `CODING_STANDARDS.md` in this folder hold the rule that a value differing per repo,
 account, machine or OS is a setting with its default, never a literal. The repo's root `CLAUDE.md`
@@ -15,7 +15,6 @@ RULE_FIRST_SENTENCE = (
     "A value that differs per repo, account, machine or OS is a setting with its default, "
     "never a literal in code, tests, rules or tickets."
 )
-SHIPPED_DIR = Path(__file__).resolve().parent
 SHIPPED_REL = Path("src/orch_it/shipped")
 IMPORT_LINE = "@src/orch_it/shipped/CLAUDE.md"
 

@@ -2,7 +2,17 @@
 
 A value that differs per repo, account, machine or OS is a setting with its default, never a literal in code, tests, rules or tickets.
 
-A finding cites this standard by its first sentence, word for word. The examples below use invented names only (the account `acme-dev`, the folder `/home/jdoe`, the host `build-box-7`); the one marked Wrong is wrong, the one marked Right is the form to write.
+A finding cites this standard by its first sentence, word for word.
+
+## What is allowed
+
+A literal of one of the seven kinds below is allowed only in the settings file, in records (research, the brain's records, citations in ADRs) and in one exceptions list where each entry carries its reason. A path inside the repo stays allowed. A finding on a literal outside those places is a break of this standard; the reviewer cites the first sentence.
+
+Test data uses invented names only: another account, another repo, a folder with another name, never the owner's. The examples below use the invented account `acme-dev`, the folder `/home/jdoe` and the host `build-box-7`.
+
+Every design answers the question "and on a second machine, under another account, on another OS?" before it is written.
+
+The seven kinds, each with a Wrong and a Right example; the one marked Wrong is wrong, the one marked Right is the form to write.
 
 ## 1. An account, owner or repo name
 

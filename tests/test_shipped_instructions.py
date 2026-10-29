@@ -1,4 +1,4 @@
-"""The shipped instructions (#410 unit 1): the rule that no per-repo, per-account, per-machine or per-OS
+"""The shipped instructions: the rule that no per-repo, per-account, per-machine or per-OS
 value is a literal lives in `src/orch_it/shipped/` and is pulled into the repo's root `CLAUDE.md` by
 an import line; the root `CODING_STANDARDS.md` is a byte copy of the shipped one, because the
 reviewer's Read tool does not follow import lines. `problems` is what keeps those copies honest.
