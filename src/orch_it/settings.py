@@ -10,6 +10,7 @@ import contextlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -198,12 +199,58 @@ def table_path(language: str) -> Path | None:
     return next((p for folder in language_tables_dirs() if (p := folder / f"{language}.toml").is_file()), None)
 
 
-def human_language() -> str:
-    """The language of text written to a human: the setting `human_language`, default `en`. A value
-    with no table (`<language>.toml` in a folder of `language_tables_dirs`) is `bad_setting` naming
-    the files looked for: no other language is written instead."""
+TREE_SETTINGS = "settings.json"  # the settings file a work tree carries at its root (its one name and format)
+GIT_SECONDS = 30  # a git call that takes longer says no work tree: the language then reads English
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-    chosen = load().get("human_language", "en")
+
+def tree_settings(root: Path) -> dict | None:
+    """The settings file a work tree carries at its root, parsed; None when it has none. A file that is
+    no JSON object raises `SettingsError`, as the installation's does. The one reader of that file: the
+    required checks (`research.names`) and the language read it through here."""
+
+    path = Path(root) / TREE_SETTINGS
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text("utf-8-sig"))
+    except (OSError, ValueError) as e:
+        raise SettingsError("settings_unreadable", f"{path}: {e}") from None
+    if not isinstance(raw, dict):
+        raise SettingsError("settings_unreadable", f"{path}: not an object")
+    return raw
+
+
+def _work_tree_of_cwd() -> Path | None:
+    """The top level of the git work tree around the current folder; None when there is none or git cannot say."""
+
+    try:
+        done = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=GIT_SECONDS,
+                              stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    top = done.stdout.strip()
+    return Path(top) if done.returncode == 0 and top else None
+
+
+def human_language(work_tree: Path | None = None) -> str:
+    """The language of text written to a human: the `human_language` of the `settings.json` at the root of the
+    git work tree (`work_tree`, else the tree around the current folder), `en` when there is no such tree, no such
+    file or no such key. The installation file never sets it: a `human_language` there is `bad_setting`, naming
+    the tree file the value moves to (D4 amd 2). A value with no table (`<language>.toml` in a folder of
+    `language_tables_dirs`) is `bad_setting` naming the files looked for: no other language is written instead."""
+
+    installation = load()
+    tree = Path(work_tree) if work_tree is not None else _work_tree_of_cwd()
+    if "human_language" in installation:
+        where = str(tree / TREE_SETTINGS) if tree is not None else f"the {TREE_SETTINGS} of the git work tree"
+        raise HumanLanguageError(
+            "bad_setting", f"human_language: {installation['human_language']!r} is set in the installation file; "
+                           f"move it to {where}")
+    if tree is None:
+        return "en"
+    chosen = (tree_settings(tree) or {}).get("human_language", "en")
     if not isinstance(chosen, str) or not _LANGUAGE.fullmatch(chosen):
         raise HumanLanguageError("bad_setting", f"human_language: {chosen!r} is no language code")
     if table_path(chosen) is None:

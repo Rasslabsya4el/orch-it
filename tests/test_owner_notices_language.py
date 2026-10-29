@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from language_tree import git_tree, write_language
 from orch_it import settings
 from orch_it.merge import red_main
 from orch_it.merge import workflow_watch as watch
@@ -151,11 +152,12 @@ def language_of(tmp_path, monkeypatch):
             lines = [f"{key} = {json.dumps(DE.get(key, value), ensure_ascii=False)}\n" for key, value in en.items()]
             (folder / "de.toml").write_text("".join(lines), "utf-8")
             values["language_tables_dir"] = str(folder)
-        if language != "unset":
-            values["human_language"] = language
         path = tmp_path / "settings.json"
         path.write_text(json.dumps(values), "utf-8")
         monkeypatch.setenv("ORCH_IT_SETTINGS", str(path))
+        tree = git_tree(tmp_path / "tree")  # the language is the tree file's, read from the cwd (#453 unit 1)
+        monkeypatch.chdir(tree)
+        write_language(tree, None if language == "unset" else language)
 
     return set_language
 
