@@ -201,7 +201,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         if nightly == "true":
             expected += ["suite/test_marks.py::test_live", "suite/test_marks.py::test_slow",
                          "suite/test_marks.py::test_slow_serial"]
-        if job == "windows" and nightly == "false":  # the Windows change run takes only the marked tests (#414 unit 4)
+        if job == WINDOWS_CHECK and nightly == "false":  # the Windows change run takes only the marked tests (#414 unit 4)
             expected = ["suite/test_marks.py::test_touching"]
         assert sorted(ids) == sorted(expected), job
         assert len(ids) == len(set(ids)), job  # no test runs in both phases

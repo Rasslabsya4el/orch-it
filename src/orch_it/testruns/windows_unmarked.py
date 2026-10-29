@@ -90,7 +90,7 @@ def post_windows_time(store: Store, hub: PullHub, settings: dict) -> WindowsTime
 
     repo = settings["repo"]
     thin = windows_thin(settings, repo)
-    timed = _change_runs(store, repo)[:thin.runs]
+    timed = _change_runs(store, repo, thin.os)[:thin.runs]
     if thin.runs < 1 or len(timed) < thin.runs:
         return WindowsTime([run for run, _ in timed], None, False, [])
     median = statistics.median(minutes for _, minutes in timed)
@@ -111,13 +111,13 @@ def post_windows_time(store: Store, hub: PullHub, settings: dict) -> WindowsTime
     return WindowsTime(runs, median, True, slowest, ticket.number)
 
 
-def _change_runs(store: Store, repo: str) -> list[tuple[str, float]]:
-    """(run, pytest minutes) of the repo's ended passed or failed per-change Windows runs at GitHub, newest end first."""
+def _change_runs(store: Store, repo: str, os_name: str) -> list[tuple[str, float]]:
+    """(run, pytest minutes) of the repo's ended passed or failed per-change runs of `os_name` at GitHub, newest end first."""
 
     per_change = {run for (run,) in store.query(
         "SELECT run FROM events WHERE kind = 'step.started' AND step = 'test_run' AND repo = :repo"
-        " AND place = 'github' AND run_os = 'windows' AND COALESCE(selection, '') != 'nightly'"
-        " AND run IS NOT NULL", {"repo": repo}).rows}
+        " AND place = 'github' AND run_os = :os AND COALESCE(selection, '') != 'nightly'"
+        " AND run IS NOT NULL", {"repo": repo, "os": os_name}).rows}
     ended = {}
     for run, outcome, minutes, at in store.query(
             "SELECT run, outcome, run_minutes, at FROM events WHERE kind = 'step.ended' AND step = 'test_run'"

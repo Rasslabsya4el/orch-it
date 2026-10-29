@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fake_github import REPO, FakeGitHub
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 from orch_it.events.store import Store
 from orch_it.testruns.bound_check import default_bounds, run_bound_check
@@ -15,8 +16,8 @@ from orch_it.testruns.bound_check import default_bounds, run_bound_check
 NOW = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 SETTINGS = {"repo": REPO}
 DEFAULTS = default_bounds()
-LINUX = DEFAULTS["run_minutes"]["linux"]
-WINDOWS = DEFAULTS["run_minutes"]["windows"]
+LINUX = DEFAULTS["run_minutes"][LINUX_CHECK]
+WINDOWS = DEFAULTS["run_minutes"][WINDOWS_CHECK]
 QUEUE = DEFAULTS["queue_minutes"]
 
 
@@ -70,22 +71,22 @@ def triage(hub):
 
 def test_a_median_past_its_bound_opens_one_ticket_with_the_numbers(world):
     hub, store = world
-    plant(store, runs(0, 10, "own", "linux", LINUX + 3))
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX + 3))
     report = run_bound_check(store, hub, SETTINGS)
     assert len(report.opened) == 1 and report.commented == []
     [number] = triage(hub)
     assert number == report.opened[0]
     issue = hub.issues[(REPO, number)]
     assert set(issue.labels) == {"needs-triage"}
-    assert "own" in issue.title and "linux" in issue.title
+    assert "own" in issue.title and LINUX_CHECK in issue.title
     assert f"{LINUX + 3:.1f} min" in issue.body and f"{LINUX:g} min" in issue.body
 
 
 def test_a_second_crossing_comments_on_the_open_ticket_and_opens_none(world):
     hub, store = world
-    plant(store, runs(0, 10, "own", "linux", LINUX + 3))
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX + 3))
     [number] = run_bound_check(store, hub, SETTINGS).opened
-    plant(store, runs(10, 10, "own", "linux", LINUX + 3.5))
+    plant(store, runs(10, 10, "own", LINUX_CHECK, LINUX + 3.5))
     report = run_bound_check(store, hub, SETTINGS)
     assert report.opened == [] and report.commented == [number]
     assert triage(hub) == [number]
@@ -95,7 +96,7 @@ def test_a_second_crossing_comments_on_the_open_ticket_and_opens_none(world):
 
 def test_a_check_with_no_newer_run_says_nothing_again(world):
     hub, store = world
-    plant(store, runs(0, 10, "own", "linux", LINUX + 3))
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX + 3))
     [number] = run_bound_check(store, hub, SETTINGS).opened
     again = run_bound_check(store, hub, SETTINGS)
     assert again.opened == [] and again.commented == []
@@ -104,7 +105,7 @@ def test_a_check_with_no_newer_run_says_nothing_again(world):
 
 def test_a_median_under_the_bound_gives_nothing(world):
     hub, store = world
-    plant(store, runs(0, 10, "own", "linux", LINUX / 2))
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX / 2))
     report = run_bound_check(store, hub, SETTINGS)
     assert report.opened == [] and report.commented == []
     assert triage(hub) == []
@@ -112,28 +113,28 @@ def test_a_median_under_the_bound_gives_nothing(world):
 
 def test_only_the_last_ten_runs_count(world):
     hub, store = world
-    plant(store, runs(0, 10, "own", "linux", LINUX + 3))
-    plant(store, runs(10, 10, "own", "linux", LINUX / 2))
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX + 3))
+    plant(store, runs(10, 10, "own", LINUX_CHECK, LINUX / 2))
     assert run_bound_check(store, hub, SETTINGS).opened == []
 
 
 def test_a_different_os_gets_its_own_ticket_and_its_own_bound(world):
     hub, store = world
-    plant(store, runs(0, 10, "github", "windows", WINDOWS - 1))
+    plant(store, runs(0, 10, "github", WINDOWS_CHECK, WINDOWS - 1))
     assert run_bound_check(store, hub, SETTINGS).opened == []
-    plant(store, runs(0, 10, "own", "linux", LINUX + 3))
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX + 3))
     [linux] = run_bound_check(store, hub, SETTINGS).opened
-    plant(store, runs(10, 10, "github", "windows", WINDOWS + 1))
+    plant(store, runs(10, 10, "github", WINDOWS_CHECK, WINDOWS + 1))
     [windows] = run_bound_check(store, hub, SETTINGS).opened
     assert linux != windows
-    assert "linux" in hub.issues[(REPO, linux)].title
-    assert "windows" in hub.issues[(REPO, windows)].title
+    assert LINUX_CHECK in hub.issues[(REPO, linux)].title
+    assert WINDOWS_CHECK in hub.issues[(REPO, windows)].title
     assert len(triage(hub)) == 2
 
 
 def test_a_github_queue_wait_past_its_bound_opens_a_queue_ticket(world):
     hub, store = world
-    plant(store, runs(0, 10, "github", "linux", LINUX / 2, queue_minutes=QUEUE + 2))
+    plant(store, runs(0, 10, "github", LINUX_CHECK, LINUX / 2, queue_minutes=QUEUE + 2))
     [number] = run_bound_check(store, hub, SETTINGS).opened
     issue = hub.issues[(REPO, number)]
     assert "queue" in issue.title.lower()
@@ -142,8 +143,8 @@ def test_a_github_queue_wait_past_its_bound_opens_a_queue_ticket(world):
 
 def test_the_bounds_come_from_settings_when_given(world):
     hub, store = world
-    plant(store, runs(0, 10, "own", "linux", LINUX + 3))
-    settings = SETTINGS | {"place_bounds": {"run_minutes": {"linux": 20}, "queue_minutes": QUEUE}}
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX + 3))
+    settings = SETTINGS | {"place_bounds": {"run_minutes": {LINUX_CHECK: 20}, "queue_minutes": QUEUE}}
     assert run_bound_check(store, hub, settings).opened == []
     assert triage(hub) == []
 
@@ -151,10 +152,10 @@ def test_the_bounds_come_from_settings_when_given(world):
 @pytest.mark.parametrize("label", ["ready-for-agent", "parked", "needs-info"])
 def test_a_relabelled_open_ticket_is_still_the_one_a_later_crossing_comments_on(world, label):
     hub, store = world
-    plant(store, runs(0, 10, "own", "linux", LINUX + 3))
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX + 3))
     [number] = run_bound_check(store, hub, SETTINGS).opened
     hub.write(REPO, number, hub.issues[(REPO, number)].body, [label])
-    plant(store, runs(10, 10, "own", "linux", LINUX + 3.5))
+    plant(store, runs(10, 10, "own", LINUX_CHECK, LINUX + 3.5))
     report = run_bound_check(store, hub, SETTINGS)
     assert report.opened == [] and report.commented == [number]
     assert [n for (r, n), issue in hub.issues.items() if issue.open] == [number]
@@ -164,11 +165,11 @@ def test_a_relabelled_open_ticket_is_still_the_one_a_later_crossing_comments_on(
 
 def test_a_partial_run_override_keeps_the_other_os_at_its_default(world):
     hub, store = world
-    plant(store, runs(0, 10, "own", "linux", LINUX + 3))
-    plant(store, runs(0, 10, "own", "windows", WINDOWS + 1))
-    settings = SETTINGS | {"place_bounds": {"run_minutes": {"linux": 20}}}
+    plant(store, runs(0, 10, "own", LINUX_CHECK, LINUX + 3))
+    plant(store, runs(0, 10, "own", WINDOWS_CHECK, WINDOWS + 1))
+    settings = SETTINGS | {"place_bounds": {"run_minutes": {LINUX_CHECK: 20}}}
     [windows] = run_bound_check(store, hub, settings).opened
-    assert "windows" in hub.issues[(REPO, windows)].title
+    assert WINDOWS_CHECK in hub.issues[(REPO, windows)].title
     assert f"{WINDOWS:g} min" in hub.issues[(REPO, windows)].body
     assert triage(hub) == [windows]
 
@@ -176,14 +177,14 @@ def test_a_partial_run_override_keeps_the_other_os_at_its_default(world):
 def test_a_median_lifted_across_the_bound_by_slow_runs_opens_one_ticket_then_comments(world):
     hub, store = world
     fast, slow = LINUX - 3, LINUX + 3
-    plant(store, runs(0, 10, "own", "linux", fast))
+    plant(store, runs(0, 10, "own", LINUX_CHECK, fast))
     assert run_bound_check(store, hub, SETTINGS).opened == []
-    plant(store, runs(10, 5, "own", "linux", slow))
+    plant(store, runs(10, 5, "own", LINUX_CHECK, slow))
     assert run_bound_check(store, hub, SETTINGS).opened == []  # 5 slow and 5 fast: the median is the bound itself
-    plant(store, runs(15, 1, "own", "linux", slow))
+    plant(store, runs(15, 1, "own", LINUX_CHECK, slow))
     [number] = run_bound_check(store, hub, SETTINGS).opened
     assert f"{slow:.1f} min" in hub.issues[(REPO, number)].body and f"{LINUX:g} min" in hub.issues[(REPO, number)].body
-    plant(store, runs(16, 1, "own", "linux", slow))
+    plant(store, runs(16, 1, "own", LINUX_CHECK, slow))
     report = run_bound_check(store, hub, SETTINGS)
     assert report.opened == [] and report.commented == [number]
     assert triage(hub) == [number]

@@ -592,8 +592,8 @@ def test_the_results_of_a_run_name_the_job_of_each_report_and_whether_the_case_i
             downloads({"junit-linux-1": JUNIT_OTHER, "junit-windows-1": marked}))
     found = GhPullHub(gh).results(REPO, "9")
     assert [(r.job, r.test_id, r.outcome, r.marked) for r in found] == [
-        ("linux", "tests.t_c::test_win", "failed", False), ("linux", "tests.t_a::test_red", "failed", False),
-        ("windows", "tests.t_w::test_path", "failed", True), ("windows", "tests.t_w::test_plain", "passed", False)]
+        (LINUX_CHECK, "tests.t_c::test_win", "failed", False), (LINUX_CHECK, "tests.t_a::test_red", "failed", False),
+        (WINDOWS_CHECK, "tests.t_w::test_path", "failed", True), (WINDOWS_CHECK, "tests.t_w::test_plain", "passed", False)]
     assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": []}))).results(REPO, "9") is None
 
 

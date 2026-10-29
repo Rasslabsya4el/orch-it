@@ -166,7 +166,7 @@ def at_minute(minute: float) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def windows_run(store, n, minutes, *, selection="full", tests=(), os_name="windows"):
+def windows_run(store, n, minutes, *, selection="full", tests=(), os_name=THIN.os):
     """An ended GitHub test run on `os_name` whose pytest took `minutes`, with a `test.result` per `tests` (id, ms)."""
 
     run = f"gh-{os_name}-{selection}-{n}"
@@ -197,7 +197,7 @@ def test_fewer_than_three_runs_are_no_verdict_and_a_nightly_run_is_not_a_per_cha
     windows_run(store, 0, 9.0)
     windows_run(store, 1, 9.0)
     windows_run(store, 2, 40.0, selection="nightly")
-    windows_run(store, 3, 9.0, os_name="linux")
+    windows_run(store, 3, 9.0, os_name="macos")
     done = post_windows_time(store, hub, SETTINGS)
     assert done.median is None and done.over is False and triage(hub) == []
 

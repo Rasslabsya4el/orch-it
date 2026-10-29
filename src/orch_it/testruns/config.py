@@ -8,7 +8,7 @@ entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1)
 `ssh` arguments such as `["-p", "2222"]`)), `own_capacity` (1) and `github_capacity` (20, GitHub's
 concurrent job cap on a free account), `required_checks` (the names of the checks a merge is held to; default
 in `defaults.json` beside this module, read by `required_checks`), and the thin Windows job's four keys
-(`windows_check`, `windows_change_minutes`, `windows_change_runs`, `windows_slowest_listed`; defaults in the same
+(`windows_check`, `windows_os`, `windows_change_minutes`, `windows_change_runs`, `windows_slowest_listed`; defaults in the same
 file, read by `windows_thin`). A key under `repos.<owner/name>` (any case)
 overrides the same key for that repo.
 A value of the wrong shape (a NUL in a command or `test_env` value, a bound over a week
@@ -43,7 +43,7 @@ def _default_required_checks() -> tuple[str, ...]:
 
 
 DEFAULT_REQUIRED_CHECKS = _default_required_checks()
-WINDOWS_THIN_KEYS = ("windows_check", "windows_change_minutes", "windows_change_runs", "windows_slowest_listed")
+WINDOWS_THIN_KEYS = ("windows_check", "windows_os", "windows_change_minutes", "windows_change_runs", "windows_slowest_listed")
 
 
 def required_checks(raw: dict, repo: str) -> tuple[str, ...]:
@@ -70,6 +70,7 @@ class WindowsThin:
     `slowest` tests."""
 
     check: str
+    os: str  # the `run_os` the store holds for its runs
     change_minutes: float
     runs: int
     slowest: int
@@ -82,10 +83,12 @@ def windows_thin(raw: dict, repo: str) -> WindowsThin:
 
     text = resources.files(__package__).joinpath("defaults.json").read_text("utf-8")
     merged = {**json.loads(text), **raw, **settings.repo_section(raw, repo)}
-    check = merged["windows_check"]
-    if not (isinstance(check, str) and check and check == check.strip()):
-        raise SettingsError("bad_setting", "windows_check")
-    return WindowsThin(check, _positive("windows_change_minutes", merged["windows_change_minutes"]),
+    names = []
+    for key in ("windows_check", "windows_os"):
+        if not (isinstance(merged[key], str) and merged[key] and merged[key] == merged[key].strip()):
+            raise SettingsError("bad_setting", key)
+        names.append(merged[key])
+    return WindowsThin(*names, _positive("windows_change_minutes", merged["windows_change_minutes"]),
                        _count("windows_change_runs", merged["windows_change_runs"]),
                        _count("windows_slowest_listed", merged["windows_slowest_listed"]))
 
