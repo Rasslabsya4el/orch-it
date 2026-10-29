@@ -42,7 +42,7 @@ from orch_it.merge import lock
 from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_event
 from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitError
-from orch_it.merge.line import LineError, holder_of, run_line
+from orch_it.merge.line import holder_of, run_line
 from orch_it.merge.main_check import check_main
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr
@@ -53,7 +53,7 @@ from orch_it.tickets.gh_check import read_event
 from orch_it.tickets.park import ROLE as SCRIPT
 
 GROUPS = ("merge", "pr", "follow", "main", "reconcile")
-ERRORS = (lock.LockError, PrError, FollowError, LineError)
+ERRORS = (lock.LockError, PrError, FollowError)
 
 
 def add_parsers(commands, common: argparse.ArgumentParser) -> None:
