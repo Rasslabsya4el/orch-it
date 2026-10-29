@@ -176,7 +176,7 @@ A guard refusal a human or the brain marks as wrong; counted from the store thro
 _Avoid_: false positive, misfire, bad block
 
 **Finding**:
-One place (file, line, kind) where the scan meets a value of a kind the coding standard refuses, outside an allowed place; a push with a finding is refused, and a ticket body with one breaks a shape rule.
+One place (file, line, kind) where the scan meets a value of a kind the coding standard refuses, outside an allowed place; a push or a ticket with a finding is refused.
 _Avoid_: hit, match, leak
 
 **Exceptions list**:
