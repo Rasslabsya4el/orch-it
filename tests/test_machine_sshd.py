@@ -39,6 +39,9 @@ HANG_GUARD_SECONDS = 240  # a test still going then dumps every thread's stack a
 SSHD_START_TRIES = 10  # ports tried for one sshd: a port taken by another process before sshd binds it is skipped
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 @pytest.fixture(autouse=True)
 def hang_guard():
     faulthandler.dump_traceback_later(HANG_GUARD_SECONDS, exit=True)

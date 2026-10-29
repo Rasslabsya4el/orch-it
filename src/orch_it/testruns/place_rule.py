@@ -59,6 +59,7 @@ class Offered:
     place: str
     expected_minutes: float | None
     dropped: str | None
+    note: str | None = None  # words beside the place: its busy count, or why it is off (`places.Availability`)
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,7 @@ class Decision:
 
         return [{"place": o.place,
                  "expected_minutes": None if o.expected_minutes is None else round(o.expected_minutes, 2),
-                 "dropped": o.dropped} for o in self.offered]
+                 "dropped": o.dropped} | ({"note": o.note} if o.note else {}) for o in self.offered]
 
 
 def _drop(offer: Offer, need_os: str, live: dict[str, int], excluded: dict[str, str]) -> str | None:
@@ -87,13 +88,17 @@ def _drop(offer: Offer, need_os: str, live: dict[str, int], excluded: dict[str, 
 
 
 def choose(need_os: str, places: list[Offer], live: dict[str, int],
-           measured: dict[str, Measured], excluded: dict[str, str] | None = None) -> Decision:
+           measured: dict[str, Measured], excluded: dict[str, str] | None = None,
+           notes: dict[str, str] | None = None) -> Decision:
+    """`notes`: a place's words for the decision (its busy count), kept beside it in `places_offered`."""
+
     excluded = excluded or {}
+    notes = notes or {}
     drops = {o.place: _drop(o, need_os, live, excluded) for o in places}
     left = [o for o in places if drops[o.place] is None]
     every_run = [m for place in measured.values() for m in place.runs]
     if not every_run:
-        offered = tuple(Offered(o.place, None, drops[o.place]) for o in places)
+        offered = tuple(Offered(o.place, None, drops[o.place], notes.get(o.place)) for o in places)
         if not left:
             return Decision(None, None, offered)
         pick = next((o for o in left if o.place == "own"), left[0])
@@ -105,7 +110,7 @@ def choose(need_os: str, places: list[Offer], live: dict[str, int],
         m = measured.get(o.place, Measured())
         start = statistics.median(m.starts) if m.starts else 0.0
         finish[o.place] = start + (statistics.median(m.runs) if m.runs else reference)
-    offered = tuple(Offered(o.place, finish.get(o.place), drops[o.place]) for o in places)
+    offered = tuple(Offered(o.place, finish.get(o.place), drops[o.place], notes.get(o.place)) for o in places)
     if not left:
         return Decision(None, None, offered)
     best = min(left, key=lambda o: round(finish[o.place], TIE_DIGITS))  # min keeps the first of a tie

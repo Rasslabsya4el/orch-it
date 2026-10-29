@@ -158,6 +158,12 @@ class GhHub:
                             f"repos/{repo}/issues?labels={quote(label, safe='')}&state=open&per_page=100"])
         return [_issue(repo, item) for item in items if "pull_request" not in item]
 
+    def open_issues(self, repo: str) -> list[Issue]:
+        """Every open issue of the repo whatever its labels, pull requests left out."""
+
+        items = self._list(["api", "--paginate", f"repos/{repo}/issues?state=open&per_page=100"])
+        return [_issue(repo, item) for item in items if "pull_request" not in item]
+
     def create(self, repo: str, title: str, body: str, labels: list[str]) -> int:
         made = json_values(self._send(["api", "-X", "POST", f"repos/{repo}/issues"],
                                       {"title": title, "body": body, "labels": labels}))
@@ -260,6 +266,23 @@ class GhHub:
             return base64.b64decode(found.get("content") or "").decode("utf-8")
         except (ValueError, UnicodeDecodeError):
             raise GithubError("gh_bad_output", f"{repo}:{path}: not text") from None
+
+    def rate_limit(self) -> tuple[int, int] | None:
+        """The core request budget of the token as GitHub reports it now: (remaining, limit). None when it cannot be
+        read: a poller then keeps its interval (#414 decision 9). Not stored: its call names no repo."""
+
+        try:
+            found = self._object(["api", "rate_limit"])
+        except GithubError:
+            return None
+        resources = found.get("resources")
+        core = resources.get("core") if isinstance(resources, dict) else None
+        if not isinstance(core, dict):
+            return None
+        remaining, limit = core.get("remaining"), core.get("limit")
+        if type(remaining) is not int or type(limit) is not int or limit <= 0:
+            return None
+        return remaining, limit
 
     def _send(self, args: list[str], payload: dict) -> str:
         """A write whose JSON goes in a file of its own, so no text is bounded by a command line;

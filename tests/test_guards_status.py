@@ -16,6 +16,7 @@ from orch_it.guards import install, status
 from orch_it.testruns import github
 from repo_templates import clone_of
 from scan_repos import NO_WINDOW, Repo
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 CLAUDE_SETTINGS = {"hooks": {"PreToolUse": [{"matcher": "Bash|PowerShell", "hooks": [
     {"type": "command", "command": "python -m orch_it hook pre-tool-use"}]}]}}
@@ -23,13 +24,16 @@ FACTS = ("required_checks", "strict", "enforce_admins", "force_push_and_deletion
          "claude_hook")
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def protection(**changes):
     """What `gh api repos/<repo>/branches/main/protection` answers for orch-it's own protection."""
 
     answer = {
-        "required_status_checks": {"strict": True, "contexts": ["linux", "windows"],
-                                   "checks": [{"context": "linux", "app_id": 15368},
-                                              {"context": "windows", "app_id": 15368}]},
+        "required_status_checks": {"strict": True, "contexts": [LINUX_CHECK, WINDOWS_CHECK],
+                                   "checks": [{"context": LINUX_CHECK, "app_id": 15368},
+                                              {"context": WINDOWS_CHECK, "app_id": 15368}]},
         "enforce_admins": {"enabled": True},
         "required_pull_request_reviews": {"required_approving_review_count": 0},
         "allow_force_pushes": {"enabled": False},
@@ -110,7 +114,7 @@ def test_the_protected_repo_writes_three_passed_checks_with_their_facts(installe
     for code, (outcome, findings, facts, target) in written.items():
         assert (outcome, findings, target) == ("passed", [], "o/n"), code
     assert written["branch_protection"][2] == {
-        "required_checks": ["linux", "windows"], "strict": True, "enforce_admins": True,
+        "required_checks": [LINUX_CHECK, WINDOWS_CHECK], "strict": True, "enforce_admins": True,
         "allow_force_pushes": False, "allow_deletions": False}
     assert written["hooks_path"][2] == {"hooks_path": "hooks", "ours": True, "pre_push_file": True}
     assert written["guard_install"][2] == {"pre_push_hook": True, "claude_hook": True}
@@ -138,12 +142,12 @@ def test_a_protection_that_cannot_be_read_is_reported_not_raised(installed, stor
 
 
 @pytest.mark.parametrize("changes, failed, finding", [
-    ({"required_status_checks": {"strict": True, "contexts": ["linux"]}}, "required_checks", "required_checks_wrong"),
-    ({"required_status_checks": {"strict": True, "contexts": ["linux", "windows", "lint"]}},
+    ({"required_status_checks": {"strict": True, "contexts": [LINUX_CHECK]}}, "required_checks", "required_checks_wrong"),
+    ({"required_status_checks": {"strict": True, "contexts": [LINUX_CHECK, WINDOWS_CHECK, "lint"]}},
      "required_checks", "required_checks_wrong"),
-    ({"required_status_checks": {"strict": True, "contexts": [], "checks": [{"context": "linux"}]}},
+    ({"required_status_checks": {"strict": True, "contexts": [], "checks": [{"context": LINUX_CHECK}]}},
      "required_checks", "required_checks_wrong"),
-    ({"required_status_checks": {"strict": False, "contexts": ["linux", "windows"]}}, "strict", "not_strict"),
+    ({"required_status_checks": {"strict": False, "contexts": [LINUX_CHECK, WINDOWS_CHECK]}}, "strict", "not_strict"),
     ({"enforce_admins": {"enabled": False}}, "enforce_admins", "admins_not_enforced"),
     ({"allow_force_pushes": {"enabled": True}}, "force_push_and_deletion_off", "force_push_allowed"),
     ({"allow_deletions": {"enabled": True}}, "force_push_and_deletion_off", "deletion_allowed"),
@@ -157,7 +161,7 @@ def test_each_weakened_protection_fails_its_own_fact_and_only_that_one(installed
 
 def test_the_required_checks_may_be_named_only_by_the_newer_checks_list(installed, store):
     answer = protection(required_status_checks={"strict": True, "contexts": [],
-                                                "checks": [{"context": "windows"}, {"context": "linux"}]})
+                                                "checks": [{"context": WINDOWS_CHECK}, {"context": LINUX_CHECK}]})
     report, _ = run(store, installed, answer)
     assert report.ok is True
 

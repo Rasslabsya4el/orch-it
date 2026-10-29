@@ -20,6 +20,9 @@ SLEEP = [sys.executable, "-c", "import time; time.sleep(30)"]
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def spawn(session_value, argv=SLEEP):
     env = dict(os.environ)
     if session_value is None:

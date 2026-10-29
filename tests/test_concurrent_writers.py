@@ -1,6 +1,7 @@
 """Row 3 of #393: 8 processes writing 1000 events each at once, while the index is refreshed
 under them, leave 8000 events in the index, 0 torn lines and 0 duplicate ids."""
 
+import pytest
 import json
 import subprocess
 import sys
@@ -11,6 +12,9 @@ from orch_it.events.store import Store
 
 WRITERS, EACH = 8, 1000
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 def test_eight_writers_at_once_lose_and_tear_nothing(tmp_path):

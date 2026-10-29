@@ -14,9 +14,9 @@ the pipeline model gives it (`model.js` HOLES):
 | MERGE-8 | nothing runs on main after a merge | main_check.failed: main's run read after every merge | test_merge_8 |
 | MERGE-9 | merged, the ticket stays open | close.no_result: the follow closes it, the sweep what it missed | test_merge_9 |
 | MERGE-10 | `Closes #N`, no closing comment | close.failed: Refs never Closes, the close reads the rows first | test_merge_10 |
-| MERGE-11 | the ticket closed or edited while the PR waits | pr.stopped: auto-merge off | test_merge_11 |
+| MERGE-11 | the ticket closed or edited while the PR waits | pr.stopped: left mark | test_merge_11 |
 | MERGE-12 | a green of an older head | test_run.stopped: every result read for the head sha | test_merge_12 |
-| MERGE-13 | a person's PR comment unread | pr.stopped: auto-merge off, the ticket to the brain | test_merge_13 |
+| MERGE-13 | a person's PR comment unread | pr.stopped: left mark, the ticket to the brain | test_merge_13 |
 | MERGE-14 | a park on a PR closed unmerged | park.failed: the event came the other way, to the brain | test_merge_14 |
 """
 
@@ -38,6 +38,7 @@ from orch_it.merge.pr_open import PrError, open_pr
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
 from orch_it.tickets.reader import read_parks
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 WORKFLOWS = Path(__file__).parents[1] / ".github" / "workflows"
 
@@ -128,7 +129,7 @@ def test_merge_6(tmp_path):  # red only on tests red on main: parked on that tic
 
 def test_merge_7(tmp_path):  # no skip list: what is red on main is read from main's run and its ticket alone
     hub, store, prs = world(tmp_path)
-    hub.main_run(hub.land(), {"linux": FAILED, "windows": PASSED}, failing=["t::flaky"])
+    hub.main_run(hub.land(), {LINUX_CHECK: FAILED, WINDOWS_CHECK: PASSED}, failing=["t::flaky"])
     done = check_main(hub, store, REPO, "main")
     assert done.outcome == "red" and len(done.opened) == 1
     # a pull request red on a test no red-on-main ticket lists is red on its own, whatever its tree says
@@ -147,7 +148,7 @@ def test_merge_8(tmp_path):  # main's run is read after every merge
     assert "push:\n    branches: [main]" in tests  # part 0's run on every push to main, read, not changed
     hub, store, _ = world(tmp_path)
     sha = hub.land(number=57)
-    hub.main_run(sha, {"linux": FAILED, "windows": PASSED}, failing=["t::a"])
+    hub.main_run(sha, {LINUX_CHECK: FAILED, WINDOWS_CHECK: PASSED}, failing=["t::a"])
     [number] = check_main(hub, store, REPO, "main").opened
     assert "#57" in hub.issues[(REPO, number)].body
 
@@ -186,7 +187,7 @@ def test_merge_10(tmp_path):  # Refs never Closes; the close reads the acceptanc
 
 
 @pytest.mark.parametrize("change, outcome", [("closed", "withdrawn"), ("edited", "edited")])
-def test_merge_11(tmp_path, change, outcome):  # the ticket closed or edited while the PR waits: auto-merge off
+def test_merge_11(tmp_path, change, outcome):  # the ticket closed or edited while the PR waits: left mark
     hub, store, prs = world(tmp_path)
     if change == "closed":
         hub.close(10, "not_planned")
@@ -194,7 +195,7 @@ def test_merge_11(tmp_path, change, outcome):  # the ticket closed or edited whi
         issue = hub.issues[(REPO, 10)]
         hub.add(10, issue.body.replace("10115", "10117"), issue.labels)
     assert follow_it(hub, store, prs[10]).outcome == outcome
-    assert hub.pull(REPO, prs[10]).auto_merge is None
+    assert marks.ready_since(hub.comments(REPO, prs[10])) is None
 
 
 def test_merge_12(tmp_path):  # a green of an older head is not the new head's, and nothing merges on it
@@ -208,12 +209,12 @@ def test_merge_12(tmp_path):  # a green of an older head is not the new head's, 
     assert [c for c in hub.calls if c[0] == "merge"] == [] and hub.pull(REPO, prs[10]).state == "open"
 
 
-def test_merge_13(tmp_path):  # a person's PR comment: auto-merge off, the ticket to the brain
+def test_merge_13(tmp_path):  # a person's PR comment: left mark, the ticket to the brain
     hub, store, prs = world(tmp_path)
     hub.later(minutes=1)
     hub.note(prs[10], "Hold this one.", author="a-reviewer")
     assert follow_it(hub, store, prs[10]).outcome == "commented"
-    assert hub.pull(REPO, prs[10]).auto_merge is None and "needs-triage" in labels(hub).labels
+    assert marks.ready_since(hub.comments(REPO, prs[10])) is None and "needs-triage" in labels(hub).labels
 
 
 def test_merge_14(tmp_path):  # a park on a PR closed unmerged: the event the other way, to the brain

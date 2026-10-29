@@ -19,6 +19,9 @@ CLAUDE_SETTINGS = {"hooks": {"PreToolUse": [{"matcher": "Bash|PowerShell", "hook
     {"type": "command", "command": "python -m orch_it hook pre-tool-use"}]}]}}
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))

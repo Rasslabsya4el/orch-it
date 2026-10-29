@@ -27,6 +27,9 @@ SH = shutil.which("sh")
 needs_sh = pytest.mark.skipif(SH is None, reason="no POSIX sh on this machine")
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def words(text: str) -> list[str]:
     return shlex.split(text, posix=True)
 

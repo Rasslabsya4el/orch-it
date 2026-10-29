@@ -7,6 +7,9 @@ import pytest
 from orch_it.guards.triggers import Delete, Move, Stop, actions
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def act(command, tool="Bash", cwd="/work", env=None, windows=False):
     return actions(command, tool=tool, cwd=cwd, env=env or {}, windows=windows)
 

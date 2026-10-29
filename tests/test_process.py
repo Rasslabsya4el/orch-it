@@ -10,6 +10,9 @@ import pytest
 from orch_it.testruns import process
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 class JumpingClock:
     """Wall time that runs at 1 s per call and jumps `jump` seconds once, at call `at_call`."""
 

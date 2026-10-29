@@ -22,10 +22,16 @@ import pytest
 
 from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo, default_host
 
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
+from required_names import LINUX_CHECK, WINDOWS_CHECK
+
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 def without_comments(text: str) -> list[str]:
@@ -100,11 +106,11 @@ def a_bash() -> str:
 
 
 def test_the_required_jobs_keep_their_names():
-    assert {"linux", "windows"} <= set(job_lines(WORKFLOW.read_text("utf-8")))
+    assert set(DEFAULT_REQUIRED_CHECKS) <= set(job_lines(WORKFLOW.read_text("utf-8")))
 
 
 def test_the_linux_job_lints_every_workflow_file_before_pytest_and_never_skips_it():
-    steps = steps_of(job_lines(WORKFLOW.read_text("utf-8"))["linux"])
+    steps = steps_of(job_lines(WORKFLOW.read_text("utf-8"))[LINUX_CHECK])
     lint = step_named(steps, "lint the workflows")
     assert re.search(r"^\s+run: actionlint$", "\n".join(lint), re.M)  # no file arguments: actionlint finds them all
     assert not any(line.strip().startswith("if:") for line in lint)
@@ -175,6 +181,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         "@pytest.mark.serial\ndef test_serial():\n    pass\n\n"
         "@pytest.mark.slow\n"
         "@pytest.mark.serial\ndef test_slow_serial():\n    pass\n\n"
+        "@pytest.mark.os_touching\ndef test_touching():\n    pass\n\n"
         "def test_plain():\n    pass\n", "utf-8")
     for job in job_lines(WORKFLOW.read_text("utf-8")):
         done, calls = run_pytest_step(tmp_path, job, nightly)
@@ -189,10 +196,13 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
                 env=os.environ | {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
             assert collected.returncode in (0, 5), collected.stdout + collected.stderr
             ids += [line.strip() for line in collected.stdout.splitlines() if "::" in line]
-        expected = ["suite/test_marks.py::test_plain", "suite/test_marks.py::test_serial"]
+        expected = ["suite/test_marks.py::test_plain", "suite/test_marks.py::test_serial",
+                    "suite/test_marks.py::test_touching"]
         if nightly == "true":
             expected += ["suite/test_marks.py::test_live", "suite/test_marks.py::test_slow",
                          "suite/test_marks.py::test_slow_serial"]
+        if job == WINDOWS_CHECK and nightly == "false":  # the Windows change run takes only the marked tests (#414 unit 4)
+            expected = ["suite/test_marks.py::test_touching"]
         assert sorted(ids) == sorted(expected), job
         assert len(ids) == len(set(ids)), job  # no test runs in both phases
 
@@ -275,8 +285,8 @@ def test_a_manual_run_defaults_to_the_per_change_kind_and_the_schedule_stays_ful
 
 def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_does_not():
     jobs = job_lines(WORKFLOW.read_text("utf-8"))
-    linux = "\n".join(step_named(steps_of(jobs["linux"]), "pytest"))
-    windows = "\n".join(step_named(steps_of(jobs["windows"]), "pytest"))
+    linux = "\n".join(step_named(steps_of(jobs[LINUX_CHECK]), "pytest"))
+    windows = "\n".join(step_named(steps_of(jobs[WINDOWS_CHECK]), "pytest"))
     assert re.search(r'^\s+ORCH_IT_REQUIRE_SSHD: "1"$', linux, re.M)
     assert "ORCH_IT_REQUIRE_SSHD" not in windows
 
@@ -284,8 +294,8 @@ def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_do
 # --- the job bounds (#411 unit 4): 9 minutes per change and 16 for the night, each ceil(longest measured job x 1.5) (#421 rule 6) ---
 
 PER_CHANGE_BOUND = 9
-NIGHT_BOUND = {"linux": 16, "windows": 16}  # ceil(10.4 x 1.5): both jobs share it, the importer reads one setting
-MEASURED_MINUTES = {"linux": "10.4", "windows": "10.4"}  # the longest full job of either OS (622 s)
+NIGHT_BOUND = {LINUX_CHECK: 16, WINDOWS_CHECK: 16}  # ceil(10.4 x 1.5): both jobs share it, the importer reads one setting
+MEASURED_MINUTES = {LINUX_CHECK: "10.4", WINDOWS_CHECK: "10.4"}  # the longest full job of either OS (622 s)
 MEASURED_RUNS = ("40946107649", "40932163943")  # the longest full run and the longest per-change run the minutes come from
 MEASURED_ON = "2026-10-29"
 
@@ -307,7 +317,7 @@ def timeout_of(text: str, job: str) -> tuple[str, list[str]]:
 
 def test_each_job_keeps_the_measured_per_change_bound_outside_the_night():
     text = WORKFLOW.read_text("utf-8")
-    for job in ("linux", "windows"):
+    for job in (LINUX_CHECK, WINDOWS_CHECK):
         value, _ = timeout_of(text, job)
         assert value.endswith(f"|| {PER_CHANGE_BOUND} }}}}"), (job, value)
 
@@ -315,14 +325,14 @@ def test_each_job_keeps_the_measured_per_change_bound_outside_the_night():
 def test_each_job_gives_the_measured_night_bound_only_on_the_nightly_condition():
     text = WORKFLOW.read_text("utf-8")
     night = re.fullmatch(r"\$\{\{ (.*) \}\}", workflow_env()["NIGHTLY"]).group(1)
-    for job in ("linux", "windows"):
+    for job in (LINUX_CHECK, WINDOWS_CHECK):
         value, _ = timeout_of(text, job)
         assert value == f"${{{{ ({night}) && {NIGHT_BOUND[job]} || {PER_CHANGE_BOUND} }}}}", (job, value)
 
 
 def test_each_night_bound_carries_its_measurement_and_margin_beside_it():
     text = WORKFLOW.read_text("utf-8")
-    for job in ("linux", "windows"):
+    for job in (LINUX_CHECK, WINDOWS_CHECK):
         _, comment = timeout_of(text, job)
         comment_text = "\n".join(comment)
         assert "margin 1.5" in comment_text, job
@@ -367,7 +377,7 @@ def step_env(step: list[str]) -> dict[str, str]:
 
 def test_the_scan_step_is_in_the_linux_job_only_and_only_for_pull_requests():
     jobs = job_lines(WORKFLOW.read_text("utf-8"))
-    linux = steps_of(jobs["linux"])
+    linux = steps_of(jobs[LINUX_CHECK])
     step = step_named(linux, PRIVATE_DATA_STEP)
     text = "\n".join(step)
     assert "if: github.event_name == 'pull_request'" in text
@@ -376,12 +386,12 @@ def test_the_scan_step_is_in_the_linux_job_only_and_only_for_pull_requests():
     assert run_script(step).strip() == SCAN_COMMAND
     install = next(i for i, s in enumerate(linux) if any("pip install" in line for line in s))
     assert linux.index(step) > install
-    assert PRIVATE_DATA_STEP not in "\n".join(jobs["windows"])
+    assert PRIVATE_DATA_STEP not in "\n".join(jobs[WINDOWS_CHECK])
 
 
 def test_the_closing_step_is_in_the_linux_job_only_for_pull_requests_between_the_scan_and_pytest():
     jobs = job_lines(WORKFLOW.read_text("utf-8"))
-    linux = steps_of(jobs["linux"])
+    linux = steps_of(jobs[LINUX_CHECK])
     closing = "closing words in the pull request's commits, title and body"
     step = step_named(linux, closing)
     text = "\n".join(step)
@@ -395,7 +405,7 @@ def test_the_closing_step_is_in_the_linux_job_only_for_pull_requests_between_the
     }
     assert run_script(step).strip() == 'python -m orch_it merge closing-check --base "$BASE_REF" --head "$HEAD"'
     assert linux.index(step_named(linux, PRIVATE_DATA_STEP)) < linux.index(step) < linux.index(step_named(linux, "pytest"))
-    assert closing not in "\n".join(jobs["windows"])
+    assert closing not in "\n".join(jobs[WINDOWS_CHECK])
 
 
 def test_both_jobs_check_out_the_whole_history():
@@ -420,7 +430,7 @@ def run_scan_step(tmp_path, repo, base, head):
     gives it, so the values of the run are the runner's and none is this machine's; `python` is the
     interpreter running the tests, on this checkout's source, and `gh` can reach nothing."""
 
-    step = step_named(steps_of(job_lines(WORKFLOW.read_text("utf-8"))["linux"]), PRIVATE_DATA_STEP)
+    step = step_named(steps_of(job_lines(WORKFLOW.read_text("utf-8"))[LINUX_CHECK]), PRIVATE_DATA_STEP)
     filled = {"BASE": base, "HEAD": head, "AUTHOR": "fake-author", "OWNER": "fake-owner"}
     assert set(step_env(step)) == set(filled) | {"GH_TOKEN"}
     script = 'python() { "$PYTHON_FOR_TEST" "$@"; }\n' + run_script(step)

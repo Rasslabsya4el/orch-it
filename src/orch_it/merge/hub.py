@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Protocol
 
 from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun
-from orch_it.tickets.hub import Comment, Hub
+from orch_it.tickets.hub import Comment, Hub, Issue
 
 PENDING, PASSED, FAILED, NO_RESULT = "pending", "passed", "failed", "no_result"
 
@@ -34,7 +34,6 @@ class Pull:
     base: str  # the base branch
     state: str  # `open`, `merged` or `closed` (closed unmerged)
     draft: bool
-    auto_merge: str | None  # the method auto-merge is on with (`merge`, `squash`, `rebase`), None when off
     mergeable: str  # `mergeable`, `conflicting` or `unknown` (GitHub has not computed it yet)
     behind: int | None  # commits of the base the head does not hold; None when unknown
     created_at: datetime
@@ -67,8 +66,23 @@ class MainRun:
     jobs: dict[str, str]  # required job name -> PENDING, PASSED, FAILED or NO_RESULT
 
 
+@dataclass(frozen=True)
+class Result:
+    """One test case of a run's JUnit reports: the job whose report holds it, its id, its outcome (`passed`, `failed`,
+    `error` or `skipped`) and whether it carries the `os_touching` marker."""
+
+    job: str
+    test_id: str
+    outcome: str
+    marked: bool
+
+
 class PullHub(Hub, Protocol):
     def pull(self, repo: str, number: int) -> Pull | None: ...
+
+    def rate_limit(self) -> tuple[int, int] | None:
+        """The account's core request budget GitHub reports now: (remaining, limit); None when it cannot be read
+        (a poller then keeps its interval, #414 decision 9)."""
 
     def open_pulls(self, repo: str, base: str) -> list[Pull]:
         """Every open pull request into `base`, drafts and forks too, oldest first."""
@@ -88,9 +102,6 @@ class PullHub(Hub, Protocol):
     def required_checks_of(self, repo: str, base: str) -> set[str]:
         """The check names `base` requires before a pull request into it merges: classic protection and rulesets
         both; a base that protects nothing (or a plan that does not allow it) requires none, the empty set."""
-
-    def set_auto_merge(self, repo: str, number: int, method: str | None) -> None:
-        """Turn auto-merge on with `method`, or off with None; already so is no error."""
 
     def update_branch(self, repo: str, number: int, head_sha: str) -> bool:
         """Bring the head up to date with its base by a merge commit, only from `head_sha`;
@@ -112,6 +123,13 @@ class PullHub(Hub, Protocol):
         """The ids of the failed tests of an Actions run, from the JUnit reports its jobs upload;
         None when no report can be read."""
 
+    def results(self, repo: str, run_id: str) -> list[Result] | None:
+        """Every test case of the latest attempt of each job of an Actions run, from the JUnit reports its jobs
+        upload, one `Result` per case; None when no report can be read."""
+
+    def default_branch(self, repo: str) -> str:
+        """The repo's default branch as GitHub reports it."""
+
     def branch_runs(self, repo: str, branch: str) -> list[MainRun]:
         """The runs of the `tests` workflow on `branch` from a push or the schedule, newest first."""
 
@@ -120,6 +138,9 @@ class PullHub(Hub, Protocol):
 
     def issues_with_label(self, repo: str, label: str) -> list[int]:
         """The numbers of the open issues (no pull requests) carrying `label`."""
+
+    def open_issues(self, repo: str) -> list[Issue]:
+        """Every open issue of the repo whatever its labels, pull requests left out."""
 
     def create_issue(self, repo: str, title: str, body: str, labels: list[str]) -> int: ...
 

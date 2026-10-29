@@ -1,5 +1,5 @@
 """`pr open` (#400 decision 1): one pull request per ticket, opened with `Refs #N` and never a
-closing keyword, after the acceptance rows are checked; auto-merge on, the ticket parked on the
+closing keyword, after the acceptance rows are checked; no auto-merge set, the ticket parked on the
 pull request through #398's park command, the `pr` step started. Run again, it reuses the same
 pull request and puts it back in the line."""
 
@@ -64,12 +64,14 @@ def opened(world, acceptance=GOOD, *, git=None, branch="ticket-10", number=10, p
                    settings=MergeSettings(**settings), now=hub.now, part=part)
 
 
-def test_it_opens_one_pull_request_with_refs_parks_the_ticket_and_turns_auto_merge_on(world):
+def test_it_opens_one_pull_request_with_refs_parks_the_ticket_and_sets_no_auto_merge(world):
     hub, store = world
     git = Git()
     done = opened(world, git=git)
     pull = hub.pull(REPO, done.pr)
-    assert pull.body.startswith("Refs #10\n") and pull.title == TITLE and pull.auto_merge == "merge"
+    assert pull.body.startswith("Refs #10\n") and pull.title == TITLE
+    assert marks.ready_since(hub.comments(REPO, done.pr)) is not None
+    assert not [c for c in hub.calls if c[0] in ("auto_merge", "merge")]  # the line merges it later, not `pr open`
     assert not marks.closing_keywords(pull.body)
     assert ["push", "origin", "ticket-10:refs/heads/ticket-10"] in git.calls
     ticket = tickets.parse(hub.issues[(REPO, 10)].body, labels=hub.issues[(REPO, 10)].labels)
@@ -80,39 +82,33 @@ def test_it_opens_one_pull_request_with_refs_parks_the_ticket_and_turns_auto_mer
     assert ("step.started", "pr", done.pr) in rows and ("ticket.parked", None, None) in rows
 
 
-def test_pr_open_hands_the_ready_mark_and_auto_merge_to_after_open(world, monkeypatch):
+def test_pr_open_hands_the_ready_mark_to_after_open(world, monkeypatch):
     calls = []
     monkeypatch.setattr(pr_open, "after_open", lambda *args: calls.append(args))
     done = opened(world)
-    [(hub, repo, pr, head, ticket, now, method, base, required)] = calls
-    assert (repo, pr, head, ticket, method, base) == (REPO, done.pr, done.head, 10, "merge", "main")
-    assert tuple(required) == REQUIRED
+    [(hub, repo, pr, head, ticket, now)] = calls
+    assert (repo, pr, head, ticket) == (REPO, done.pr, done.head, 10)
     assert now == world[0].now and hub is world[0]
 
 
-@pytest.mark.parametrize("requires, on", [(set(REQUIRED), True), (set(), False), ({REQUIRED[0]}, False)])
-def test_after_open_turns_auto_merge_on_only_where_the_base_requires_every_job(requires, on):
+@pytest.mark.parametrize("requires", [set(REQUIRED), set(), {REQUIRED[0]}])
+def test_after_open_writes_the_ready_mark_on_every_base_and_nothing_else(requires):
     hub = FakeGitHub(NOW)
     hub.required_by_base = {"main": requires}
     pr = hub.open_pull(branch="feature")
-    pr_open.after_open(hub, REPO, pr, hub.head(pr), None, NOW, "merge", "main", REQUIRED)
-    assert marks.ready_since(hub.comments(REPO, pr)) is not None  # the mark is written on every base
-    assert hub.pull(REPO, pr).auto_merge == ("merge" if on else None)
-    assert [c for c in hub.calls if c[0] == "auto_merge"] == ([("auto_merge", pr, "merge")] if on else [])
+    pr_open.after_open(hub, REPO, pr, hub.head(pr), None, NOW)
+    assert marks.ready_since(hub.comments(REPO, pr)) is not None
+    assert [c for c in hub.calls if c[0] in ("auto_merge", "merge")] == []
 
 
-@pytest.mark.parametrize("requires, on", [(set(REQUIRED), True), (set(), False)])
-def test_after_open_with_the_mark_already_at_the_head_writes_no_second_mark_and_keeps_the_auto_merge_rule(requires,
-                                                                                                        on):
+def test_after_open_with_the_mark_already_at_the_head_writes_no_second_mark():
     hub = FakeGitHub(NOW)
-    hub.required_by_base = {"main": requires}
     pr = hub.open_pull(branch="feature")
     head = hub.head(pr)
-    pr_open.after_open(hub, REPO, pr, head, None, NOW, "merge", "main", REQUIRED)
+    pr_open.after_open(hub, REPO, pr, head, None, NOW)
     written = len(hub.comments(REPO, pr))
-    pr_open.after_open(hub, REPO, pr, head, None, NOW, "merge", "main", REQUIRED, mark_written=True)
+    pr_open.after_open(hub, REPO, pr, head, None, NOW, mark_written=True)
     assert len(hub.comments(REPO, pr)) == written  # the mark stands at the head: no second one
-    assert hub.pull(REPO, pr).auto_merge == ("merge" if on else None)
 
 
 def test_the_acceptance_comment_on_the_ticket_holds_every_row_and_the_body_it_was_checked_on(world):
@@ -168,14 +164,12 @@ def test_run_again_it_reuses_the_pull_request_of_its_branch_and_puts_it_back_in_
     first = opened(world)
     hub.later(hours=1)
     hub.note(first.pr, marks.left_comment("red", "linux failed"), author="owner-x")
-    hub.set_auto_merge(REPO, first.pr, None)
     from orch_it.tickets import park
     park.take_off(hub, hub.issues[(REPO, 10)])  # follow returned the ticket to ready
     hub.later(minutes=5)
     again = opened(world)
     assert (again.pr, again.reused) == (first.pr, True)
     assert len([c for c in hub.calls if c[0] == "create_pull"]) == 1
-    assert hub.pull(REPO, again.pr).auto_merge == "merge"
     assert marks.ready_since(hub.comments(REPO, again.pr)).at == hub.now
     assert tickets.parse(hub.issues[(REPO, 10)].body).park_lines == (f"Parked: pr_ended #{again.pr} until 2026-11-04",)
 
@@ -265,7 +259,7 @@ def test_the_acceptance_names_the_head_the_rows_were_measured_on(world):
 
 def test_a_fork_s_branch_of_the_same_name_is_never_the_ticket_s_pull_request(world):
     hub, _ = world
-    fork = hub.open_pull(branch="ticket-10", body="Refs #10", auto_merge="merge")
+    fork = hub.open_pull(branch="ticket-10", body="Refs #10")
     hub.pulls[fork].head_repo = "stranger/repo-y"
     done = opened(world)
     assert done.pr != fork and not done.reused
@@ -305,7 +299,7 @@ def test_a_second_pr_open_that_loses_the_park_closes_its_own_new_pull_request(wo
         park.park = real
     assert caught.value.code == "ticket_has_pr"
     [lost] = [p for p in hub.pulls.values()]
-    assert lost.state == "closed" and lost.auto_merge is None
+    assert lost.state == "closed"
 
 
 def test_orch_s_notes_go_into_the_body_and_are_held_to_the_same_keyword_rule(world):

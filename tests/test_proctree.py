@@ -18,6 +18,9 @@ PARENT = ("import subprocess, sys, time\n"
           "time.sleep(600)\n")
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def start_with_a_child(tmp_path):
     """The tree and the pid its process wrote down for its own child (read within a bound)."""
     pidfile = tmp_path / "child.pid"

@@ -18,6 +18,7 @@ from line_world import CI
 from orch_it import tickets
 from orch_it.events.store import Store
 from orch_it.testruns.github import GithubError
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 OWNER = REPO.split("/")[0]
 RED_TESTS = "tests/test_trial_pr_red_"
@@ -137,7 +138,7 @@ class World:
         self.ci = CI(self.hub)
         self.ci.red = RedByFiles(self.hub, self.trial)
         self.store = Store.open(tmp_path / "events")
-        self.base_files: set[str] = set()
+        self.base_files: dict[str, str] = {}  # path -> text of the trial test files on the base
         self.hub.on_merge.append(self._pushed)
         self.rows = Locked(self.hub)
 
@@ -154,10 +155,15 @@ class World:
     def _pushed(self, number):
         pull = self.hub.pulls[number]
         for path, text in self.trial.files.get(pull.branch, {}).items():
-            (self.base_files.discard if text is None else self.base_files.add)(path)
-        red = sorted(path for path in self.base_files if path.startswith(RED_MAIN))
-        jobs = {name: FAILED if red else PASSED for name in ("linux", "windows")}
-        self.hub.main_run(pull.merge_sha, jobs, failing=[f"{path}::test_red_on_a_push" for path in red])
+            if text is None:
+                self.base_files.pop(path, None)
+            else:
+                self.base_files[path] = text
+        trial_tests = sorted(path for path in self.base_files if path.startswith(RED_MAIN))
+        red = [path for path in trial_tests if self.base_files[path] == merge_trial.RED_ON_PUSH]
+        jobs = {name: FAILED if red else PASSED for name in (LINUX_CHECK, WINDOWS_CHECK)}
+        self.hub.main_run(pull.merge_sha, jobs, failing=[f"{path}::test_red_on_a_push" for path in red],
+                          passed=[f"{path}::test_red_on_a_push" for path in trial_tests if path not in red])
 
     def run(self, row, **plan):
         return row(self.trial, self.rows, self.store, self.clock, self.sleep, merge_trial.Plan(**plan))
@@ -178,7 +184,7 @@ def test_rows_2_and_3_four_merge_in_order_each_after_one_up_to_date_run_and_the_
     for served in row2["prs"]:  # the head each one merged at had one run, on a head up to date with the base
         assert served["merged"] and served["line_result"] == "merged"
         assert (served["runs_on_merged_head"], served["attempts"], served["up_to_date_at_run_start"]) == (1, 1, True)
-        assert sorted(served["checks"]) == ["linux", "windows"]
+        assert sorted(served["checks"]) == [LINUX_CHECK, WINDOWS_CHECK]
     waited = [served["waited_minutes"] for served in row2["prs"]]
     assert waited == sorted(waited) and 0 < waited[0] and waited[-1] <= 5 * 6
     assert row2["ready_span_s"] <= 60
@@ -186,7 +192,7 @@ def test_rows_2_and_3_four_merge_in_order_each_after_one_up_to_date_run_and_the_
     assert row3["passed"], row3
     assert row3["line_result"] in (None, "left")  # the follow of a held member may take it out between two turns
     assert row3["ticket_ready"] and not row3["ticket_parked"] and row3["last_comment_names_the_file"]
-    assert row3["attempt_counted"] == [False] and row3["auto_merge"] is None
+    assert row3["attempt_counted"] == [False] and not row3["in_line"]
     assert len(row3["behind"]) == 3 and row3["merged_behind"] == row3["behind"]  # nobody behind it was held
     assert row3["pr"] not in world.ci.merged and world.trial.closed == [row3["pr"]]  # and it is closed after
 
@@ -227,7 +233,7 @@ def test_row_4_every_end_of_a_pull_request_moves_its_ticket_and_reads_back_from_
     assert (red["open"], red["ready"], red["follow"]) == (True, True, "red") and RED_TESTS in red["comment"]
     closed, said = row4["closed_unmerged"], row4["comment"]
     assert closed["needs_triage"] and not closed["ready"] and closed["pr_state"] == "closed"
-    assert said["follow"] == "commented" and said["auto_merge"] is None and said["needs_triage"]
+    assert said["follow"] == "commented" and not said["in_line"] and said["needs_triage"]
     assert said["pr_state"] == "open" and "pr.commented" in said["store"]
     assert {said["pr"], red["pr"]} <= set(world.trial.closed)  # the ones still open are closed at the end
 
@@ -259,7 +265,7 @@ def test_row_5_a_merge_turns_the_base_red_one_ticket_a_rerun_opens_none_and_gree
 def test_row_5_says_so_when_the_trial_test_does_not_turn_the_base_red(world):
     world.hub.on_merge.remove(world._pushed)
     world.hub.on_merge.append(lambda number: world.hub.main_run(world.hub.pulls[number].merge_sha,
-                                                                {"linux": PASSED, "windows": PASSED}))
+                                                                {LINUX_CHECK: PASSED, WINDOWS_CHECK: PASSED}))
     with pytest.raises(merge_trial.TrialError, match="not red"):
         world.run(merge_trial.row_5)
     assert world.trial.workflow_log[-1] == ("on", "main-check.yml")  # the workflow is on again after a broken row
@@ -319,13 +325,13 @@ def test_a_row_that_breaks_is_a_failed_row_the_next_rows_still_run_and_everythin
 
 def test_a_repo_the_trial_cannot_run_on_is_told_before_any_row_runs(world, tmp_path, capsys):
     def refuse():
-        raise merge_trial.TrialError("auto-merge is not allowed")
+        raise merge_trial.TrialError("the repo is not allowed")
 
     world.trial.preflight = refuse
     code = merge_trial.main(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "2",
                              "--out", str(tmp_path / "n.json"), "--store", str(tmp_path / "s")],
                             world=lambda args: (world.trial, world.rows, world.clock, world.sleep))
-    assert code == 1 and "auto-merge is not allowed" in capsys.readouterr().out and not world.hub.pulls
+    assert code == 1 and "the repo is not allowed" in capsys.readouterr().out and not world.hub.pulls
 
 
 @pytest.mark.parametrize("args", [["--rows", "7"], ["--rows", "two"], ["--repo", "no-slash"]])
@@ -400,11 +406,11 @@ def test_a_workflow_that_cannot_be_disabled_is_said_and_the_row_goes_on(world):
 # --- the preflight, the cleanup and the restore of the real adapter ---------------------------------------------
 
 GOOD = {
-    f"api repos/{REPO}": json.dumps({"allow_auto_merge": True, "default_branch": "main", "private": False}),
+    f"api repos/{REPO}": json.dumps({"default_branch": "main", "private": False}),
     f"api repos/{REPO}/branches/trial-main": json.dumps({"protected": True}),
     f"api repos/{REPO}/actions/workflows/tests.yml": json.dumps({"id": 1, "path": ".github/workflows/tests.yml"}),
     f"api repos/{REPO}/branches/trial-main/protection": json.dumps({"required_status_checks": {
-        "strict": True, "checks": [{"context": "windows"}, {"context": "linux"}]}}),
+        "strict": True, "checks": [{"context": WINDOWS_CHECK}, {"context": LINUX_CHECK}]}}),
 }
 
 
@@ -432,7 +438,7 @@ def real(tmp_path, answers=None, *, base="trial-main", remote=None, status="", f
 def test_the_preflight_of_a_clone_and_a_repo_it_can_run_on_says_what_it_stands_on(tmp_path):
     found = real(tmp_path).preflight()
     assert found == {"default_branch": "main", "private": False, "base_is_default": False, "base_protected": True,
-                     "strict": True, "required": ["linux", "windows"]}
+                     "strict": True, "required": [LINUX_CHECK, WINDOWS_CHECK]}
 
 
 @pytest.mark.parametrize("remote", [f"https://github.com/{REPO}.git", f"https://github.com/{REPO}",
@@ -440,7 +446,7 @@ def test_the_preflight_of_a_clone_and_a_repo_it_can_run_on_says_what_it_stands_o
                                     f"git@github.com:{REPO}.git", f"ssh://git@github.com/{REPO}.git",
                                     "https://github.com/OWNER-X/Repo-Y.git"])
 def test_the_origin_of_the_clone_names_exactly_the_repo(tmp_path, remote):
-    assert real(tmp_path, remote=remote).preflight()["required"] == ["linux", "windows"]
+    assert real(tmp_path, remote=remote).preflight()["required"] == [LINUX_CHECK, WINDOWS_CHECK]
 
 
 @pytest.mark.parametrize("remote", [f"https://github.com/{REPO}-fork.git", f"https://github.com/x{REPO}.git",
@@ -477,24 +483,18 @@ def test_a_base_without_branch_protection_or_with_protection_that_is_not_what_or
     def with_checks(checks):
         return {**GOOD, protection: json.dumps({"required_status_checks": checks})}
 
-    for checks, said in [({"strict": False, "checks": [{"context": "linux"}, {"context": "windows"}]}, "strict"),
-                         ({"strict": True, "checks": [{"context": "linux"}]}, r"\['linux'\]"),
-                         ({"strict": True, "checks": [{"context": "linux"}, {"context": "windows"},
+    for checks, said in [({"strict": False, "checks": [{"context": LINUX_CHECK}, {"context": WINDOWS_CHECK}]}, "strict"),
+                         ({"strict": True, "checks": [{"context": LINUX_CHECK}]}, rf"\['{LINUX_CHECK}'\]"),
+                         ({"strict": True, "checks": [{"context": LINUX_CHECK}, {"context": WINDOWS_CHECK},
                                                        {"context": "lint"}]}, "lint"),
-                         ({"strict": True, "contexts": ["linux", "windows"]}, None),
+                         ({"strict": True, "contexts": [LINUX_CHECK, WINDOWS_CHECK]}, None),
                          ({}, "strict")]:
         trial = real(tmp_path, with_checks(checks))
         if said is None:
-            assert trial.preflight()["required"] == ["linux", "windows"]  # the older form of the same rule
+            assert trial.preflight()["required"] == [LINUX_CHECK, WINDOWS_CHECK]  # the older form of the same rule
         else:
             with pytest.raises(merge_trial.TrialError, match=said):
                 trial.preflight()
-
-
-def test_a_repo_without_auto_merge_is_refused(tmp_path):
-    answers = {**GOOD, f"api repos/{REPO}": json.dumps({"allow_auto_merge": False, "default_branch": "main"})}
-    with pytest.raises(merge_trial.TrialError, match="auto-merge"):
-        real(tmp_path, answers).preflight()
 
 
 def test_the_default_branch_is_refused_as_the_base_unless_it_is_allowed(tmp_path):

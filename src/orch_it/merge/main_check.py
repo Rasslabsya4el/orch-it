@@ -2,11 +2,13 @@
 workflow on a branch (a push, so after every merge, and the nightly run) and keeps the red-on-main
 tickets true to the newest run that ended (`branch_runs` gives the required jobs only):
 
-- green on every required job: every open red-on-main ticket closes, one whose ids block a person
-  broke too (`green`);
+- green on every required job: an open red-on-main ticket closes when the run's reports hold each of its
+  ids passed (`held_passed`); one whose ids block a person broke has no ids to check and closes too. A
+  green run that did not run a ticket's tests (a per-change run leaves out the `slow` and `live` ones, the
+  thin Windows run all but the marked ones) leaves it open (`green`);
 - red: the failing ids from the run's reports, as `red_main.normal` reads them. When every job
-  ended passed or failed, an open red-on-main ticket none of whose tests failed closes (they pass
-  now); the ids no open ticket covers get one new ticket, ready for an agent, `priority`, in #398's
+  ended passed or failed, an open red-on-main ticket none of whose tests failed and whose ids the run's
+  reports hold passed closes (they pass now); the ids no open ticket covers get one new ticket, ready for an agent, `priority`, in #398's
   shape, naming the pull request that brought the run's commit; none is opened for ids already
   covered (`red`). A red run that names no test is no result;
 - no result (a job cut, cancelled, skipped, or red with no report): the run runs once more
@@ -55,8 +57,10 @@ def check_main(hub: PullHub, store: Store, repo: str, branch: str, *, role: str 
     if states == {PASSED}:
         if not newest:
             return MainReport("waiting", run.run_id, run.sha)
+        held = held_passed(hub, repo, run) if reds else frozenset()  # no ticket to close: no report to read
         return MainReport("green", run.run_id, run.sha,
-                          closed=[_close(hub, store, repo, red.number, run, role) for red in reds])
+                          closed=[_close(hub, store, repo, red.number, run, role) for red in reds
+                                  if red.ids is None or red.ids <= held])
     ids = hub.failing_ids(repo, run.run_id) if FAILED in states else None
     failing = {red_main.normal(test_id) for test_id in ids or ()} - {""}
     if failing:
@@ -71,10 +75,31 @@ def check_main(hub: PullHub, store: Store, repo: str, branch: str, *, role: str 
     return MainReport("rerun", run.run_id, run.sha)
 
 
+def held_passed(hub: PullHub, repo: str, run: MainRun) -> frozenset[str]:
+    """The (normalised) test ids the run's reports hold passed: an id counts when every job that has a report
+    holds it, none of them failed and at least one passed it (skipped in a job is no failure there). An id a job
+    left out (the thin Windows run takes only the marked tests) is not held, whatever another job did with it;
+    a run with no readable report holds none."""
+
+    results = hub.results(repo, run.run_id)
+    if not results:
+        return frozenset()
+    jobs = {r.job for r in results}
+    seen: dict[str, dict[str, set[str]]] = {}  # id -> job -> its outcomes
+    for r in results:
+        seen.setdefault(red_main.normal(r.test_id), {}).setdefault(r.job, set()).add(r.outcome)
+    return frozenset(test_id for test_id, by_job in seen.items()
+                     if set(by_job) == jobs
+                     and all(outcomes <= {PASSED, "skipped"} for outcomes in by_job.values())
+                     and any(PASSED in outcomes for outcomes in by_job.values()))
+
+
 def _red(hub: PullHub, store: Store, repo: str, run: MainRun, failing: set[str], reds: list[red_main.RedTicket],
          may_close: bool, role: str) -> MainReport:
+    held = held_passed(hub, repo, run) if may_close and reds else frozenset()
     closed = [_close(hub, store, repo, red.number, run, role) for red in reds
-              if may_close and red.ids is not None and not red.truncated and not red.ids & failing]
+              if may_close and red.ids is not None and not red.truncated and not red.ids & failing
+              and red.ids <= held]
     standing = [red for red in reds if red.number not in closed and red.ids is not None]
     if any(red.truncated for red in standing):
         return MainReport("red", run.run_id, run.sha, closed=closed)  # one ticket of a huge failure covers all
@@ -117,12 +142,25 @@ def _close(hub: PullHub, store: Store, repo: str, number: int, run: MainRun, rol
 
 def _to_the_brain(hub: PullHub, store: Store, repo: str, run: MainRun, role: str) -> list[int]:
     mark = red_main.NO_RESULT_MARK.format(run_id=run.run_id)
+    if open_triage_with(hub, repo, mark) is not None:
+        return []  # one ticket per run
+    title, body = red_main.build_no_result(sha=run.sha, run_id=run.run_id, jobs=run.jobs)
+    return [open_triage(hub, store, repo, role, title, body, red_main.NO_RESULT_LABELS)]
+
+
+def open_triage_with(hub: PullHub, repo: str, mark: str) -> int | None:
+    """The lowest-numbered open `needs-triage` ticket whose body holds `mark`; None when there is none."""
+
     for number in hub.issues_with_label(repo, TRIAGE_LABEL):
         issue = hub.issue(repo, number)
         if issue is not None and mark in issue.body:
-            return []  # one ticket per run
-    title, body = red_main.build_no_result(sha=run.sha, run_id=run.run_id, jobs=run.jobs)
-    number = hub.create_issue(repo, title, body, list(red_main.NO_RESULT_LABELS))
-    record.write(store, repo, number, role, None, None, [_opened(title, body, red_main.NO_RESULT_LABELS,
-                                                                 priority=False)])
-    return [number]
+            return number
+    return None
+
+
+def open_triage(hub: PullHub, store: Store, repo: str, role: str, title: str, body: str, labels) -> int:
+    """Open a ticket to the brain with `labels` and write its `ticket.opened`; returns its number."""
+
+    number = hub.create_issue(repo, title, body, list(labels))
+    record.write(store, repo, number, role, None, None, [_opened(title, body, labels, priority=False)])
+    return number

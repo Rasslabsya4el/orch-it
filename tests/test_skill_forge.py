@@ -9,7 +9,7 @@ import pytest
 from orch_it.merge import marks
 from orch_it.skills.copies import SkillsError
 from orch_it.skills.forge import GithubForge
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, GithubError
+from orch_it.testruns.github import GithubError
 
 
 class FakeGh:
@@ -118,10 +118,9 @@ NOW = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 class PullGh(FakeGh):
     """Pull request 5 of o/r at `head`: the comments posted to it are read back, `pr merge` is answered."""
 
-    def __init__(self, head, *, fail=(), required=DEFAULT_REQUIRED_JOBS, base="main"):
+    def __init__(self, head, *, fail=()):
         super().__init__(fail=fail)
-        # `required`: the jobs the protection of `base` requires; every other base answers 404 (not protected)
-        self.head, self.posted, self.required, self.base = head, [], list(required), base
+        self.head, self.posted = head, []
 
     def __call__(self, args):
         self.calls.append(list(args))
@@ -136,16 +135,11 @@ class PullGh(FakeGh):
                 return json.dumps([{"user": {"login": "o", "type": "User"}, "body": body,
                                     "created_at": "2026-11-02T09:00:00Z"} for body in self.posted])
             return "[]"
-        if path.startswith("repos/o/r/branches/"):
-            if path != f"repos/o/r/branches/{self.base}":
-                raise GithubError("gh_failed", f"api {path}: gh: Not Found (HTTP 404)")
-            return json.dumps({"name": self.base, "protected": True, "protection": {
-                "enabled": True, "required_status_checks": {"contexts": self.required, "checks": []}}})
         if path == "repos/o/r/pulls/5":
             return json.dumps({"number": 5, "title": "t", "body": "Refs #10", "state": "open", "draft": False,
                                "head": {"sha": self.head, "ref": "ticket-10", "repo": {"full_name": "o/r"}},
-                               "base": {"ref": self.base}, "created_at": "2026-11-02T08:00:00Z",
-                               "merged_at": None, "auto_merge": None, "mergeable": True})
+                               "base": {"ref": "main"}, "created_at": "2026-11-02T08:00:00Z",
+                               "merged_at": None, "mergeable": True})
         if "/compare/" in path:
             return json.dumps({"behind_by": 0})
         return ""
@@ -155,62 +149,30 @@ def merges(gh):
     return [c for c in gh.calls if c[:2] == ["pr", "merge"]]
 
 
-def test_mark_ready_writes_one_ready_mark_at_the_head_and_turns_auto_merge_on(tmp_path, monkeypatch):
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))  # no settings: the default `merge`
+def test_mark_ready_writes_one_ready_mark_at_the_head_and_sets_no_auto_merge():
     gh = PullGh(HEAD)
     GithubForge("o/r", gh=gh).mark_ready(PULL)
     [body] = gh.posted
     assert f"<!-- orch-it ready head={HEAD} -->" in body and "ticket=" not in body
-    assert merges(gh) == [["pr", "merge", "5", "--repo", "o/r", "--auto", "--merge"]]
+    assert merges(gh) == []  # the merge line merges it, not GitHub
 
 
-def test_mark_ready_twice_writes_one_mark_and_still_sets_auto_merge(tmp_path, monkeypatch):
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
+def test_mark_ready_twice_writes_one_mark():
     gh = PullGh(HEAD)
     forge = GithubForge("o/r", gh=gh)
     forge.mark_ready(PULL)
     forge.mark_ready("5")
-    assert len(gh.posted) == 1
-    assert len(merges(gh)) == 2
-
-
-def test_mark_ready_on_a_base_that_requires_no_job_writes_the_mark_and_no_auto_merge(tmp_path, monkeypatch):
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
-    gh = PullGh(HEAD, required=())
-    GithubForge("o/r", gh=gh).mark_ready(PULL)
     assert len(gh.posted) == 1 and merges(gh) == []
 
 
-def test_a_re_used_pull_request_with_its_mark_at_the_head_keeps_the_mark_and_no_auto_merge_where_the_base_requires_less(
-        tmp_path, monkeypatch):
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
-    gh = PullGh(HEAD, required=DEFAULT_REQUIRED_JOBS[:1])  # the base requires one job of the two
-    gh.posted.append(marks.ready_comment(None, HEAD, NOW))
-    GithubForge("o/r", gh=gh).mark_ready(PULL)
-    assert len(gh.posted) == 1  # the mark stands, no second one
-    assert merges(gh) == []  # and no auto-merge with a method: checks would not be waited for
-
-
-def test_a_re_used_pull_request_with_its_mark_at_the_head_gets_auto_merge_where_the_base_requires_every_job(
-        tmp_path, monkeypatch):
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
+def test_a_re_used_pull_request_with_its_mark_at_the_head_keeps_the_mark():
     gh = PullGh(HEAD)
     gh.posted.append(marks.ready_comment(None, HEAD, NOW))
     GithubForge("o/r", gh=gh).mark_ready(PULL)
-    assert len(gh.posted) == 1 and merges(gh) == [["pr", "merge", "5", "--repo", "o/r", "--auto", "--merge"]]
+    assert len(gh.posted) == 1 and merges(gh) == []  # the mark stands, no second one
 
 
-def test_a_pull_request_into_another_base_reads_the_protection_of_that_base(tmp_path, monkeypatch):
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
-    gh = PullGh(HEAD, base="release")  # main is not protected in this stand-in: a read of main would merge nothing
-    GithubForge("o/r", gh=gh).mark_ready(PULL)
-    reads = [c[1] for c in gh.calls if len(c) > 1 and c[1].startswith("repos/o/r/branches/")]
-    assert reads == ["repos/o/r/branches/release"]
-    assert len(merges(gh)) == 1
-
-
-def test_a_refused_mark_ready_is_forge_failed(tmp_path, monkeypatch):
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
+def test_a_refused_mark_ready_is_forge_failed():
     with pytest.raises(SkillsError) as e:
-        GithubForge("o/r", gh=PullGh(HEAD, fail={("pr", "merge")})).mark_ready(PULL)
+        GithubForge("o/r", gh=PullGh(HEAD, fail={("api", "-X")})).mark_ready(PULL)
     assert e.value.code == "forge_failed"

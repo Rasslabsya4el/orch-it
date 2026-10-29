@@ -10,6 +10,9 @@ from orch_it.guards.paths import Finding
 from orch_it.guards.processes import StopRefusal
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 class FakeWorld:
     """Scripts what each guard would answer, so the decision's own logic is tested without a
     disk or a process tree."""

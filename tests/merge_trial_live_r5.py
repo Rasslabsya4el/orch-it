@@ -101,7 +101,7 @@ def _steps(run: merge_trial._Run, out: dict) -> None:
     run.say(f"second main check: red tickets {after}")
 
     with _main_check_step(run, out, "third") as head:
-        fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: None})
+        fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: merge_trial.GREEN_ON_PUSH})
         fix_merge = run.land(fixed.pr)
         head.sha = fix_merge.merge_sha
         run.follow(fixed.pr)

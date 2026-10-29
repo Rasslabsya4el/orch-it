@@ -15,6 +15,7 @@ import pytest
 
 from orch_it.merge import red_main
 from orch_it.merge.hub import PASSED, Check
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 NOW = datetime(2026, 10, 29, 10, 0, tzinfo=UTC)
 REPO = "owner/trial"
@@ -261,7 +262,7 @@ def test_wait_workflow_run_returns_the_run_once_it_ended(live):
         [listed("1", "2026-10-29T10:01:00Z", status="in_progress", conclusion=None)],
         [listed("1", "2026-10-29T10:01:00Z")],
     ])
-    hub = Hub(checks={HEAD: [Check("linux", PASSED, "1", 1, NOW), Check("windows", PASSED, "1", 1, NOW)]})
+    hub = Hub(checks={HEAD: [Check(LINUX_CHECK, PASSED, "1", 1, NOW), Check(WINDOWS_CHECK, PASSED, "1", 1, NOW)]})
     found = live.wait_workflow_run(make_run(trial, hub, clock), "follow.yml", NOW)
 
     assert found == live.LiveRun(run_id="1", conclusion="success", event="pull_request", head_sha=HEAD,
@@ -290,7 +291,7 @@ def test_wait_workflow_run_compares_created_at_in_whole_seconds_so_a_run_of_the_
 def test_a_skipped_run_has_no_started_jobs_even_when_its_checks_carry_a_start(live):
     clock = Clock()
     trial = WorkflowTrial([[listed("7", "2026-10-29T10:01:00Z", conclusion="skipped")]])
-    hub = Hub(checks={HEAD: [Check("linux", PASSED, "7", 1, NOW), Check("windows", PASSED, "7", 1, NOW)]})
+    hub = Hub(checks={HEAD: [Check(LINUX_CHECK, PASSED, "7", 1, NOW), Check(WINDOWS_CHECK, PASSED, "7", 1, NOW)]})
     found = live.wait_workflow_run(make_run(trial, hub, clock), "follow.yml", NOW)
 
     assert found.conclusion == "skipped" and found.jobs_started == 0

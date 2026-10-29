@@ -16,6 +16,7 @@ Known limits, each a read the walk does not see: a string held in a name (`cmd =
 time (`" ".join(...)`, a list built by `+=`), and a starred name (`git(*ARGV)`), which is left unresolved. A listing
 names a read by (module, function, kind): a listed show never covers an archive read in the same function."""
 
+import pytest
 import ast
 from pathlib import Path
 from typing import NamedTuple
@@ -33,6 +34,9 @@ LISTED_CONVERTING_READS = {
     ("brain/hook.py", "rules_from_origin", "show"): (
         "show <rev>:RULES_FILE: the rules text the brain reads; it hashes nothing and is written nowhere", 1),
 }
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 class Read(NamedTuple):

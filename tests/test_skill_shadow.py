@@ -2,6 +2,7 @@
 skill names with the user's personal skills folder and writes one `skill.shadowed` event per clash;
 it never blocks the session."""
 
+import pytest
 import json
 import os
 import subprocess
@@ -12,6 +13,9 @@ from orch_it.events.store import Store
 from orch_it.skills import shadow
 from orch_it.skills.copies import NO_WINDOW
 REPO = "acme-x/widgets-y"
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 def skill_folder(root, name, text="---\nname: x\n---\n"):

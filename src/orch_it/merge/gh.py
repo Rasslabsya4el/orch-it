@@ -5,13 +5,13 @@ It is the tickets' `GhHub` (issues, comments, runs, all through `gh api`) plus t
 - pull requests: REST `repos/{r}/pulls/{n}` and `repos/{r}/pulls?state=open&base=...` (the list
   carries no `mergeable`, so each open pull request is read again on its own); `behind` from
   `repos/{r}/compare/{base}...{head_sha}` (`behind_by`, None when the compare is not there);
-  create with `gh pr create`; auto-merge with `gh pr merge --auto` or `--disable-auto`;
+  create with `gh pr create`;
   `PUT .../update-branch` and `PUT .../merge`, both pinned to the head sha the caller saw;
 - check runs of one sha: `repos/{r}/commits/{sha}/check-runs`, the latest run of each name, its
   Actions run and attempt from `details_url` and `repos/{r}/actions/runs/{id}`;
 - pull request comments: issue comments, submitted reviews and review comments, merged in time order;
 - Actions: rerun the failed jobs, cancel, the runs of `tests.yml` on a branch with the state of
-  the required jobs (setting `github_required_jobs`), the failed test ids from the `junit-*`
+  the required jobs (setting `required_checks`), the failed test ids from the `junit-*`
   artifacts of a run (downloaded with `gh run download`, read by `testruns.junit`);
 - the conflicting files of a pull request: exact, by `git merge-tree --write-tree` in a bare
   cache repo under the data folder (`merge-cache/<owner>__<name>.git`) that fetches the base and
@@ -45,7 +45,7 @@ from orch_it import settings
 from orch_it.events import schema
 from orch_it.merge import git as merge_git
 from orch_it.merge.git import GitDone, GitError
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
 from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, skipped, workflow_of
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
@@ -53,9 +53,9 @@ from orch_it.testruns.github import (
     WORKFLOW_FILE,
     Gh,
     GithubError,
-    _required_jobs,
     json_values,
 )
+from orch_it.testruns.config import required_checks
 from orch_it.tickets.hub import Comment, GhHub, _moment, _text
 
 CACHE_FOLDER = "merge-cache"
@@ -66,8 +66,6 @@ EVENTS_ARTIFACT_PREFIX = "orch-it-events-"
 EVENT_ARTIFACT_PAGES = 3  # of 100 artifacts each, newest first
 BASE_REF, PULL_REF = "refs/orch/base", "refs/orch/pr"
 BRANCH_RUN_EVENTS = ("push", "schedule", "workflow_dispatch")
-METHODS = ("merge", "squash", "rebase")
-DISABLE_REFUSAL = "can't disable auto-merge"  # GitHub's text when a disable finds no auto-merge to turn off
 _RUN_OF_JOB = re.compile(r"/actions/runs/(\d+)/job/")
 _PULL_URL = re.compile(r"/pull/(\d+)/?$")
 
@@ -124,7 +122,7 @@ class GhPullHub(GhHub):
         return Pull(
             repo=repo, number=number, title=_text(found.get("title")), body=_text(found.get("body")),
             branch=_text(head.get("ref")), head_sha=head["sha"], base=base["ref"], state=state,
-            draft=found.get("draft") is True, auto_merge=_auto_merge(repo, found.get("auto_merge")),
+            draft=found.get("draft") is True,
             mergeable={True: "mergeable", False: "conflicting"}.get(found.get("mergeable"), "unknown"),
             behind=behind, created_at=created, merged_at=merged_at,
             merge_sha=_text(found.get("merge_commit_sha")) or None if merged_at else None,
@@ -194,29 +192,6 @@ class GhPullHub(GhHub):
             checks = (rule.get("parameters") or {}).get("required_status_checks") or []
             names |= {_text(check.get("context")) for check in checks if isinstance(check, dict)}
         return names - {""}
-
-    def set_auto_merge(self, repo: str, number: int, method: str | None) -> None:
-        if method is None:
-            args, already = ["--disable-auto"], ("not enabled", "not on", "already disabled", "already off")
-        elif method in METHODS:
-            args, already = ["--auto", f"--{method}"], ("already enabled", "already on")
-        else:
-            raise ValueError(f"not a merge method: {method}")
-        try:
-            self.gh(["pr", "merge", str(number), "--repo", repo, *args])
-        except GithubError as e:
-            if any(phrase in str(e).lower() for phrase in already):
-                return
-            if method is None and DISABLE_REFUSAL in str(e).lower() and self._auto_merge_is_off(repo, number):
-                return
-            raise
-
-    def _auto_merge_is_off(self, repo: str, number: int) -> bool:
-        """After GitHub refused a disable: True when the pull request has no auto-merge on (it was landed or closed
-        meanwhile, or never had it), so the refusal is the state the caller wanted."""
-
-        found = self.pull(repo, number)
-        return found is None or found.state != "open" or found.auto_merge is None
 
     def update_branch(self, repo: str, number: int, head_sha: str) -> bool:
         try:
@@ -289,6 +264,21 @@ class GhPullHub(GhHub):
                 raise
 
     def failing_ids(self, repo: str, run_id: str) -> list[str] | None:
+        reports = self._case_reports(repo, run_id)
+        if reports is None:
+            return None
+        return sorted({c.test_id for _, cases in reports for c in cases if c.outcome in ("failed", "error")})
+
+    def results(self, repo: str, run_id: str) -> list[Result] | None:
+        reports = self._case_reports(repo, run_id)
+        if reports is None:
+            return None
+        return [Result(job, c.test_id, c.outcome, c.marked) for job, cases in reports for c in cases]
+
+    def _case_reports(self, repo: str, run_id: str) -> list[tuple[str, list[junit.Case]]] | None:
+        """(job, cases) of each readable JUnit report of the latest attempt of each job of the run; None when the
+        run has no artifacts or none of its reports can be read."""
+
         try:
             artifacts = self._pages(
                 ["api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100"], "artifacts")
@@ -298,21 +288,21 @@ class GhPullHub(GhHub):
             raise
         names = _latest_reports([a["name"] for a in artifacts
                                  if _text(a.get("name")).startswith("junit-") and not a.get("expired")])
-        failing, readable = set(), 0
+        reports = []
         for name in names:
+            match = _JUNIT_NAME.fullmatch(name)
+            job = match.group(1) if match else name
             with tempfile.TemporaryDirectory(prefix="orch-it-gh-") as folder:
                 self.gh(["run", "download", str(run_id), "--repo", repo, "-n", name, "-D", folder])
                 for report in sorted(Path(folder).rglob(REPORT_FILE)):
                     try:
-                        cases = junit.read(report)
+                        reports.append((job, junit.read(report)))
                     except junit.ReportUnreadable:
                         continue
-                    readable += 1
-                    failing |= {c.test_id for c in cases if c.outcome in ("failed", "error")}
-        return sorted(failing) if readable else None
+        return reports or None
 
     def branch_runs(self, repo: str, branch: str) -> list[MainRun]:
-        required = _required_jobs(settings.load())
+        required = required_checks(settings.load(), repo)
         listed = self._pages(["api", f"repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs"
                               f"?branch={quote(branch, safe='')}&per_page=30"], "workflow_runs")
         runs = []
@@ -410,7 +400,7 @@ class GhPullHub(GhHub):
         replaced (cancelled before any job started): the newest `RUNS_SCANNED` completed runs are read, and the first
         one neither is the workflow's run."""
 
-        branch = quote(self._default_branch(repo), safe="")
+        branch = quote(self.default_branch(repo), safe="")
         found = []
         for workflow in self._workflows(repo):
             runs = self._pages(["api", f"repos/{repo}/actions/workflows/{workflow.id}/runs?status=completed"
@@ -454,7 +444,9 @@ class GhPullHub(GhHub):
             found.append(WatchIssue(issue["number"], workflow, last_run_id(texts)))
         return found
 
-    def _default_branch(self, repo: str) -> str:
+    def default_branch(self, repo: str) -> str:
+        """The repo's default branch as GitHub reports it."""
+
         found = self._object(["api", f"repos/{repo}"])
         branch = _text(found.get("default_branch")) if found else ""
         if not branch:
@@ -551,15 +543,6 @@ def _unprotected(error: GithubError) -> bool:
     if "HTTP 404" in text:
         return True
     return "HTTP 403" in text and any(words in text for words in _NO_PROTECTION_403)
-
-
-def _auto_merge(repo: str, value: object) -> str | None:
-    if value is None:
-        return None
-    method = value.get("merge_method") if isinstance(value, dict) else None
-    if not isinstance(method, str) or method.lower() not in METHODS:
-        raise GithubError("gh_bad_output", f"{repo}: an auto_merge with no merge_method")
-    return method.lower()
 
 
 def _state(run: dict) -> str:

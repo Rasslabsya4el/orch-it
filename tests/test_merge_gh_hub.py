@@ -15,8 +15,12 @@ from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitDone
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING
 from orch_it.testruns.github import GithubError
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 REPO = "owner-x/repo-y"
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 class Gh:
@@ -78,13 +82,13 @@ def compare_url(base="main", head="h" * 7):
 # --- pull requests ----------------------------------------------------------------------------
 
 
-def test_an_open_pull_request_is_read_with_its_auto_merge_mergeable_and_behind():
+def test_an_open_pull_request_is_read_with_its_mergeable_and_behind_and_an_auto_merge_it_carries_is_ignored():
     gh = Gh(([pull_url()], pull_json(auto_merge={"merge_method": "SQUASH"}, draft=True)),
             ([compare_url()], {"behind_by": 3, "ahead_by": 1}))
     found = GhPullHub(gh).pull(REPO, 5)
     assert found == hub_mod.Pull(
         repo=REPO, number=5, title="T", body="B", branch="feature", head_sha="h" * 7, base="main",
-        state="open", draft=True, auto_merge="squash", mergeable="mergeable", behind=3,
+        state="open", draft=True, mergeable="mergeable", behind=3,
         created_at=datetime(2026, 11, 2, 10, tzinfo=UTC))
 
 
@@ -106,7 +110,7 @@ def test_a_pull_request_that_merged_between_the_list_and_its_read_is_not_listed_
 
 def test_the_events_artifacts_are_the_layer_s_own_unexpired_ones_from_the_newest_pages():
     page = [{"name": "orch-it-events-follow-7-1", "expired": False, "workflow_run": {"id": 7}},
-            {"name": "junit-linux-1", "expired": False, "workflow_run": {"id": 7}},
+            {"name": artifact(LINUX_CHECK, 1), "expired": False, "workflow_run": {"id": 7}},
             {"name": "orch-it-events-follow-6-1", "expired": True, "workflow_run": {"id": 6}},
             {"name": "orch-it-events-main-5-1", "expired": False, "workflow_run": None}]
     gh = Gh(([f"repos/{REPO}/actions/artifacts?per_page=100&page=1"], {"artifacts": page}))
@@ -164,8 +168,7 @@ def test_a_missing_pull_request_is_none_and_a_failure_raises():
 
 
 @pytest.mark.parametrize("answer", ["", "not json", "[1]", "{}", json.dumps(pull_json(head=None)),
-                                    json.dumps(pull_json(created_at="soon")),
-                                    json.dumps(pull_json(auto_merge={"enabled_by": {}}))])
+                                    json.dumps(pull_json(created_at="soon"))])
 def test_a_pull_request_answer_not_of_the_shape_asked_for_is_bad_output(answer):
     gh = Gh(([pull_url()], answer), ([compare_url()], {"behind_by": 0}))
     with pytest.raises(GithubError) as error:
@@ -222,36 +225,36 @@ CHECKS = f"repos/{REPO}/commits/{'c' * 7}/check-runs?per_page=100"
     ("completed", "neutral", NO_RESULT), ("completed", "action_required", NO_RESULT),
     ("completed", "startup_failure", NO_RESULT), ("completed", None, NO_RESULT)])
 def test_every_conclusion_of_a_check_run_maps_to_one_state(status, conclusion, state):
-    gh = Gh(([CHECKS], {"check_runs": [run_of(1, "linux", status, conclusion)]}))
+    gh = Gh(([CHECKS], {"check_runs": [run_of(1, LINUX_CHECK, status, conclusion)]}))
     [check] = GhPullHub(gh).checks(REPO, "c" * 7)
-    assert (check.name, check.state, check.run_id, check.attempt) == ("linux", state, None, 1)
+    assert (check.name, check.state, check.run_id, check.attempt) == (LINUX_CHECK, state, None, 1)
 
 
 def test_the_latest_run_of_each_name_counts_across_pages_with_its_run_and_attempt_read_once():
     pages = (json.dumps({"total_count": 3, "check_runs": [
-        run_of(10, "linux", "completed", "failure", run=500), run_of(30, "windows", run=500)]})
+        run_of(10, LINUX_CHECK, "completed", "failure", run=500), run_of(30, WINDOWS_CHECK, run=500)]})
         + json.dumps({"total_count": 3, "check_runs": [
-            run_of(20, "linux", "completed", "success", run=501, started="2026-11-02T11:00:00Z"),
+            run_of(20, LINUX_CHECK, "completed", "success", run=501, started="2026-11-02T11:00:00Z"),
             run_of(5, "lint", "in_progress", None)]}))
     gh = Gh(([CHECKS, "--paginate"], pages),
             ([f"repos/{REPO}/actions/runs/500"], {"run_attempt": 2}),
             ([f"repos/{REPO}/actions/runs/501"], {"run_attempt": 3}))
     found = {c.name: c for c in GhPullHub(gh).checks(REPO, "c" * 7)}
     assert {n: (c.state, c.run_id, c.attempt) for n, c in found.items()} == {
-        "linux": (PASSED, "501", 3), "windows": (PASSED, "500", 2), "lint": (PENDING, None, 1)}
-    assert found["linux"].started_at == datetime(2026, 11, 2, 11, tzinfo=UTC)
+        LINUX_CHECK: (PASSED, "501", 3), WINDOWS_CHECK: (PASSED, "500", 2), "lint": (PENDING, None, 1)}
+    assert found[LINUX_CHECK].started_at == datetime(2026, 11, 2, 11, tzinfo=UTC)
     assert len(gh.called(f"repos/{REPO}/actions/runs/500")) == 1
 
 
 def test_two_checks_of_one_run_read_the_run_once():
-    gh = Gh(([CHECKS], {"check_runs": [run_of(1, "linux", run=9), run_of(2, "windows", run=9)]}),
+    gh = Gh(([CHECKS], {"check_runs": [run_of(1, LINUX_CHECK, run=9), run_of(2, WINDOWS_CHECK, run=9)]}),
             ([f"repos/{REPO}/actions/runs/9"], {"run_attempt": 4}))
-    assert [(c.name, c.attempt) for c in GhPullHub(gh).checks(REPO, "c" * 7)] == [("linux", 4), ("windows", 4)]
+    assert [(c.name, c.attempt) for c in GhPullHub(gh).checks(REPO, "c" * 7)] == [(LINUX_CHECK, 4), (WINDOWS_CHECK, 4)]
     assert len(gh.called(f"repos/{REPO}/actions/runs/9")) == 1
 
 
 def test_a_run_that_is_gone_or_has_no_attempt_reads_as_the_first():
-    gh = Gh(([CHECKS], {"check_runs": [run_of(1, "linux", run=9), run_of(2, "windows", run=8)]}),
+    gh = Gh(([CHECKS], {"check_runs": [run_of(1, LINUX_CHECK, run=9), run_of(2, WINDOWS_CHECK, run=8)]}),
             ([f"repos/{REPO}/actions/runs/9"], NOT_FOUND),
             ([f"repos/{REPO}/actions/runs/8"], {"status": "completed"}))
     assert [c.attempt for c in GhPullHub(gh).checks(REPO, "c" * 7)] == [1, 1]
@@ -355,35 +358,6 @@ def test_a_failed_create_raises_and_leaves_no_temp_file():
         GhPullHub(Gh((["pr", "create"], create))).create_pull(REPO, "main", "feature", "t", "b")
     assert error.value.code == "gh_failed"
     assert not seen["path"].parent.exists()
-
-
-def test_auto_merge_goes_on_with_a_method_and_off_with_none():
-    gh = Gh((["pr", "merge"], ""))
-    hub = GhPullHub(gh)
-    hub.set_auto_merge(REPO, 5, "squash")
-    hub.set_auto_merge(REPO, 5, None)
-    assert gh.calls == [["pr", "merge", "5", "--repo", REPO, "--auto", "--squash"],
-                        ["pr", "merge", "5", "--repo", REPO, "--disable-auto"]]
-
-
-def test_auto_merge_already_off_is_no_error_and_any_other_refusal_raises():
-    off = GithubError("gh_failed", "pr merge 5 --repo x: X Auto-merge is not enabled for this pull request")
-    hub = GhPullHub(Gh((["--disable-auto"], off), (["--auto", "--merge"], GithubError(
-        "gh_failed", "pr merge: Pull request Auto merge is not allowed for this repository"))))
-    hub.set_auto_merge(REPO, 5, None)
-    with pytest.raises(GithubError):
-        hub.set_auto_merge(REPO, 5, "merge")
-    with pytest.raises(GithubError):
-        GhPullHub(Gh((["--disable-auto"], failed(502)))).set_auto_merge(REPO, 5, None)
-
-
-def test_auto_merge_already_on_is_no_error_and_a_method_not_known_is_refused_before_any_call():
-    gh = Gh((["--auto"], GithubError("gh_failed", "pr merge: auto-merge is already enabled")))
-    hub = GhPullHub(gh)
-    hub.set_auto_merge(REPO, 5, "rebase")
-    with pytest.raises(ValueError):
-        hub.set_auto_merge(REPO, 5, "fast-forward")
-    assert len(gh.calls) == 1
 
 
 # --- the checks a base requires (#424 unit 4) -----------------------------------------------------
@@ -556,6 +530,12 @@ JUNIT_OTHER = ('<testsuites><testsuite name="s"><testcase classname="tests.t_c" 
 ARTIFACTS = f"repos/{REPO}/actions/runs/9/artifacts?per_page=100"
 
 
+def artifact(job, attempt):
+    """The name of a job\'s JUnit artifact, as the workflow uploads it."""
+
+    return f"junit-{job}-{attempt}"
+
+
 def downloads(files):
     """A `gh run download` that writes `files` (artifact name -> junit text) where it is told."""
 
@@ -569,40 +549,53 @@ def downloads(files):
 
 
 def test_the_failed_and_errored_tests_of_the_junit_artifacts_are_listed_sorted_and_unique():
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}, {"name": "junit-windows-1"},
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}, {"name": artifact(WINDOWS_CHECK, 1)},
                                          {"name": "coverage"}]}),
-            downloads({"junit-linux-1": JUNIT, "junit-windows-1": JUNIT_OTHER}))
+            downloads({artifact(LINUX_CHECK, 1): JUNIT, artifact(WINDOWS_CHECK, 1): JUNIT_OTHER}))
     found = GhPullHub(gh).failing_ids(REPO, "9")
     assert found == ["tests.t_a::test_red", "tests.t_b::test_boom", "tests.t_c::test_win"]
     assert [c[:6] for c in gh.called("download")] == [
         ["run", "download", "9", "--repo", REPO, "-n"], ["run", "download", "9", "--repo", REPO, "-n"]]
-    assert [c[c.index("-n") + 1] for c in gh.called("download")] == ["junit-linux-1", "junit-windows-1"]
+    assert [c[c.index("-n") + 1] for c in gh.called("download")] == [artifact(LINUX_CHECK, 1), artifact(WINDOWS_CHECK, 1)]
     assert not Path(gh.called("download")[0][-1]).exists()  # the temp dir is gone
+
+
+def test_the_results_of_a_run_name_the_job_of_each_report_and_whether_the_case_is_marked():
+    marked = ('<testsuites><testsuite name="s"><testcase classname="tests.t_w" name="test_path"><properties>'
+              '<property name="os_touching" value="1"/></properties><failure message="x"/></testcase>'
+              '<testcase classname="tests.t_w" name="test_plain"/></testsuite></testsuites>')
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}, {"name": artifact(WINDOWS_CHECK, 1)}]}),
+            downloads({artifact(LINUX_CHECK, 1): JUNIT_OTHER, artifact(WINDOWS_CHECK, 1): marked}))
+    found = GhPullHub(gh).results(REPO, "9")
+    assert [(r.job, r.test_id, r.outcome, r.marked) for r in found] == [
+        (LINUX_CHECK, "tests.t_c::test_win", "failed", False), (LINUX_CHECK, "tests.t_a::test_red", "failed", False),
+        (WINDOWS_CHECK, "tests.t_w::test_path", "failed", True), (WINDOWS_CHECK, "tests.t_w::test_plain", "passed", False)]
+    assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": []}))).results(REPO, "9") is None
 
 
 def test_only_the_latest_attempt_of_a_job_is_read_and_an_expired_artifact_is_not():
     gh = Gh(([ARTIFACTS, "--paginate"],
-             json.dumps({"artifacts": [{"name": "junit-linux-1"}, {"name": "junit-windows-1", "expired": True}]})
-             + json.dumps({"artifacts": [{"name": "junit-linux-2"}]})),
-            downloads({"junit-linux-1": JUNIT, "junit-linux-2": JUNIT_OTHER}))
+             json.dumps({"artifacts": [{"name": artifact(LINUX_CHECK, 1)}, {"name": artifact(WINDOWS_CHECK, 1), "expired": True}]})
+             + json.dumps({"artifacts": [{"name": artifact(LINUX_CHECK, 2)}]})),
+            downloads({artifact(LINUX_CHECK, 1): JUNIT, artifact(LINUX_CHECK, 2): JUNIT_OTHER}))
     assert GhPullHub(gh).failing_ids(REPO, "9") == ["tests.t_a::test_red", "tests.t_c::test_win"]
-    assert [c[c.index("-n") + 1] for c in gh.called("download")] == ["junit-linux-2"]
+    assert [c[c.index("-n") + 1] for c in gh.called("download")] == [artifact(LINUX_CHECK, 2)]
 
 
 def test_a_green_report_is_an_empty_list_not_none():
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}]}),
-            downloads({"junit-linux-1": '<testsuite><testcase classname="a" name="b"/></testsuite>'}))
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}]}),
+            downloads({artifact(LINUX_CHECK, 1): '<testsuite><testcase classname="a" name="b"/></testsuite>'}))
     assert GhPullHub(gh).failing_ids(REPO, "9") == []
 
 
 def test_no_junit_artifact_or_no_readable_report_is_none():
     assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": [{"name": "coverage"}]}))).failing_ids(REPO, "9") is None
     assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": []}))).failing_ids(REPO, "9") is None
-    assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1", "expired": True}]}))
+    assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1), "expired": True}]}))
                      ).failing_ids(REPO, "9") is None
     assert GhPullHub(Gh(([f"repos/{REPO}/actions/runs/9/artifacts?per_page=100"], NOT_FOUND))
                      ).failing_ids(REPO, "9") is None
-    broken = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}]}), downloads({"junit-linux-1": "<testsuite"}))
+    broken = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}]}), downloads({artifact(LINUX_CHECK, 1): "<testsuite"}))
     assert GhPullHub(broken).failing_ids(REPO, "9") is None
 
 
@@ -610,15 +603,15 @@ def test_an_artifact_with_no_report_file_is_unreadable_and_one_good_report_is_en
     def empty(args):
         return ""
 
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}]}), (["run", "download"], empty))
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}]}), (["run", "download"], empty))
     assert GhPullHub(gh).failing_ids(REPO, "9") is None
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}, {"name": "junit-windows-1"}]}),
-            downloads({"junit-linux-1": "<broken", "junit-windows-1": JUNIT}))
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}, {"name": artifact(WINDOWS_CHECK, 1)}]}),
+            downloads({artifact(LINUX_CHECK, 1): "<broken", artifact(WINDOWS_CHECK, 1): JUNIT}))
     assert GhPullHub(gh).failing_ids(REPO, "9") == ["tests.t_a::test_red", "tests.t_b::test_boom"]
 
 
 def test_a_failed_download_and_a_bad_artifact_list_raise():
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}]}),
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}]}),
             (["run", "download"], GithubError("gh_failed", "run download: no artifact")))
     with pytest.raises(GithubError):
         GhPullHub(gh).failing_ids(REPO, "9")
@@ -646,26 +639,26 @@ def test_the_runs_of_the_tests_workflow_on_a_branch_come_newest_first_with_their
         workflow_run(3, "schedule", status="in_progress", created="2026-11-03T01:00:00Z"),
         workflow_run(4, "workflow_dispatch", created="2026-11-02T12:00:00Z")]}),
         ([f"repos/{REPO}/actions/runs/1/jobs?per_page=100"], {"jobs": [
-            job_of(11, "linux", conclusion="failure"), job_of(12, "windows"), job_of(13, "lint")]}),
+            job_of(11, LINUX_CHECK, conclusion="failure"), job_of(12, WINDOWS_CHECK), job_of(13, "lint")]}),
         ([f"repos/{REPO}/actions/runs/3/jobs?per_page=100"], {"jobs": [
-            job_of(31, "linux", "in_progress", None)]}),
+            job_of(31, LINUX_CHECK, "in_progress", None)]}),
         ([f"repos/{REPO}/actions/runs/4/jobs?per_page=100"], {"jobs": [
-            job_of(41, "linux", conclusion="cancelled")]}))
+            job_of(41, LINUX_CHECK, conclusion="cancelled")]}))
     found = GhPullHub(gh).branch_runs(REPO, "main")
     assert [(r.run_id, r.sha, r.event, r.attempt, r.jobs) for r in found] == [
-        ("3", "sha3", "schedule", 1, {"linux": PENDING, "windows": PENDING}),
-        ("4", "sha4", "workflow_dispatch", 1, {"linux": NO_RESULT, "windows": NO_RESULT}),
-        ("1", "sha1", "push", 2, {"linux": FAILED, "windows": PASSED})]
+        ("3", "sha3", "schedule", 1, {LINUX_CHECK: PENDING, WINDOWS_CHECK: PENDING}),
+        ("4", "sha4", "workflow_dispatch", 1, {LINUX_CHECK: NO_RESULT, WINDOWS_CHECK: NO_RESULT}),
+        ("1", "sha1", "push", 2, {LINUX_CHECK: FAILED, WINDOWS_CHECK: PASSED})]
     assert found[0].created_at == datetime(2026, 11, 3, 1, tzinfo=UTC)
     assert not gh.called(f"repos/{REPO}/actions/runs/2/jobs?per_page=100")
 
 
 def test_the_required_jobs_are_the_setting_and_the_latest_job_of_a_name_counts(tmp_path):
-    (tmp_path / "settings.json").write_text('{"github_required_jobs": ["unit", "lint"]}', "utf-8")
+    (tmp_path / "settings.json").write_text('{"required_checks": ["unit", "lint"]}', "utf-8")
     gh = Gh(([WORKFLOW_RUNS], {"workflow_runs": [workflow_run(1)]}),
             ([f"repos/{REPO}/actions/runs/1/jobs?per_page=100", "--paginate"],
              json.dumps({"jobs": [job_of(20, "unit", conclusion="failure"), job_of(10, "lint")]})
-             + json.dumps({"jobs": [job_of(30, "unit"), job_of(5, "linux")]})))
+             + json.dumps({"jobs": [job_of(30, "unit"), job_of(5, LINUX_CHECK)]})))
     [run] = GhPullHub(gh).branch_runs(REPO, "main")
     assert run.jobs == {"unit": PASSED, "lint": PASSED}
 
@@ -677,7 +670,7 @@ def test_branch_runs_with_a_bad_answer_raise_and_a_bad_setting_raises_before_any
     assert error.value.code == "gh_bad_output"
     with pytest.raises(GithubError):
         GhPullHub(Gh(([WORKFLOW_RUNS], "nope"))).branch_runs(REPO, "main")
-    (tmp_path / "settings.json").write_text('{"github_required_jobs": []}', "utf-8")
+    (tmp_path / "settings.json").write_text('{"required_checks": []}', "utf-8")
     gh = Gh()
     with pytest.raises(settings.SettingsError):
         GhPullHub(gh).branch_runs(REPO, "main")

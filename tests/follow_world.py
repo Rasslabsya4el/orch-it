@@ -39,7 +39,7 @@ def world(tmp_path, *, body=NO_AFTER_MERGE, rows=ROWS_NO_AFTER, tickets=(10,), n
     returns (hub, store, {ticket: pr})."""
 
     hub = FakeGitHub(now)
-    hub.required_by_base = {"main": set(REQUIRED)}  # main requires every job: `pr open` turns auto-merge on
+    hub.required_by_base = {"main": set(REQUIRED)}  # main requires every job
     store = Store.open(tmp_path / "events")
     prs = {}
     for number in tickets:
