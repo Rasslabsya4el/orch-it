@@ -1,5 +1,7 @@
 # The guards judge the object, own a process by its tree, and fail open with an event
 
+Status: amended by D4 amd 1 (Rasslabsya4el/orchestration-layer#413); the decision text below is kept as it was.
+
 The three kept guards — worktree delete, foreign process stop, private data in a public repo —
 decide on the object a command would act on (the real path on disk with links followed and the
 file system's own case rule, the real process tree, the real visibility of the remote), not on a
@@ -39,3 +41,9 @@ the crash visible and countable.
   the private value.
 - **psutil is the one reading of the process tree**, orch-it's first runtime dependency, so the
   ownership fact reads the same on Windows, Linux and macOS.
+
+## D4 amd 1: the repo a guard's events are written under
+
+Amendment (Rasslabsya4el/orchestration-layer#413): a guard's events are written under the repo it runs in, the GitHub
+origin, else the setting `repo`. With neither, the verdict still stands and stderr names the event not written; no repo
+is guessed, because a default repo is an account value this repo refuses.
