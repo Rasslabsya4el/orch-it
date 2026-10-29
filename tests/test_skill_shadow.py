@@ -11,7 +11,7 @@ from pathlib import Path
 from orch_it.events.store import Store
 from orch_it.skills import shadow
 from orch_it.skills.copies import NO_WINDOW
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 
 
 def skill_folder(root, name, text="---\nname: x\n---\n"):

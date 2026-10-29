@@ -88,7 +88,7 @@ def write_lines(path: Path, lines, tail: bytes = b""):
 
 @pytest.fixture
 def folder(tmp_path):
-    project = tmp_path / "projects" / "C--Coding-orch-it"
+    project = tmp_path / "projects" / "C--Work-widgets-y"
     write_lines(project / f"{TOP}.jsonl", top_lines())
     subagents = project / TOP / "subagents"
     write_lines(subagents / f"agent-{AGENT}.jsonl", agent_lines())
@@ -98,7 +98,7 @@ def folder(tmp_path):
 
 
 def run(folder, store, now=LATER, **over):
-    options = {"repo": "Rasslabsya4el/orch-it", "role": "worker-strong", "ticket": 393, "now": now}
+    options = {"repo": "acme-x/widgets-y", "role": "worker-strong", "ticket": 393, "now": now}
     return import_transcripts(folder, store, **options | over)
 
 
@@ -206,7 +206,7 @@ def test_sessions_are_step_pairs_and_a_subagent_has_its_parent(folder, tmp_path)
     assert json.loads(started[AGENT])["title"] == "write the doc"
     assert json.loads(started[AGENT])["launched_by"] == "session"
     assert store.query("SELECT DISTINCT ticket, repo FROM events").rows == [
-        (393, "Rasslabsya4el/orch-it")]
+        (393, "acme-x/widgets-y")]
 
 
 def test_a_live_session_has_no_end_yet(folder, tmp_path):

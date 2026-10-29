@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo
+from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo, default_host
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
@@ -444,8 +444,8 @@ def test_the_scan_step_passes_a_pull_request_whose_own_commits_are_clean(tmp_pat
     assert (done.returncode, done.stdout) == (0, "hits=0 commits=1\n"), done.stderr
 
 
-# a default host name, put together at run time so none stands in this committed file
-DEFAULT_HOST_NAME = "WI" + "N-OHK3JQ5AM84"
+# a default host name, made at run time (a WIN name of its shape) so none stands in this committed file
+DEFAULT_HOST_NAME = default_host("WIN", 12)
 
 
 def test_the_scan_step_fails_on_a_pull_request_that_adds_a_default_host_name_without_printing_it(tmp_path):

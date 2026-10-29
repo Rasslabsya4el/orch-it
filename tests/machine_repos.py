@@ -61,7 +61,7 @@ def prefer_machine(store, machine_place: str):
 
     with store.writer() as writer:
         for n, (place, minutes) in enumerate((("own", 5.0), (machine_place, 0.001))):
-            envelope = {"repo": "Rasslabsya4el/orch-it", "ticket": None, "role": "script", "session": None,
+            envelope = {"repo": "acme-x/widgets-y", "ticket": None, "role": "script", "session": None,
                         "parent_session": None, "turn": None, "step": "test_run", "run": f"seed{n}",
                         "note": None}
             writer.write(envelope | {"kind": "step.started", "at": "2026-01-01T00:00:00+00:00", "detail": {

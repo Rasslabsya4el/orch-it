@@ -25,7 +25,7 @@ from orch_it.testruns.machine import MachinePlace
 from orch_it.testruns.places import OwnPlace, PlaceRefused, PlaceVanished, Request
 from orch_it.testruns.runner import default_places, run_tests
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 FAKE_SSH = (sys.executable, str(Path(__file__).with_name("fake_ssh.py")))
 BOX = "machine:box"
 COMMAND = ("{python}", "-m", "pytest", "-q", "--junitxml={report}")

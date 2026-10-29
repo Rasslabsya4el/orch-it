@@ -3,9 +3,11 @@ run time from parts so none of them stands in a committed file (this repository'
 requests are scanned by the step these tests cover), and a throwaway repository to commit them to."""
 
 import os
+import secrets
 import shutil
+import string
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 NOREPLY = "fixture@users.noreply.github.com"
@@ -17,9 +19,26 @@ OPENAI_KEY = "sk" + "-" + "proj" + "Qw3" * 8
 AWS_KEY = "AK" + "IA" + "ABCDEFGH12345678"
 PRIVATE_KEY = "-----" + "BEGIN RSA PRIVATE" + " KEY-----"
 EMAIL = "jane.doe" + "@" + "corp" + ".io"
-SOMEONE_HOME = "/ho" + "me/someone"
-MAC_HOME = "/Us" + "ers/someone"
-WIN_HOME = "C:" + "\\Us" + "ers\\someone"
+
+# An invented account for every home folder below: built from parts of a path, so no home path
+# written out in full stands in a committed file (the scanner would find it there).
+INVENTED_USER = "jdoe"
+SOMEONE_HOME = str(PurePosixPath("/home") / INVENTED_USER)      # /home/jdoe
+MAC_HOME = str(PurePosixPath("/Users") / INVENTED_USER)         # /Users/jdoe
+WIN_HOME = str(PureWindowsPath("C:/") / "Users" / INVENTED_USER)  # C:\Users\jdoe
+WIN_TAIL = "/".join(PureWindowsPath(WIN_HOME).parts[1:])         # Users/jdoe
+MSYS_HOME = "/c/" + WIN_TAIL                                      # /c/Users/jdoe
+
+
+def invented_host(prefix: str = "testbox") -> str:
+    """A host name no machine has: the prefix, a dash and six random hex digits, made at run time."""
+    return f"{prefix}-{secrets.token_hex(3)}"
+
+
+def default_host(prefix: str, size: int) -> str:
+    """A host name the OS gives a machine nobody named: the prefix, a dash and `size` random upper-case
+    letters and digits, the shape the scanner's default-name pattern takes. Made at run time."""
+    return prefix + "-" + "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(size))
 
 
 class Repo:

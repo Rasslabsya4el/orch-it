@@ -13,7 +13,7 @@ import re
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -22,8 +22,9 @@ from orch_it.cli import main
 from orch_it.guards import scanner
 from orch_it.guards.scanner import KINDS, Hit, Patterns, ScanError
 from orch_it.testruns import github
-from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, NO_WINDOW,
-                        NOREPLY, OPENAI_KEY, PRIVATE_KEY, SOMEONE_HOME, Repo, make_template)
+from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, INVENTED_USER,
+                        MAC_HOME, MSYS_HOME, NO_WINDOW, NOREPLY, OPENAI_KEY, PRIVATE_KEY, SOMEONE_HOME,
+                        WIN_HOME, WIN_TAIL, Repo, default_host, invented_host, make_template)
 
 # kind -> a line holding one value of it, the value
 LINES = {
@@ -110,15 +111,15 @@ def test_a_public_key_header_is_no_hit():
 # --- home paths -----------------------------------------------------------------------------
 
 @pytest.mark.parametrize("home", [
-    "C:" + "\\Us" + "ers\\someone",
-    "d:" + "\\us" + "ers\\someone",
-    "C:" + "/Us" + "ers/someone",
-    "C:" + "\\\\Us" + "ers\\\\someone",
-    "/c" + "/Us" + "ers/someone",
-    "/cyg" + "drive/c" + "/Us" + "ers/someone",
-    "/mn" + "t/c" + "/Us" + "ers/someone",
-    "/ho" + "me/someone",
-    "/Us" + "ers/someone",
+    WIN_HOME,
+    WIN_HOME.replace("C:", "d:").replace("Users", "users"),
+    WIN_HOME.replace("\\", "/"),
+    WIN_HOME.replace("\\", "\\\\"),
+    MSYS_HOME,
+    "/cygdrive/c/" + WIN_TAIL,
+    "/mnt/c/" + WIN_TAIL,
+    SOMEONE_HOME,
+    MAC_HOME,
     "/ro" + "ot",
 ])
 def test_every_spelling_of_a_home_path_is_found(home):
@@ -201,10 +202,10 @@ def test_the_root_folder_follows_any_character_that_is_not_part_of_a_path(before
 
 
 def test_a_value_that_overlaps_another_is_redacted_whole():
-    text = "see C:" + "\\Us" + "ers\\john.smith" + "@" + "corp.example.io now"
+    text = "see " + str(PureWindowsPath("C:/") / "Users" / "jane.doe") + "@" + "corp.example.io now"
     shown = Patterns.machine_independent().redact(text)
     assert shown == "see <home_path> now"
-    assert "corp" not in shown and "john" not in shown
+    assert "corp" not in shown and "jane" not in shown
     shown = Patterns.machine_independent().redact(GITHUB_TOKEN + "@" + "corp.example.io")
     assert "corp" not in shown and "ghp" not in shown
 
@@ -235,10 +236,11 @@ def test_the_machine_home_outside_the_usual_folders_is_found_in_every_spelling()
 
 
 def test_a_posix_machine_home_is_matched_as_it_is():
-    patterns = Patterns(homes=("/data/" + "someone",))
-    assert kinds("ls /data/" + "someone/x", patterns) == ["home_path"]
-    assert kinds("ls /data/" + "someone", patterns) == ["home_path"]
-    assert kinds("ls /data/" + "someonelse/x", patterns) == []
+    home = str(PurePosixPath("/data") / INVENTED_USER)
+    patterns = Patterns(homes=(home,))
+    assert kinds("ls " + home + "/x", patterns) == ["home_path"]
+    assert kinds("ls " + home, patterns) == ["home_path"]
+    assert kinds("ls " + home + "lse/x", patterns) == []
 
 
 def test_the_machine_independent_patterns_know_no_machine_home():
@@ -248,16 +250,18 @@ def test_the_machine_independent_patterns_know_no_machine_home():
 # --- the host name --------------------------------------------------------------------------
 
 def test_the_host_name_and_its_first_label_are_found_whole_word_in_any_case():
-    patterns = Patterns(host="Build-Box" + "-7.lan.corp")
-    for text in ("on BUILD-BOX-7", "build-box-7.lan.corp:22", "host=Build-Box-7;", "(build-box-7)"):
+    host = invented_host()
+    patterns = Patterns(host=host + ".lan.example")
+    for text in (f"on {host.upper()}", f"{host}.lan.example:22", f"host={host.capitalize()};", f"({host})"):
         assert kinds(text, patterns) == ["host_name"], text
-    for other in ("build-box-70", "xbuild-box-7", "build-box-7-b", "build-box"):
+    for other in (host + "0", "x" + host, host + "-b", host.rsplit("-", 1)[0]):
         assert kinds(other, patterns) == [], other
 
 
 # the default host names an OS gives a machine nobody named (#395 brain answer): found on any
-# machine, so the job's machine-independent scan catches a leaked one. Put together at run time.
-DEFAULT_HOSTS = ["WI" + "N-OHK3JQ5AM84", "DESK" + "TOP-ABC1234", "LAP" + "TOP-AB123456"]
+# machine, so the job's machine-independent scan catches a leaked one. Made at run time, each of
+# the shape the scanner's default-name pattern takes (WIN 8 to 15 characters, DESKTOP 7, LAPTOP 8).
+DEFAULT_HOSTS = [default_host("WIN", 12), default_host("DESKTOP", 7), default_host("LAPTOP", 8)]
 
 
 @pytest.mark.parametrize("name", DEFAULT_HOSTS)
@@ -267,10 +271,13 @@ def test_a_default_host_name_is_found_on_any_machine(name):
     assert Patterns.machine_independent().redact(f'hostname="{name}"') == 'hostname="<host_name>"'
 
 
+_WIN = default_host("WIN", 12)
+
+
 @pytest.mark.parametrize("text", [
-    "WINDOWS", "WIN-abc", "wi" + "n-ohk3jq5am84", "desk" + "top", "DESK" + "TOP-ABC12345", "DESK" + "TOP-ABC123",
-    "MY-WI" + "N-OHK3JQ5AM84", "WI" + "N-OHK3JQ5AM84-X", "WI" + "N-OHK3JQ5AM84_1", "XWI" + "N-OHK3JQ5AM84",
-    "WI" + "N-SHORT", "LAP" + "TOP-AB1234567",
+    "WINDOWS", "WIN-abc", _WIN.lower(), "desktop", default_host("DESKTOP", 8), default_host("DESKTOP", 6),
+    "MY-" + _WIN, _WIN + "-X", _WIN + "_1", "X" + _WIN,
+    "WIN-SHORT", default_host("LAPTOP", 9),
 ])
 def test_what_is_no_default_host_name_is_not_found(text):
     assert Patterns.machine_independent().find(text) == []
@@ -342,15 +349,16 @@ def test_of_machine_measures_the_home_the_host_and_the_words_file(tmp_path, monk
     home = tmp_path / "somebody"
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(scanner.socket, "gethostname", lambda: "Lab-Pc" + "-42.dept.example")
+    host = invented_host()
+    monkeypatch.setattr(scanner.socket, "gethostname", lambda: host + ".dept.example")
     words = tmp_path / "words.txt"
     words.write_text("# my words\n\n  Blue" + "Heron  \nsecond" + " word\n", "utf-8", newline="\n")
     patterns = Patterns.of_machine(words_file=words)
     assert patterns.homes == (str(home),)
-    assert patterns.host == "Lab-Pc" + "-42.dept.example"
+    assert patterns.host == host + ".dept.example"
     assert patterns.words == ("Blue" + "Heron", "second" + " word")
     assert kinds(f"{home}{os.sep}x", patterns) == ["home_path"]
-    assert kinds("on lab-pc-42", patterns) == ["host_name"]
+    assert kinds("on " + host, patterns) == ["host_name"]
     assert kinds("a blueheron flew", patterns) == ["private_word"]
 
 
@@ -472,17 +480,18 @@ def test_the_line_number_follows_the_hunks_of_a_changed_file(repo):
 
 
 @pytest.mark.parametrize("home", [
-    "C:" + "\\Us" + "ers\\someone\\x", "C:" + "/Us" + "ers/someone/x", "/c" + "/Us" + "ers/someone/x",
-    "/mn" + "t/c" + "/Us" + "ers/someone/x", "/cyg" + "drive/c" + "/Us" + "ers/someone/x",
-    "/ho" + "me/someone/x", "/Us" + "ers/someone/x", "/ro" + "ot/x", "C:" + "\\\\Us" + "ers\\\\someone"])
+    WIN_HOME + "\\x", WIN_HOME.replace("\\", "/") + "/x", MSYS_HOME + "/x",
+    "/mnt/c/" + WIN_TAIL + "/x", "/cygdrive/c/" + WIN_TAIL + "/x",
+    SOMEONE_HOME + "/x", MAC_HOME + "/x", "/ro" + "ot/x", WIN_HOME.replace("\\", "\\\\")])
 def test_every_home_spelling_is_found_in_a_commit(repo, home):
     sha = repo.commit({"a.txt": f'path = "{home}"\n'})
     assert scan(repo) == [Hit("home_path", "content", sha, "a.txt", 1)]
 
 
 def test_the_machine_home_and_host_and_words_are_found_in_a_commit(repo):
-    patterns = Patterns(homes=("D:" + "\\me",), host="Lab-Pc" + "-42", words=("Blue" + "Heron",))
-    sha = repo.commit({"a.txt": "D:" + "\\me\\x\nrunning on lab-pc-42\nthe blueheron\n"})
+    host = invented_host()
+    patterns = Patterns(homes=("D:" + "\\me",), host=host, words=("Blue" + "Heron",))
+    sha = repo.commit({"a.txt": "D:" + "\\me\\x\nrunning on " + host + "\nthe blueheron\n"})
     assert scan(repo, patterns) == [Hit("home_path", "content", sha, "a.txt", 1),
                                     Hit("host_name", "content", sha, "a.txt", 2),
                                     Hit("private_word", "content", sha, "a.txt", 3)]
@@ -569,9 +578,10 @@ def test_an_allowed_author_address_is_no_hit_and_another_is(repo):
 
 
 def test_the_machine_host_in_an_author_name_is_found(repo):
-    repo.env |= {"GIT_AUTHOR_NAME": "Lab-Pc" + "-42 admin"}
+    host = invented_host()
+    repo.env |= {"GIT_AUTHOR_NAME": host.capitalize() + " admin"}
     sha = repo.commit({"a.txt": "x\n"})
-    assert scan(repo, Patterns(host="lab-pc" + "-42")) == [Hit("host_name", "author", sha, None, None)]
+    assert scan(repo, Patterns(host=host)) == [Hit("host_name", "author", sha, None, None)]
 
 
 # --- the edges ------------------------------------------------------------------------------

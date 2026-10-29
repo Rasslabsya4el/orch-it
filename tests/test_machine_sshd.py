@@ -29,7 +29,7 @@ from orch_it.testruns.machine import REMOTE_PROGRAM, MachinePlace
 from orch_it.testruns.places import OwnPlace
 from orch_it.testruns.runner import run_tests
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 PLACE = "machine:local-ssh"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BOUND_MINUTES = 1  # a run of these tests is short; a stuck one is cut well inside the job's time

@@ -39,7 +39,7 @@ def park(hub, store, kind, ref, until="2026-11-30", number=10):
 
 @pytest.mark.parametrize("line, kind, ref", [
     ("Parked: pr_ended #12 until 2026-11-30", "pr_ended", "#12"),
-    ("Parked: ticket_closed Rasslabsya4el/orch-it#7 until 2026-11-30", "ticket_closed", "Rasslabsya4el/orch-it#7"),
+    ("Parked: ticket_closed acme-x/widgets-y#7 until 2026-11-30", "ticket_closed", "acme-x/widgets-y#7"),
     ("Parked: date 2026-11-20 until 2026-11-21", "date", "2026-11-20"),
     ("Parked: run_ended 18865432101 until 2026-11-30", "run_ended", "18865432101"),
     ("Parked: run_ended 019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b until 2026-11-30", "run_ended",
