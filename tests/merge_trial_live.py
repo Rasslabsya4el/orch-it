@@ -28,13 +28,15 @@ class LiveRun:
 
 
 def wait_workflow_run(run: merge_trial._Run, workflow_file: str, since: datetime, *, head_sha: str | None = None,
-                      event: str | None = None, minutes: float | None = None) -> LiveRun:
+                      event: str | None = None, minutes: float | None = None,
+                      ignore_ids: frozenset[str] = frozenset()) -> LiveRun:
     """The first run of `workflow_file` GitHub lists that was created at or after `since` (a timezone-aware
     moment), with `head_sha` and `event` when given, and has ended; newest first. A run that ended `skipped`
     is returned as skipped, never as a success. `TrialTimeout` when none ends within the bound."""
 
     def probe() -> LiveRun | None:
         for listed in run.trial.workflow_runs(workflow_file):
+            if str(listed.get("id")) in ignore_ids: continue
             created = _moment(listed.get("created_at"))
             if created is None or created < since.replace(microsecond=0):  # GitHub's times have whole seconds
                 continue
