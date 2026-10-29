@@ -1,20 +1,21 @@
 """The workflow watch's decision (#411 unit 2): a non-green latest run opens one watch ticket, a repeat
-non-green run comments on it, a green run closes it. The decision is one pure function: no I/O here.
-Test data uses invented names only (`example-flow`, repo `acme/example`)."""
+non-green run comments on it, a green run (outcome success) closes it. The decision is one pure function:
+no I/O here. Test data uses invented names only (`example-flow`, repo `acme/example`)."""
 
 import pytest
 
 from orch_it import tickets
 from orch_it.merge import workflow_watch as watch
 from orch_it.tickets.reader import TRIAGE_LABEL
+from orch_it.tickets.shape import TITLE_MAX
 
 REPO = "acme/example"
-SKIP = frozenset({"tests"})
+SKIP = frozenset({"example-tests"})
 
 
-def run(workflow="example-flow", run_id=4117, outcome="failure", jobs=3):
+def run(workflow="example-flow", run_id=4117, outcome="failure", jobs=3, ended="2026-10-28T09:00:00Z"):
     url = f"https://github.com/{REPO}/actions/runs/{run_id}"
-    return watch.WorkflowRun(workflow, run_id, url, "2026-10-28T09:00:00Z", outcome, jobs)
+    return watch.WorkflowRun(workflow, run_id, url, ended, outcome, jobs)
 
 
 def decide(latest, issues=(), skip=SKIP):
@@ -23,6 +24,10 @@ def decide(latest, issues=(), skip=SKIP):
 
 def opened(actions):
     return [action for action in actions if isinstance(action, watch.Open)]
+
+
+def shape_violations(action):
+    return tickets.violations(tickets.parse(action.body, title=action.title, labels=watch.LABELS))
 
 
 @pytest.mark.parametrize("outcome, jobs, phrase", [
@@ -56,15 +61,19 @@ def test_the_same_run_again_does_nothing():
     assert actions == []
 
 
-@pytest.mark.parametrize("outcome, jobs", [
-    ("success", 3),
-    ("skipped", 2),
-    ("other", 2),
-], ids=["success", "skipped_with_jobs", "other_with_jobs"])
-def test_a_green_run_closes_the_watch(outcome, jobs):
-    actions = decide([run(outcome=outcome, jobs=jobs)], [watch.WatchIssue(7, "example-flow", last_run_id=4117)])
+def test_a_green_run_closes_the_watch():
+    actions = decide([run(outcome="success", jobs=3)], [watch.WatchIssue(7, "example-flow", last_run_id=4117)])
     assert len(actions) == 1 and isinstance(actions[0], watch.Close)
     assert actions[0].issue_number == 7
+
+
+@pytest.mark.parametrize("outcome, jobs", [
+    ("skipped", 2),
+    ("other", 2),
+], ids=["skipped_with_jobs", "other_with_jobs"])
+def test_a_run_that_is_neither_green_nor_non_green_does_nothing_with_or_without_a_watch(outcome, jobs):
+    assert decide([run(outcome=outcome, jobs=jobs)]) == []
+    assert decide([run(outcome=outcome, jobs=jobs)], [watch.WatchIssue(7, "example-flow", 4117)]) == []
 
 
 def test_a_green_run_with_no_watch_does_nothing():
@@ -72,9 +81,9 @@ def test_a_green_run_with_no_watch_does_nothing():
 
 
 def test_the_skipped_workflow_does_nothing_with_or_without_a_watch():
-    failing = run(workflow="tests", outcome="failure")
+    failing = run(workflow="example-tests", outcome="failure")
     assert decide([failing], skip=SKIP) == []
-    assert decide([failing], [watch.WatchIssue(7, "tests", last_run_id=None)], skip=SKIP) == []
+    assert decide([failing], [watch.WatchIssue(7, "example-tests", last_run_id=None)], skip=SKIP) == []
 
 
 def test_six_workflows_with_two_non_green_open_two_watch_tickets():
@@ -99,6 +108,34 @@ def test_several_watches_of_one_workflow_comment_on_the_lowest_number_only():
     assert actions[0].issue_number == 7
 
 
+def test_a_green_run_closes_every_open_watch_of_its_workflow():
+    issues = [watch.WatchIssue(9, "example-flow", last_run_id=4000),
+              watch.WatchIssue(7, "example-flow", last_run_id=4000)]
+    actions = decide([run(outcome="success")], issues)
+    assert [(type(action), action.issue_number) for action in actions] == [(watch.Close, 7), (watch.Close, 9)]
+
+
+def test_two_runs_of_one_workflow_give_one_action_for_the_later_one():
+    earlier_green = run(run_id=4117, outcome="success", ended="2026-10-28T09:00:00Z")
+    later_green = run(run_id=4118, outcome="success", ended="2026-10-28T10:00:00Z")
+    issues = [watch.WatchIssue(7, "example-flow", last_run_id=4116)]
+    assert decide([earlier_green, later_green], issues) == decide([later_green], issues)
+
+    earlier_red = run(run_id=4117, outcome="failure", ended="2026-10-28T09:00:00Z")
+    later_red = run(run_id=4118, outcome="failure", ended="2026-10-28T10:00:00Z")
+    actions = decide([later_red, earlier_red])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Open)
+    assert actions[0].run.run_id == 4118
+
+
+def test_a_tie_in_end_time_keeps_the_greater_run_id():
+    lower = run(run_id=4119, outcome="failure", ended="2026-10-28T09:00:00Z")
+    greater = run(run_id=4120, outcome="failure", ended="2026-10-28T09:00:00Z")
+    actions = decide([greater, lower])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Open)
+    assert actions[0].run.run_id == 4120
+
+
 @pytest.mark.parametrize("outcome, jobs", [
     ("failure", 3),
     ("cancelled", 3),
@@ -110,3 +147,32 @@ def test_the_watch_body_keeps_the_shape_with_no_violations(outcome, jobs):
     ticket = tickets.parse(action.body, title=action.title, labels=watch.LABELS)
     assert tickets.violations(ticket) == []
     assert watch.LABELS == (TRIAGE_LABEL,)
+
+
+def test_the_watch_body_names_no_workflow_but_its_own():
+    action = decide([run(workflow="example-flow")])[0]
+    assert "tests" not in action.body
+
+
+# a workflow GitHub lists with no name (its file path), a name with `#12`, the word "parked" in any case,
+# a name longer than the title allows, and a name with a comment end in it: each opens a shape-clean watch
+@pytest.mark.parametrize("name", [
+    ".github/workflows/x.yml",
+    "CI #12",
+    "Parked nightly",
+    "nightly-" + "x" * 61,
+    "a --> b",
+], ids=["path", "hash_number", "parked", "seventy_chars", "comment_end"])
+def test_a_workflow_name_outside_the_title_rules_still_opens_a_shape_clean_watch(name):
+    actions = decide([run(workflow=name, outcome="failure")])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Open)
+    action = actions[0]
+    assert shape_violations(action) == []
+    assert len(action.title) <= TITLE_MAX
+    assert watch.workflow_of(action.body) == name
+
+
+def test_the_exact_name_is_read_back_from_the_mark_and_a_body_without_it_names_none():
+    action = decide([run(workflow="example-flow")])[0]
+    assert watch.workflow_of(action.body) == "example-flow"
+    assert watch.workflow_of("no mark here") is None
