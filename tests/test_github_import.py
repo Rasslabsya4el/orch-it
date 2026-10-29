@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -60,6 +61,8 @@ class FakeGh:
         path = args[-1].partition("?")[0]
         parts = path.split("/")
         if path.endswith("/workflows/tests.yml/runs"):
+            if "--paginate" not in args:
+                return self.first_page(args[-1].partition("?")[2])
             return self.pages("workflow_runs", self.runs)
         run_id = int(parts[5])
         if parts[-1] == "jobs":
@@ -69,6 +72,17 @@ class FakeGh:
         if parts[-1] == "timing":
             return json.dumps(self.timing.get(run_id, {"billable": {}}))
         raise AssertionError(args)
+
+    def first_page(self, query):
+        """What an unpaginated call answers: `total_count` of the runs matching the filters and the
+        newest `per_page` of them, newest first (the API orders by creation)."""
+
+        asked = dict(part.partition("=")[::2] for part in query.split("&"))
+        matching = [r for r in self.runs if asked.get("status") in (None, r["status"])
+                    and r["created_at"] >= asked.get("created", ">=").removeprefix(">=")]
+        newest_first = sorted(matching, key=lambda r: (r["created_at"], r["id"]), reverse=True)
+        return json.dumps({"total_count": len(matching),
+                           "workflow_runs": newest_first[:int(asked.get("per_page", 30))]})
 
     @staticmethod
     def pages(key, items):
@@ -970,8 +984,10 @@ def test_completed_before_keeps_the_runs_completed_before_the_moment_since_the_f
 
 
 @pytest.mark.live
-def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as_mapped(tmp_path):
-    """Runs the real `gh` against the repo (nightly only, where GH_TOKEN is set): each required
+def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as_mapped(tmp_path, capsys):
+    """Runs the real `gh` against the repo (nightly only, where GH_TOKEN is set), on the newest N
+    completed runs (setting `github_live_newest_runs`, default 20) so that its `gh` calls are the
+    same number whatever the history holds: each required
     job of each run completed before a moment 60 s before the first import has a pair with the
     outcome its conclusion maps to and a queue wait when it started; the test rows of the newest
     3 pull request runs among them equal the counts of their pytest logs; and a second import
@@ -986,18 +1002,25 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     since = "2026-10-25T20:40:00Z"
     # the runner's clock minus 60 s of margin for skew with GitHub: a run completed after it is not judged
     moment = (datetime.now(UTC) - CLOCK_SKEW_MARGIN).strftime("%Y-%m-%dT%H:%M:%SZ")
+    started_at = time.monotonic()
+    newest = github.newest_runs()
+    calls = []
+
+    def counted_gh(args):
+        calls.append(args)
+        return github.run_gh(args)
+
     store = Store.open(tmp_path / "live-store")
-    first_import = import_github(store, REPO, since=since)
-    runs = github._items(github.run_gh(
-        ["api", "--paginate", f"repos/{REPO}/actions/workflows/tests.yml/runs?per_page=100"]),
-        "workflow_runs")
+    first_import = import_github(store, REPO, gh=counted_gh, since=since, newest=newest)
+    listing = json.loads(counted_gh(github._list_runs_args(REPO, github._since(since), newest)))
+    runs, completed_since = listing["workflow_runs"], listing["total_count"]
     judged = completed_before(runs, moment, since)
     assert judged, "no run completed since the first pull request run and before the moment"
     required = ("linux", "windows")
     run_pairs, waits = pairs(store), pairs(store, "wait")
     jobs_of = {}
     for run in judged:
-        jobs = github._items(github.run_gh(
+        jobs = github._items(counted_gh(
             ["api", "--paginate", f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=all&per_page=100"]),
             "jobs")
         jobs_of[run["id"]] = [j for j in jobs if j["name"] in required and j["conclusion"] != "skipped"]
@@ -1017,7 +1040,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
             key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
             if job["conclusion"] not in ("success", "failure") or not run_pairs[key][1]["summary_seen"]:
                 continue
-            log = github.run_gh(["run", "view", str(run["id"]), "-R", REPO, "--log", "--job", str(job["id"])])
+            log = counted_gh(["run", "view", str(run["id"]), "-R", REPO, "--log", "--job", str(job["id"])])
             rows = store.query("SELECT count(*) FROM events WHERE kind = 'test.result' AND run = ?",
                                (key,)).rows[0][0]
             assert rows == summary_count(log), key
@@ -1025,11 +1048,87 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     assert compared, "no pull request job with a report to count"
     judged_ids = [r["id"] for r in judged]
     before = rows_per_run(store)
-    import_github(store, REPO, since=since)
+    import_github(store, REPO, gh=counted_gh, since=since, newest=newest)
     after = rows_per_run(store)
     changed = {i: (before.get(i, 0), after.get(i, 0)) for i in judged_ids
                if before.get(i, 0) != after.get(i, 0)}
     assert not changed, f"a second import wrote rows of judged runs (run id: before, after): {changed}"
+    with capsys.disabled():
+        print(f"\nlive import test: duration {time.monotonic() - started_at:.0f} s;"
+              f" runs judged {len(judged)} of the newest {newest} asked;"
+              f" completed tests runs since {since}: {completed_since};"
+              f" gh API calls: {len(calls)}")
+
+
+def runs_list_calls(gh):
+    return [c for c in gh.calls if c[-1].partition("?")[0].endswith("/workflows/tests.yml/runs")]
+
+
+def add_history(gh, count):
+    """`count` completed runs, one every 1000 s, run n created (count - n) * 1000 s after BASE and
+    given id 8000 + n: the ids run against the creation order (the newest run has the smallest id)."""
+
+    for n in range(count):
+        gh.add_run(8000 + n, created=(count - n) * 1000, branch=f"b{n}", pr=n + 1)
+
+
+def test_newest_asks_for_one_page_of_the_newest_completed_runs_and_not_for_every_page(store, gh):
+    add_history(gh, 30)
+    run_import(store, gh, newest=20)
+    (listing,) = runs_list_calls(gh)
+    assert "--paginate" not in listing
+    assert "per_page=20" in listing[-1] and "status=completed" in listing[-1]
+
+
+@pytest.mark.parametrize("history", [30, 300])
+def test_newest_makes_the_same_number_of_gh_calls_whatever_the_history(store, gh, history):
+    add_history(gh, history)
+    run_import(store, gh, newest=20)
+    # one list of runs, then jobs, artifacts and timing of each of the 20 runs, one download per job
+    assert len(gh.calls) == 1 + 20 * (3 + 2)
+
+
+def test_newest_imports_the_newest_runs_by_creation_and_no_older_one(store, gh):
+    add_history(gh, 300)
+    report = run_import(store, gh, newest=20)
+    imported = {int(run.split("/")[0].removeprefix("github:")) for run in pairs(store)}
+    assert imported == set(range(8000, 8020))
+    assert report.runs_read == 20 and report.jobs == 40
+
+
+def test_newest_larger_than_the_history_imports_every_run(store, gh):
+    add_history(gh, 5)
+    assert run_import(store, gh, newest=20).runs_read == 5
+    assert len(pairs(store)) == 10
+
+
+def test_newest_counts_completed_runs_only(store, gh):
+    gh.add_run(100, created=0)
+    gh.add_run(101, created=1000, status="in_progress", conclusion=None)
+    gh.add_run(102, created=2000)
+    assert run_import(store, gh, newest=2).runs_read == 2
+    assert {run.split("/")[0] for run in pairs(store)} == {"github:100", "github:102"}
+
+
+def test_newest_with_since_asks_only_for_the_runs_created_since_it(store, gh):
+    add_history(gh, 30)
+    report = run_import(store, gh, newest=20, since="2026-10-26T15:00:00Z")
+    (listing,) = runs_list_calls(gh)
+    assert "created=>=2026-10-26T15:00:00Z" in listing[-1]
+    assert report.runs_read == 13  # created at 15:00 or later: 30 - n >= 18
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 2.5, "20"])
+def test_a_newest_that_is_no_positive_whole_number_is_a_bad_setting(store, gh, bad):
+    with pytest.raises(settings.SettingsError):
+        run_import(store, gh, newest=bad)
+    assert gh.calls == []
+
+
+def test_the_newest_runs_setting_defaults_to_20_and_is_read_from_the_settings_file(tmp_path):
+    assert github.newest_runs() == 20
+    (tmp_path / "settings.json").write_text(json.dumps({"github_live_newest_runs": 7}), encoding="utf-8")
+    assert github.newest_runs() == 7
 
 
 def test_json_values_is_public_and_reads_pages_printed_one_after_the_other():
