@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from datetime import UTC, datetime, timedelta
 
 from orch_it import settings
@@ -38,6 +39,7 @@ ACTIONS_WINDOW = timedelta(hours=1)  # an Actions reading older than this says n
 _PATH_REPO = re.compile(r"repos/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:[/?]|$)")
 _OWNER_REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _REPO_FLAGS = ("--repo", "-R")
+dropped_calls = 0  # calls whose count the store refused (counting never fails a call); this process's count
 
 
 def threshold(raw: dict | None = None) -> float:
@@ -93,14 +95,17 @@ def repo_of(args: list[str]) -> str | None:
 
 def count_call(repo: str | None, *, store: Store | None = None, at: datetime | None = None) -> None:
     """Count one GitHub call about `repo` in the store, against its account. A call with no repo is not stored. Never
-    raises: a store that cannot be written loses the count, not the call."""
+    raises: a store that cannot be written loses the count, not the call; the loss is counted in `dropped_calls` and
+    said in one line on stderr."""
 
+    global dropped_calls
     if repo is None:
         return
     try:
-        _write(store or Store.open(), repo, "account", None, None, at)
-    except Exception:  # counting never fails the call it counts
-        return
+        _write(store or Store.open(), repo, budget="account", remaining=None, limit=None, at=at)
+    except Exception as failure:  # counting never fails the call it counts
+        dropped_calls += 1
+        print(f"orch-it: a GitHub call was not counted ({type(failure).__name__}: {failure})", file=sys.stderr)
 
 
 def record_budget(store: Store, repo: str, *, budget: str, remaining: int, limit: int,

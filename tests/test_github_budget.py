@@ -98,6 +98,17 @@ def test_a_failed_count_does_not_fail_the_gh_call(tmp_path, monkeypatch):
     assert github.run_gh(["api", "repos/acme-dev/orch-tools"]) == '{"ok": true}'
 
 
+def test_a_dropped_count_is_counted_and_said_on_stderr(tmp_path, monkeypatch, capsys):
+    blocked = tmp_path / "store-is-a-file"
+    blocked.write_text("not a folder", "utf-8")
+    monkeypatch.setenv("ORCH_IT_STORE", str(blocked))
+    monkeypatch.setattr(github.subprocess, "run", lambda *a, **k: OK)
+    monkeypatch.setattr(github_budget, "dropped_calls", 0)
+    assert github.run_gh(["api", "repos/acme-dev/orch-tools"]) == '{"ok": true}'  # the call still succeeds
+    assert github_budget.dropped_calls == 1
+    assert "not counted" in capsys.readouterr().err
+
+
 def test_run_gh_counts_each_call_including_a_failed_one(tmp_path, monkeypatch):
     root = tmp_path / "store"
     monkeypatch.setenv("ORCH_IT_STORE", str(root))
