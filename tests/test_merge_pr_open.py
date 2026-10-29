@@ -11,7 +11,7 @@ from ticket_fixtures import fixture
 
 from orch_it import tickets
 from orch_it.events.store import Store
-from orch_it.merge import marks
+from orch_it.merge import marks, pr_open
 from orch_it.merge.git import GitError
 from orch_it.merge.pr_open import PrError, open_pr
 from orch_it.merge.settings import MergeSettings
@@ -77,6 +77,15 @@ def test_it_opens_one_pull_request_with_refs_parks_the_ticket_and_turns_auto_mer
     assert (done.reused, done.head) == (False, pull.head_sha)
     rows = store.query("SELECT kind, step, json_extract(detail, '$.pr') FROM events ORDER BY at").rows
     assert ("step.started", "pr", done.pr) in rows and ("ticket.parked", None, None) in rows
+
+
+def test_pr_open_hands_the_ready_mark_and_auto_merge_to_after_open(world, monkeypatch):
+    calls = []
+    monkeypatch.setattr(pr_open, "after_open", lambda *args: calls.append(args))
+    done = opened(world)
+    [(hub, repo, pr, head, ticket, now, method)] = calls
+    assert (repo, pr, head, ticket, method) == (REPO, done.pr, done.head, 10, "merge")
+    assert now == world[0].now and hub is world[0]
 
 
 def test_the_acceptance_comment_on_the_ticket_holds_every_row_and_the_body_it_was_checked_on(world):

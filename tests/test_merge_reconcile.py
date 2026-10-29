@@ -6,9 +6,12 @@ on the machine brings the workflows' own events into the store."""
 import json
 from pathlib import Path
 
-from fake_github import FAILED, PASSED, REPO
+from fake_github import FAILED, PASSED, REPO, FakeGitHub
 from follow_world import NOW, world
 
+from orch_it.events.store import Store
+from orch_it.merge import reconcile as reconcile_module
+from orch_it.merge.follow import FollowReport
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
 
@@ -180,3 +183,20 @@ def test_a_sweep_on_the_workflow_token_runs_though_the_actions_setting_is_refuse
     done = reconcile(GhPullHub(gh), store, REPO, "main", settings=MergeSettings(), now=NOW)
     assert done.actions is True and done.failed == []
     assert f"repos/{REPO}/actions/permissions" in calls
+
+
+def test_a_sweep_that_follows_a_skills_pull_request_closed_by_its_follow_repairs_closed_not_unparked(tmp_path, monkeypatch):
+    """`closed_skills` maps to the repair `closed`, as a closed ticket does. A merged skills pull request is not
+    listed by the sweep itself (it lists open pull requests), so the follow is replaced by its outcome here."""
+
+    hub = FakeGitHub(NOW)
+    store = Store.open(tmp_path / "events")
+    pr = hub.open_pull(body="His upstream moved.", branch="skills-upstream/0123456789ab-abcdef12", auto_merge="squash")
+
+    def closed_skills(hub_, store_, repo, number, **kwargs):
+        return FollowReport(number, 20, "closed_skills", "0123456789ab")
+
+    monkeypatch.setattr(reconcile_module, "follow", closed_skills)
+    done = sweep(hub, store, tmp_path)
+    assert ("closed", f"#{pr}") in done.repairs
+    assert [code for code, _ in done.repairs if code == "unparked"] == []
