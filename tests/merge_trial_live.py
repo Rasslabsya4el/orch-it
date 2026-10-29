@@ -36,7 +36,7 @@ def wait_workflow_run(run: merge_trial._Run, workflow_file: str, since: datetime
     def probe() -> LiveRun | None:
         for listed in run.trial.workflow_runs(workflow_file):
             created = _moment(listed.get("created_at"))
-            if created is None or created < since:
+            if created is None or created < since.replace(microsecond=0):  # GitHub's times have whole seconds
                 continue
             if head_sha is not None and listed.get("head_sha") != head_sha:
                 continue
@@ -53,7 +53,7 @@ def wait_workflow_run(run: merge_trial._Run, workflow_file: str, since: datetime
 
 
 def dispatch_workflow(run: merge_trial._Run, workflow_file: str) -> None:
-    """`gh workflow run <file>` on the row's repo and base; returns the moment it was dispatched."""
+    """`gh workflow run <file>` on the row's repo and base; returns None."""
 
     run.trial.dispatch_workflow(workflow_file)
     run.say(f"{workflow_file}: dispatched on {run.base}")
@@ -63,8 +63,11 @@ def _ended(run: merge_trial._Run, listed: dict) -> LiveRun:
     """A listed run that ended, with the jobs of it that started: the check runs of its head with its run id."""
 
     run_id = str(listed.get("id"))
-    checks = run.hub.checks(run.repo, listed.get("head_sha") or "")
-    started = sum(1 for check in checks if check.run_id == run_id and check.started_at is not None)
+    if listed.get("conclusion") == "skipped":  # a skipped run starts no job, whatever its checks carry
+        started = 0
+    else:
+        checks = run.hub.checks(run.repo, listed.get("head_sha") or "")
+        started = sum(1 for check in checks if check.run_id == run_id and check.started_at is not None)
     return LiveRun(run_id=run_id, conclusion=listed.get("conclusion"), event=listed.get("event"),
                    head_sha=listed.get("head_sha"), jobs_started=started)
 

@@ -4,7 +4,10 @@ real sleep; a fake clock advances on every sleep."""
 
 import importlib
 import json
+import runpy
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import merge_trial
@@ -264,6 +267,25 @@ def test_wait_workflow_run_ignores_a_run_created_before_since(live):
     assert found.run_id == "2"
 
 
+def test_wait_workflow_run_compares_created_at_in_whole_seconds_so_a_run_of_the_same_second_is_found(live):
+    # GitHub's created_at has whole seconds only: a `since` of 10:00:00.5 still finds a run created at 10:00:00
+    clock = Clock()
+    since = datetime(2026, 10, 29, 10, 0, 0, 500000, tzinfo=UTC)
+    trial = WorkflowTrial([[listed("8", "2026-10-29T10:00:00Z")]])
+    found = live.wait_workflow_run(make_run(trial, Hub(), clock), "follow.yml", since, minutes=1)
+
+    assert found.run_id == "8"
+
+
+def test_a_skipped_run_has_no_started_jobs_even_when_its_checks_carry_a_start(live):
+    clock = Clock()
+    trial = WorkflowTrial([[listed("7", "2026-10-29T10:01:00Z", conclusion="skipped")]])
+    hub = Hub(checks={HEAD: [Check("linux", PASSED, "7", 1, NOW), Check("windows", PASSED, "7", 1, NOW)]})
+    found = live.wait_workflow_run(make_run(trial, hub, clock), "follow.yml", NOW)
+
+    assert found.conclusion == "skipped" and found.jobs_started == 0
+
+
 def test_wait_workflow_run_returns_a_skipped_run_as_skipped_and_does_not_wait(live):
     clock = Clock()
     trial = WorkflowTrial([[listed("3", "2026-10-29T10:01:00Z", conclusion="skipped")]])
@@ -353,3 +375,25 @@ def test_a_listing_that_is_not_json_is_a_gh_error_the_wait_tries_again(tmp_path)
     gh = Gh("not json")
     with pytest.raises(merge_trial.GithubError):
         merge_trial.RealTrial(REPO, "main", tmp_path, None, gh=gh).workflow_runs("follow.yml")
+
+
+# --- tests/merge_trial.py run as a script ------------------------------------------------------------------------
+
+SCRIPT = Path(__file__).with_name("merge_trial.py")
+
+
+def test_run_as_a_script_registers_itself_as_merge_trial_so_the_live_module_shares_its_classes(monkeypatch):
+    # the script runs as __main__; the module it registers as `merge_trial` must be the one the live module
+    # imports, or TrialError and _Run would exist twice
+    monkeypatch.setitem(sys.modules, "merge_trial", None)
+    monkeypatch.setitem(sys.modules, "merge_trial_live", None)
+    monkeypatch.delitem(sys.modules, "merge_trial_live")
+    monkeypatch.setattr(sys, "argv", ["merge_trial.py", "--help"])
+    with pytest.raises(SystemExit):
+        runpy.run_path(str(SCRIPT), run_name="__main__")
+    script = sys.modules["merge_trial"]
+
+    assert script is not None and script.__name__ == "__main__"
+    live = importlib.import_module("merge_trial_live")
+    assert live.merge_trial is script
+    assert live.merge_trial.TrialError is script.TrialError

@@ -80,6 +80,11 @@ from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, WORKFLOW_FILE, Gh, Gi
 from orch_it.tickets.model import READY_LABEL
 from orch_it.tickets.reader import TRIAGE_LABEL
 
+if __name__ == "__main__":
+    # run as a script this module is `__main__`; the live module's `import merge_trial` must get this same
+    # object, or TrialError and _Run would exist twice
+    sys.modules["merge_trial"] = sys.modules[__name__]
+
 TITLE, FULL_BODY = fixture("good_basic")
 AFTER_MERGE_ROW = "| 4 after merge | abandoned carts at the payment step | under 30 % in the weekly report |\n"
 BODY = FULL_BODY.replace(AFTER_MERGE_ROW, "")
@@ -148,7 +153,7 @@ class Trial(Protocol):
         branch `tests.yml` does not name under `push`); nothing otherwise."""
 
     def dispatch_workflow(self, file: str) -> None:
-        """`gh workflow run <file>` on the base: returns the moment it was dispatched."""
+        """`gh workflow run <file>` on the base; returns None."""
 
     def workflow_runs(self, file: str) -> list[dict]:
         """The runs GitHub lists for the workflow `file`, newest first: the gh JSON of each run."""
@@ -685,14 +690,25 @@ class _Run:
 
     def red_tickets_of(self, ids: frozenset[str], *, settle: bool = False) -> list[int]:
         """The open red-on-main tickets that list exactly `ids`. The label list fills eventually, so the default
-        waits (`Plan.list_minutes`) until a ticket appears. `settle=True` is for what must NOT appear: wait
+        waits (`Plan.list_minutes`) until a ticket appears; past that bound it returns the list as last read (so
+        a check that opened no ticket records `[]`). `settle=True` is for what must NOT appear: wait
         `SETTLE_SECONDS`, read the list once and return it as read."""
 
         if settle:
             self.sleep(SETTLE_SECONDS)
             return self._red_tickets_read(ids)
-        return self.wait(f"a red-on-main ticket of {len(ids)} failing test(s)",
-                         lambda: self._red_tickets_read(ids), minutes=self.plan.list_minutes)
+        last: list[int] = []
+
+        def read() -> list[int]:
+            nonlocal last
+            last = self._red_tickets_read(ids)
+            return last
+
+        try:
+            return self.wait(f"a red-on-main ticket of {len(ids)} failing test(s)", read,
+                             minutes=self.plan.list_minutes)
+        except TrialTimeout:
+            return last
 
     def _red_tickets_read(self, ids: frozenset[str]) -> list[int]:
         found = []
