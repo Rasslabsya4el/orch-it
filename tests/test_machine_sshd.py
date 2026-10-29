@@ -287,22 +287,22 @@ def test_the_test_process_on_the_machine_is_dead_within_15_seconds_of_the_sshd_d
     assert dead_within(pid)
 
 
-# The pure checks below run on every machine, sshd or not (#421 row 2).
+# The pure checks below run on every machine, sshd or not (#421 rule 2).
 
-XDIST_WORKER = "/usr/bin/python3 -c import sys;exec(eval(sys.stdin.readline()))"  # execnet gateway_io.py:51
-FAR_PROGRAM = f"/usr/bin/python3 -c {REMOTE_PROGRAM}"  # the far side's program, as /proc shows it
+XDIST_WORKER = "py-demo -c import sys;exec(eval(sys.stdin.readline()))"  # execnet gateway_io.py:51
+FAR_PROGRAM = f"py-demo -c {REMOTE_PROGRAM}"  # the far side's program, as /proc shows it
 PROCESSES = [  # (pid, parent pid, command line)
-    (1, 0, "/sbin/init"),
-    (100, 1, "/usr/bin/python3 -m pytest tests -n 4"),
+    (1, 0, "init-demo"),
+    (100, 1, "py-demo -m pytest tests -n 4"),
     (110, 100, XDIST_WORKER),  # a worker of this run; it starts sshd, so sshd is below it
     (111, 100, XDIST_WORKER),  # another worker, not under sshd: never a victim
-    (112, 111, "/usr/bin/python3 -c pass"),
-    (200, 110, "/usr/sbin/sshd -D -e -p 40123"),
+    (112, 111, "py-demo -c pass"),
+    (200, 110, "sshd-demo -D -e -p 40123"),
     (300, 200, "sshd-session: user [priv]"),
     (301, 300, "sshd-session: user@notty"),
     (302, 301, f"sh -c {FAR_PROGRAM}"),
     (303, 302, FAR_PROGRAM),  # the far side: spared with all it started
-    (304, 303, "/usr/bin/python3 -c import time;time.sleep(60)"),
+    (304, 303, "py-demo -c import time;time.sleep(60)"),
     (305, 303, XDIST_WORKER),  # an xdist worker of the far side's pytest: spared with it
 ]
 
@@ -312,7 +312,7 @@ def test_the_kill_takes_sshd_and_its_connections_and_spares_only_the_far_side():
 
 
 def test_a_far_side_program_above_sshd_does_not_spare_sshd():
-    table = [(1, 0, "/sbin/init"), (9, 1, FAR_PROGRAM), (200, 9, "/usr/sbin/sshd -D -e -p 40123")]
+    table = [(1, 0, "init-demo"), (9, 1, FAR_PROGRAM), (200, 9, "sshd-demo -D -e -p 40123")]
     assert sorted(connection_victims(200, table)) == [200]
 
 
