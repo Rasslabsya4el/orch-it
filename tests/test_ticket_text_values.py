@@ -55,7 +55,7 @@ LINES = {
     "repo": (f"The repo {REPO_NAME} keeps the file.", "repo"),
     "host": (f"The run came from {HOST}.", "host"),
     "home": (f"The cache sits in {HOME}/cache.", "home"),
-    "user": (f"The files belong to {USER}.", "user"),
+    "user": (f"Run it as USER={USER} on the box.", "user"),
     "projects_folder": (f"The clone sits in {PROJECTS}/orch-tools.", "projects_folder"),
     "git_name": (f"Commits carry the name {GIT_NAME}.", "git_name"),
     "git_email": (f"Commits carry {GIT_EMAIL}.", "git_email"),
