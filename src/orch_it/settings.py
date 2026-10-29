@@ -88,7 +88,7 @@ def _locked():
         try:
             os.mkdir(lock)
             break
-        except FileExistsError:
+        except (FileExistsError, PermissionError):  # Windows: a create refused while another writer removes it
             try:
                 if time.time() - lock.stat().st_mtime > LOCK_STALE_SECONDS:
                     os.rmdir(lock)
