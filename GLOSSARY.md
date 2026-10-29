@@ -64,7 +64,7 @@ _Avoid_: scheduler, routing, placement policy
 **Availability**:
 The readiness verdict of the `github` test place: whether it may be offered (Actions on, its request budget with room,
 GitHub readable), its machines busy of their limit, and the note the decision carries (`18 busy of 20`, or why it is off).
-_Avoid_: status, health, readiness
+_Avoid_: status, health, state
 
 **Queue wait**:
 The time a GitHub job waits from its queued to its started, the wait for a machine; read from the job's own times, never
