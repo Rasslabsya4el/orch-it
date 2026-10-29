@@ -252,6 +252,25 @@ def test_the_scan_step_is_in_the_linux_job_only_and_only_for_pull_requests():
     assert PRIVATE_DATA_STEP not in "\n".join(jobs["windows"])
 
 
+def test_the_closing_step_is_in_the_linux_job_only_for_pull_requests_between_the_scan_and_pytest():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    linux = steps_of(jobs["linux"])
+    closing = "closing words in the pull request's commits, title and body"
+    step = step_named(linux, closing)
+    text = "\n".join(step)
+    assert "if: github.event_name == 'pull_request'" in text
+    assert re.search(r"^\s+shell: bash$", text, re.M)
+    assert step_env(step) == {
+        "BASE_REF": "${{ github.event.pull_request.base.ref }}",
+        "HEAD": "${{ github.event.pull_request.head.sha }}",
+        "PR_TITLE": "${{ github.event.pull_request.title }}",
+        "PR_BODY": "${{ github.event.pull_request.body }}",
+    }
+    assert run_script(step).strip() == 'python -m orch_it merge closing-check --base "$BASE_REF" --head "$HEAD"'
+    assert linux.index(step_named(linux, PRIVATE_DATA_STEP)) < linux.index(step) < linux.index(step_named(linux, "pytest"))
+    assert closing not in "\n".join(jobs["windows"])
+
+
 def test_both_jobs_check_out_the_whole_history():
     for name, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
         [checkout] = [s for s in steps_of(lines) if any("uses: actions/checkout@v4" in line for line in s)]
