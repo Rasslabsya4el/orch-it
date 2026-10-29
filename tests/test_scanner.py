@@ -10,6 +10,7 @@ kind also checks that the value is in no text the scanner or the command produce
 
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -22,6 +23,7 @@ from orch_it.cli import main
 from orch_it.guards import scanner
 from orch_it.guards.scanner import KINDS, Hit, Patterns, ScanError
 from orch_it.testruns import github
+from scan_setup import invented_setup  # noqa: F401  (an autouse fixture)
 from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, NO_WINDOW,
                         NOREPLY, OPENAI_KEY, PRIVATE_KEY, SOMEONE_HOME, Repo, make_template)
 
@@ -342,15 +344,15 @@ def test_of_machine_measures_the_home_the_host_and_the_words_file(tmp_path, monk
     home = tmp_path / "somebody"
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(scanner.socket, "gethostname", lambda: "Lab-Pc" + "-42.dept.example")
+    monkeypatch.setattr(socket, "gethostname", lambda: "Lab-Pc" + "-42.dept.example")
     words = tmp_path / "words.txt"
     words.write_text("# my words\n\n  Blue" + "Heron  \nsecond" + " word\n", "utf-8", newline="\n")
     patterns = Patterns.of_machine(words_file=words)
-    assert patterns.homes == (str(home),)
-    assert patterns.host == "Lab-Pc" + "-42.dept.example"
     assert patterns.words == ("Blue" + "Heron", "second" + " word")
-    assert kinds(f"{home}{os.sep}x", patterns) == ["home_path"]
-    assert kinds("on lab-pc-42", patterns) == ["host_name"]
+    # the home and the host are read once, by `read_values`, and found as its kinds of a file
+    assert patterns.values.home == (str(home),)
+    assert patterns.values.host == ("Lab-Pc" + "-42.dept.example", "Lab-Pc" + "-42")
+    assert patterns.find_in_file("x.txt", f"{home}{os.sep}x\non lab-pc-42\n") == [("home", 1), ("host", 2)]
     assert kinds("a blueheron flew", patterns) == ["private_word"]
 
 
@@ -392,7 +394,7 @@ def test_the_words_file_defaults_to_the_setting_then_the_data_folder(tmp_path, m
 def test_the_bare_user_name_is_not_a_pattern(tmp_path, monkeypatch):
     home = tmp_path / "somebody"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(scanner.socket, "gethostname", lambda: "localhost")
+    monkeypatch.setattr(socket, "gethostname", lambda: "localhost")
     patterns = Patterns.of_machine(words_file=tmp_path / "none.txt")
     assert kinds("hello somebody, welcome", patterns) == []
 

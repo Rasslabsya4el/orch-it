@@ -23,7 +23,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from orch_it.guards import hook, scanner
+from orch_it.guards import exceptions, hook, scanner
 from orch_it.testruns import github
 
 GUARD = "private_data_public"
@@ -125,7 +125,8 @@ def _fired(hit: scanner.Hit) -> hook.Fired:
 def _refusal(hits: list[scanner.Hit]) -> str:
     lines = ["orch-it: push refused, the commits hold private data and the remote is public"
              " (or its visibility could not be read):"]
-    lines += [f"  {hit.commit[:12]} {hit.where} {_where(hit)} {hit.kind}" for hit in hits[:SHOWN_HITS]]
+    lines += [f"  {hit.commit[:12]} {hit.where} {_where(hit)} {hit.kind}{scanner.cited(hit.kind)}"
+              for hit in hits[:SHOWN_HITS]]
     if len(hits) > SHOWN_HITS:
         lines.append(f"  ... and {len(hits) - SHOWN_HITS} more")
     lines.append("take the values out of the commits (amend or rebase) and push again;"
@@ -211,13 +212,17 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
     # the closing check applies to every push, the private-data scan only to a public remote; a
     # failure of one never skips the other, and a hit of either always refuses
     closing = _closing_hits(work_tree, commits, store, repo)
-    hits, scanned = [], False
+    hits, scanned, not_checked = [], False, ""
     try:
         if not _is_private(visibility or visibility_of, remote_url):
             if patterns is None:
-                patterns = scanner.Patterns.of_machine(allowed_emails=_profile_emails(repo))
+                patterns = scanner.Patterns.of_machine(allowed_emails=_profile_emails(repo), work_tree=work_tree)
             hits = scanner.scan_commits(work_tree, commits, patterns)
             scanned = True
+            not_checked = patterns.not_checked_line()
+    except exceptions.ExceptionsError as exc:  # a list nobody can read: said, and the push goes on
+        _say(f"orch-it: the private-data scan did not run, {exc}\n")
+        _write_crash(store, exc, repo)
     except Exception as exc:  # a guard that crashes lets the push through, and says so
         _write_crash(store, exc, repo)
     # a closing hit writes no guard.fired: the store's closed guard set names no code for it, and
@@ -230,6 +235,8 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
             hook._write_events(store, hook.Decision(bool(hits), None, fired), repo=repo, session=None)
         except Exception:  # the store never decides a push
             pass
+    if not_checked:  # a clean push never goes without what was not checked
+        _say(not_checked + "\n")
     if hits or closing:
         if hits:
             _say(_refusal(hits))

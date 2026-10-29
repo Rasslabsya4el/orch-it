@@ -7,6 +7,15 @@ it never carries or prints the value found. Nothing here writes events.
 
 `Patterns.find` is the whole rulebook for one line of text; `scan_commits` and `scan_tree` feed
 it lines out of `git`, streaming, so a commit of any size is read once.
+
+The same scan carries the coding standard of #413 (CODING_STANDARDS.md): a value that varies is
+never a literal. `Patterns.of_machine` and `Patterns.of_run` read the setup's values ONCE
+(`values.read_values`: account, repo, host, home, user, projects folder, git name and e-mail); those
+and the pattern kinds of `kinds.py` (bare python, a one-OS call, a check name) go through
+`Patterns.find_in_file`, beside the line rules above. It judges the text of a whole file (a
+pattern kind needs the lines around the one added) and leaves out the allowed places and the
+exceptions list. A hit of those kinds is cited with `RULE`, and
+`Patterns.not_checked_line` names the kinds the setup lacked.
 """
 
 from __future__ import annotations
@@ -15,7 +24,6 @@ import contextlib
 import functools
 import os
 import re
-import socket
 import subprocess
 import tempfile
 import threading
@@ -25,9 +33,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orch_it import settings
+from orch_it.guards import exceptions as exceptions_list
+from orch_it.guards import kinds as pattern_kinds
+from orch_it.guards import values as setup_values
 
 KINDS = ("home_path", "host_name", "github_token", "anthropic_key", "openai_key", "aws_key",
          "private_key", "email", "private_word")
+# the kinds of `find_in_file`, beside the nine of `KINDS`
+FILE_KINDS = (*setup_values.KINDS, *pattern_kinds.KINDS)
+# the first sentence of CODING_STANDARDS.md, word for word: every finding of a value that varies cites it
+RULE = ("A value that differs per repo, account, machine or OS is a setting with its default, never a literal"
+        " in code, tests, rules or tickets.")
+# the kinds the rule judges: the setup's own values and the pattern kinds; the kinds of #395 keep their lines
+RULE_KINDS = frozenset(FILE_KINDS)
 WHERES = ("content", "path", "message", "author", "committer")
 SCAN_ERROR_CODES = ("words_unreadable", "git_failed", "bad_rev", "git_timeout")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -154,33 +172,57 @@ class Patterns:
     """What to look for. `homes`: this machine's home folder(s), each matched in every spelling;
     `host`: this machine's host name; `words`: private words and phrases; `allowed_emails`:
     addresses that are no hit. The secrets, any user's home folders, the default host names of an
-    OS and the addresses of people are always on."""
+    OS and the addresses of people are always on. (`of_machine` leaves `homes` and `host` empty:
+    the setup's own home and host are `values`, found by `find_in_file`.)
+
+    `values` (None: the kinds above only) is what `read_values` read of the setup, `exceptions` the
+    list of `guards-exceptions.toml`, `job_names` the checks of the work tree's workflows and
+    `settings_file` the repo path of the settings file; with `values` set, `find_in_file` judges the
+    text of a file by the kinds of #413 too."""
 
     homes: tuple[str, ...] = ()
     host: str | None = None
     words: tuple[str, ...] = ()
     allowed_emails: frozenset[str] = frozenset()
+    values: setup_values.Values | None = None
+    exceptions: exceptions_list.Exceptions = exceptions_list.Exceptions()
+    job_names: frozenset[str] = frozenset()
+    settings_file: str = ""
 
     def __post_init__(self):
         object.__setattr__(self, "allowed_emails",
                            frozenset(address.lower() for address in self.allowed_emails))
 
     @classmethod
-    def of_machine(cls, *, allowed_emails=(), words_file: Path | None = None) -> Patterns:
-        """The patterns of this machine, measured now: its home folder, its host name and the
-        private words file (default the setting `private_words_file`, else
-        `private_words.txt` in the data folder; a missing file is no words)."""
+    def of_machine(cls, *, allowed_emails=(), words_file: Path | None = None, work_tree: Path | str = ".",
+                   env=None, run=None, home=None, host=None) -> Patterns:
+        """The patterns of this machine, measured now: the values of its setup (`read_values`, once;
+        the git of `work_tree`), the exceptions list, job names and settings file of `work_tree`,
+        and the private words file (default the setting `private_words_file`, else
+        `private_words.txt` in the data folder; a missing file is no words). `env`, `run`, `home`
+        and `host` go to `read_values` as they are. Raises `ExceptionsError` for an exceptions list
+        with an entry that cannot be used."""
 
-        try:
-            homes: tuple[str, ...] = (str(Path.home()),)
-        except (RuntimeError, OSError):
-            homes = ()
-        try:
-            host = socket.gethostname() or None
-        except OSError:
-            host = None
-        return cls(homes=homes, host=host, words=_read_words(words_file),
-                   allowed_emails=frozenset(allowed_emails))
+        return cls._of_setup(Path(work_tree), words=_read_words(words_file), allowed_emails=allowed_emails,
+                             env=env, run=run, home=home, host=host)
+
+    @classmethod
+    def of_run(cls, *, allowed_emails=(), work_tree: Path | str = ".", env=None, run=None, home=None,
+               host=None) -> Patterns:
+        """The patterns of the run this is in (a job on a runner): the same values as `of_machine`,
+        read from the run's own environment (on GitHub the account, repo, runner home, user and
+        host), and no file of the owner's: no private words."""
+
+        return cls._of_setup(Path(work_tree), words=(), allowed_emails=allowed_emails, env=env, run=run,
+                             home=home, host=host)
+
+    @classmethod
+    def _of_setup(cls, work_tree: Path, *, words, allowed_emails, env, run, home, host) -> Patterns:
+        exceptions = exceptions_list.load_exceptions(work_tree / exceptions_list.FILE_NAME)
+        found = setup_values.read_values(env=env, run=run or _git_in(work_tree), home=home, host=host)
+        return cls(words=words, allowed_emails=frozenset(allowed_emails), values=found, exceptions=exceptions,
+                   job_names=pattern_kinds.read_job_names(str(work_tree / ".github" / "workflows")),
+                   settings_file=_repo_path(work_tree, settings.settings_path()))
 
     @classmethod
     def machine_independent(cls, *, allowed_emails=()) -> Patterns:
@@ -245,6 +287,25 @@ class Patterns:
         found = {kind for kind, _, _ in self._spans(text)}
         return [kind for kind in KINDS if kind in found]
 
+    def find_in_file(self, path: str, text: str) -> list[tuple[str, int]]:
+        """(kind, 1-based line) of each value and pattern kind of #413 found in `text`, the whole
+        text of the file at the repo path `path`, sorted by line. Empty when `values` is None, for a
+        path that is an allowed place, and for a line an exceptions entry allows."""
+
+        if self.values is None or exceptions_list.is_allowed_place(path, self.settings_file):
+            return []
+        found = {(hit.kind, hit.line) for hit in setup_values.find_in(text, self.values)}
+        found |= {(hit.kind, hit.line) for hit in pattern_kinds.find_pattern_kinds(path, text, self.job_names)}
+        lines = text.split("\n")
+        return sorted((kind, number) for kind, number in found
+                      if not self.exceptions.allows(path, lines[number - 1] if number <= len(lines) else ""))
+
+    def not_checked_line(self) -> str:
+        """`not checked: git_email (not set), ...` for the kinds of values the setup lacked, else
+        empty. A result of a scan with this line non-empty carries it, clean or not."""
+
+        return self.values.render_not_checked() if self.values is not None else ""
+
     def redact(self, text: str) -> str:
         """`text` with every value found in it replaced by `<kind>`; values that overlap or touch
         are one replaced stretch, so no remainder of a value is left."""
@@ -260,6 +321,33 @@ class Patterns:
             out += [text[end:start], f"<{kind}>"]
             end = stop
         return "".join(out) + text[end:]
+
+
+def cited(kind: str) -> str:
+    """The text a line naming a hit of `kind` ends with: the rule, for a kind it judges, else nothing."""
+
+    return f" - {RULE}" if kind in RULE_KINDS else ""
+
+
+def _git_in(work_tree: Path):
+    """The `run` of `read_values` for a scan of `work_tree`: git asked there, as the scan's git is
+    (no GIT_DIR of a hook), anything else as `read_values` runs it."""
+
+    def run(cmd: list[str]) -> str:
+        if cmd and cmd[0] == _GIT_COMMAND[0]:
+            return _git_output(work_tree, *cmd[1:]).decode("utf-8", "replace")
+        return setup_values.default_run(cmd)
+
+    return run
+
+
+def _repo_path(work_tree: Path, file: Path) -> str:
+    """`file` as a path inside `work_tree`, else empty (a file outside the repo is never scanned)."""
+
+    try:
+        return file.resolve().relative_to(work_tree.resolve()).as_posix()
+    except (ValueError, OSError):
+        return ""
 
 
 def _read_words(words_file: Path | None) -> tuple[str, ...]:
@@ -520,6 +608,8 @@ class _CommitScan:
         self.in_message = False
         self.message_line = 0
         self.path: str | None = None
+        self.real: str | None = None  # the path of the file in the diff, kept after `path` is flushed
+        self.added: dict[tuple[str, str], set[int]] = {}  # (sha, path) -> the new lines it adds
         self.shown: str | None = None
         self.in_hunk = False
         self.columns = 1
@@ -559,7 +649,7 @@ class _CommitScan:
         elif line.startswith("diff "):
             self._flush_path()
             self.in_hunk = False
-            self.path = _path_of_header(line.rstrip("\n"))
+            self.path = self.real = _path_of_header(line.rstrip("\n"))
             self.shown = self.patterns.redact(self.path)
         elif line.startswith("@@"):
             self._flush_path()
@@ -584,6 +674,8 @@ class _CommitScan:
             return
         if marks == "+" * self.columns:
             self._add(line[self.columns:].rstrip("\n"), "content", self.shown, self.new_line)
+            if self.patterns.values is not None and self.real is not None:
+                self.added.setdefault((self.sha, self.real), set()).add(self.new_line)
         self.new_line += 1
 
     def finish(self) -> list[Hit]:
@@ -604,6 +696,39 @@ def scan_commits(work_tree: Path, commits: Iterable[str], patterns: Patterns) ->
             for raw in git.lines():
                 scan.feed(raw)
         hits += scan.finish()
+        if patterns.values is not None:
+            hits += _file_hits(work_tree, scan.added, patterns)
+    return hits
+
+
+def _file_hits(work_tree: Path, added: dict[tuple[str, str], set[int]], patterns: Patterns) -> list[Hit]:
+    """The hits of `Patterns.find_in_file` on the lines each (sha, path) of `added` adds: a pattern
+    kind is judged on the whole file as that commit has it, and only its added lines are kept."""
+
+    wanted = [(key, lines) for key, lines in added.items() if "\n" not in key[1]]
+    hits: list[Hit] = []
+    if not wanted:
+        return hits
+    with _process(work_tree, "cat-file", "--batch", feed=True) as git:
+        for start in range(0, len(wanted), _BATCH):
+            chunk = wanted[start:start + _BATCH]
+            git.stdin.write("".join(f"{sha}:{path}\n" for (sha, path), _ in chunk).encode("utf-8"))
+            git.stdin.flush()
+            for (sha, path), lines in chunk:
+                header = git.readline().rstrip(b"\r\n")
+                if header.endswith(b" missing"):
+                    continue
+                parts = header.split()
+                if len(parts) != 3 or parts[1] != b"blob":
+                    raise ScanError("git_failed", f"{sha[:12]}:{path} cannot be read")
+                data = git.read(int(parts[2]))
+                git.read(1)
+                if b"\x00" in data[:_BINARY_PROBE]:
+                    continue
+                shown = patterns.redact(path)
+                hits += [Hit(kind, "content", sha, shown, number)
+                         for kind, number in patterns.find_in_file(path, data.decode("utf-8", "replace"))
+                         if number in lines]
     return hits
 
 
@@ -644,7 +769,9 @@ def scan_tree(work_tree: Path, patterns: Patterns, rev: str = "HEAD") -> list[Hi
                 add(path, "path", shown)
                 if b"\x00" in data[:_BINARY_PROBE]:
                     continue
-                for number, line in enumerate(data.decode("utf-8", "replace").split("\n"), 1):
+                text = data.decode("utf-8", "replace")
+                for number, line in enumerate(text.split("\n"), 1):
                     if line:
                         add(line, "content", shown, number)
+                hits += [Hit(kind, "content", sha, shown, number) for kind, number in patterns.find_in_file(path, text)]
     return hits

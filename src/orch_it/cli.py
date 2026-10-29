@@ -28,7 +28,7 @@ from orch_it.brain import commands as brain_commands
 from orch_it.brain.handoff import HandoffError
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
-from orch_it.guards import hook, install, prepush, scanner
+from orch_it.guards import exceptions, hook, install, prepush, scanner
 from orch_it.guards import status as guards_status
 from orch_it.merge import commands as merge_commands
 from orch_it.research import mcp as research_mcp
@@ -167,7 +167,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--rev", metavar="REV", help="the revision --tree reads (default: HEAD)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p.add_argument("--machine-independent", action="store_true",
-                   help="only what holds on any machine: no home, host name or word of this one")
+                   help="the run's own setup only: values read from the environment it runs in (on GitHub: "
+                        "the account, repo and the runner's home, user and host), no private words file")
     p.add_argument("--require-noreply-email", action=argparse.BooleanOptionalAction, default=None,
                    help="every commit's author and committer e-mail is a GitHub noreply address, with --range "
                         "(default: on when the repo's setting commit_identity is noreply; --all is never checked)")
@@ -428,19 +429,22 @@ def _require_noreply(args, work_tree: Path) -> bool:
 
 
 def _guards_scan(args) -> tuple[str, int]:
-    """`guards scan`: one line per hit, then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits."""
+    """`guards scan`: one line per hit, then `hits=<n> commits=<n>`, then the kinds of values the setup lacked
+    (`not checked: ...`) when there are any, clean or not; exit 0 with no hit, 1 with hits, 2 for an exceptions
+    list with an entry that cannot be used."""
 
     if args.rev and not args.tree:
         raise CommandError("bad_options", "--rev goes with --tree")
     if args.words_file and args.machine_independent:
         raise CommandError("bad_options", "--words-file goes with the machine's own patterns")
     allowed = [*args.allow_email, *filter(None, map(_email_of, args.allow_email_of))]
+    work_tree = Path(args.work_tree)
     if args.machine_independent:
-        patterns = scanner.Patterns.machine_independent(allowed_emails=allowed)
+        patterns = scanner.Patterns.of_run(allowed_emails=allowed, work_tree=work_tree)
     else:
         patterns = scanner.Patterns.of_machine(
-            allowed_emails=allowed, words_file=Path(args.words_file) if args.words_file else None)
-    work_tree = Path(args.work_tree)
+            allowed_emails=allowed, words_file=Path(args.words_file) if args.words_file else None,
+            work_tree=work_tree)
     unnamed: list[tuple[str, str]] = []  # (sha, author | committer) of a non-noreply e-mail
     if args.tree:
         hits, commits = scanner.scan_tree(work_tree, patterns, args.rev or "HEAD"), 1
@@ -451,9 +455,11 @@ def _guards_scan(args) -> tuple[str, int]:
         if args.rev_range is not None and _require_noreply(args, work_tree):
             unnamed = identity.noreply_failures(work_tree, shas)
     lines = [f"{hit.commit[:12]} {hit.where} {_one_line(hit.file)}:"
-             f"{'-' if hit.line is None else hit.line} {hit.kind}\n" for hit in hits]
+             f"{'-' if hit.line is None else hit.line} {hit.kind}{scanner.cited(hit.kind)}\n" for hit in hits]
     lines += [f"{sha[:12]} {role} -:- not_noreply\n" for sha, role in unnamed]
     text = "".join(lines) + f"hits={len(hits) + len(unnamed)} commits={commits}\n"
+    if patterns.not_checked_line():
+        text += patterns.not_checked_line() + "\n"
     # a console that cannot show a file name's letters shows them escaped, not an error
     text = text.encode(sys.stdout.encoding or "utf-8", "backslashreplace").decode(
         sys.stdout.encoding or "utf-8")
@@ -653,7 +659,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             text, code = _run(args), 0
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
-            queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError,
+            exceptions.ExceptionsError, queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError,
+            ParkError, CheckError,
             SkillsError, SpawnRefused, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
             ResearchRefused, HandoffError, identity.IdentityError, *merge_commands.ERRORS) as e:
         print(f"error: {e}", file=sys.stderr)

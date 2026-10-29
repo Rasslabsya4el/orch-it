@@ -21,6 +21,7 @@ from orch_it.events.store import Store
 from orch_it.guards import prepush, scanner
 from orch_it.guards.scanner import Patterns
 from orch_it.testruns import github
+from scan_setup import invented_setup  # noqa: F401  (an autouse fixture)
 from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, NO_WINDOW,
                         OPENAI_KEY, PRIVATE_KEY, Repo, make_template)
 
