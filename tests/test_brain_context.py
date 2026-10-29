@@ -11,7 +11,7 @@ import pytest
 
 from orch_it.brain import hook
 from orch_it.events.store import Store
-from orch_it.roles import RoleSet
+from orch_it.roles import RoleSet, context
 
 LINE = RoleSet.load().roles["brain"].report.context_line
 REPO = "owner-x/orch-it"
@@ -74,18 +74,40 @@ def test_the_crossing_is_one_event_and_each_later_prompt_is_still_told(tmp_path)
     assert store.query("select count(*) from events where kind = 'context.crossed'").rows == [(1,)]
 
 
-def test_a_long_transcript_is_read_from_its_end(tmp_path):
-    import time
-
+def test_a_long_transcript_is_read_from_its_end(tmp_path, monkeypatch):
     path = tmp_path / "brain.jsonl"
     line = json.dumps({"type": "user", "message": {"role": "user", "content": "x" * 40}}) + "\n"
     with path.open("w", encoding="utf-8") as out:
         out.write(json.dumps(TITLE) + "\n")
         out.write(line * 600_000)  # about 50 MB of short records
         out.write(json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": LINE + 1}}}) + "\n")
-    started = time.monotonic()
+    read = []  # the bytes the context reader takes from the transcript: a whole-file read takes about 50 MB
+    real_open = open
+
+    class Spy:
+        def __init__(self, source):
+            self.source = source
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self.source.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self.source, name)
+
+        def read(self, *args):
+            data = self.source.read(*args)
+            read.append(len(data))
+            return data
+
+    def spy_open(file, mode="r", *args, **kwargs):
+        return Spy(real_open(file, mode, *args, **kwargs))
+
+    monkeypatch.setattr(context, "open", spy_open, raising=False)  # the context module's own open only
     out, _ = run(tmp_path, payload(path), Store.open(tmp_path / "store"))
-    assert PAST in out and time.monotonic() - started < 2
+    assert PAST in out and 0 < sum(read) <= context.TAIL_BYTES, sum(read)
 
 
 @pytest.mark.parametrize("context, title, agent", [(1000, TITLE, None), (10**6, None, "orch"),
