@@ -29,6 +29,16 @@
             "timeout": 90
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/hooks/orch-it -m orch_it.guards.text_hook",
+            "timeout": 120
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

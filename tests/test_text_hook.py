@@ -241,11 +241,14 @@ def test_the_hook_entry_point_prints_nothing_for_a_clean_call(capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_the_wiring_in_settings_names_the_matcher_and_the_module():
+def test_the_wiring_in_settings_names_the_module_under_a_catch_all_matcher():
+    # a catch-all matcher (empty): the hook judges each call by its input, so a tool no list names is judged too
     settings = json.loads((Path(__file__).parents[1] / ".claude" / "settings.json").read_text("utf-8"))
     entries = [e for e in settings["hooks"]["PreToolUse"] if "text_hook" in e["hooks"][0]["command"]]
     assert len(entries) == 1
-    assert entries[0]["matcher"] == "Agent|Task|SendMessage|Write|Edit|MultiEdit"
+    assert entries[0]["matcher"] == ""
+    assert entries[0]["hooks"][0]["command"].endswith("-m orch_it.guards.text_hook")
+    assert entries[0]["hooks"][0]["timeout"] == 120
 
 
 # --- guards check-text (the CLI) -------------------------------------------------------------------------
