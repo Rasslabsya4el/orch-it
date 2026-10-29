@@ -12,6 +12,8 @@ import json
 import os
 import re
 import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -98,14 +100,46 @@ _PARENT_QUERY = ("query($owner: String!, $name: String!, $number: Int!) { reposi
 _PINNED_QUERY = ("query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) "
                  "{ pinnedIssues(first: 10) { nodes { issue { number } } } } }")
 _PIN_MUTATION = "mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }"
+READ_RETRIES = 2  # a read that times out is asked again this many times, then its timeout is raised
+READ_RETRY_PAUSE_S = 1  # seconds between two tries of one read
+
+
+def _is_read(args: list[str]) -> bool:
+    """Whether a `gh` call only reads: a `gh api` call whose method is GET, named by `-X` or `--method`, else
+    GET unless a field or an input makes `gh` send a POST."""
+
+    if args[:1] != ["api"]:
+        return False
+    for flag in ("-X", "--method"):
+        if flag in args:
+            return args[args.index(flag) + 1:args.index(flag) + 2] == ["GET"]
+    return not any(arg in ("-f", "-F", "--field", "--raw-field", "--input") for arg in args)
 
 
 class GhHub:
     """The `Hub` over `gh api` (the user's own `gh` login). Every call is bounded by
-    `run_gh`'s timeout; a 404 is "not there", any other failure raises `GithubError`."""
+    `run_gh`'s timeout; a 404 is "not there", any other failure raises `GithubError`. A read
+    that times out is asked again (`READ_RETRIES`, `READ_RETRY_PAUSE_S` apart); a write is
+    called once."""
 
     def __init__(self, gh: Gh | None = None):
         self.gh = gh or run_gh
+        self.sleep: Callable[[float], None] = time.sleep  # the pause between two tries of a read
+
+    def _read(self, args: list[str]) -> str:
+        """The answer of one `gh` call. A read (`_is_read`) that times out is tried again after the
+        pause, `READ_RETRIES` times; its last timeout is raised as it is. Any other call is tried once."""
+
+        if not _is_read(args):
+            return self.gh(args)
+        for _ in range(READ_RETRIES):
+            try:
+                return self.gh(args)
+            except GithubError as e:
+                if e.code != "gh_timeout":
+                    raise
+            self.sleep(READ_RETRY_PAUSE_S)
+        return self.gh(args)
 
     def issue(self, repo: str, number: int) -> Issue | None:
         found = self._object(["api", f"repos/{repo}/issues/{number}"], missing_ok=True)
@@ -237,7 +271,7 @@ class GhHub:
 
     def _object(self, args: list[str], *, missing_ok: bool = False) -> dict | None:
         try:
-            values = json_values(self.gh(args))
+            values = json_values(self._read(args))
         except GithubError as e:
             if missing_ok and "HTTP 404" in str(e):
                 return None
@@ -248,7 +282,7 @@ class GhHub:
 
     def _list(self, args: list[str]) -> list[dict]:
         items = []
-        for page in json_values(self.gh(args)):
+        for page in json_values(self._read(args)):
             if not isinstance(page, list):
                 raise GithubError("gh_bad_output", f"{' '.join(args[:3])}: expected a list")
             items += [item for item in page if isinstance(item, dict)]
