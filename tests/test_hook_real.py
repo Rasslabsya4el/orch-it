@@ -20,7 +20,9 @@ pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks
 
 
 @pytest.fixture(autouse=True)
-def isolated_settings(tmp_path, monkeypatch):
+def hook_settings(tmp_path, monkeypatch):
+    # not named `isolated_settings`: that name would shadow tests/conftest.py's fixture, which gives the
+    # test its non-git cwd (#453 unit 1); both run, this one's ORCH_IT_SETTINGS (set later) wins.
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
     monkeypatch.delenv("ORCH_IT_STORE", raising=False)
     (tmp_path / "settings.json").write_text('{"repo": "acme-x/widgets-y"}', "utf-8")  # the repo the events are written under

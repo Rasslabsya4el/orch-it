@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from fake_hub import REPO, FakeHub
+from language_tree import git_tree, write_language
 from ticket_fixtures import fixture
 
 from orch_it.events import schema
@@ -31,6 +32,7 @@ def setting_file(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(path))
     monkeypatch.setenv("ORCH_IT_STORE", str(tmp_path / "events"))
+    monkeypatch.chdir(git_tree(tmp_path / "tree"))  # the language is the tree file's, read from the cwd (#453 unit 1)
     monkeypatch.setattr("orch_it.guards.values.read_values", lambda **kwargs: Values())
     monkeypatch.setattr(hook, "make_hub", lambda: hub())
     monkeypatch.setattr(hook, "repo_of", lambda folder: REPO)
@@ -45,6 +47,8 @@ def hub():
 
 
 def configure(setting_file, **values):
+    """`human_language` goes to the settings.json of the cwd's work tree; the rest to the installation file."""
+    write_language(Path.cwd(), values.pop("human_language", None))
     setting_file.write_text(json.dumps(values), "utf-8")
 
 
