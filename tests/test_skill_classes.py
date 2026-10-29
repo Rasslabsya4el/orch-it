@@ -2,6 +2,8 @@
 newer one, give each skill one class: `same`, `added`, `renamed`, `removed`, `text_changed` or
 `contract_changed`."""
 
+import time
+
 from orch_it.skills.classify import classify
 
 
@@ -260,14 +262,37 @@ def test_a_longer_fence_holding_a_shorter_one_does_not_hide_the_headings_after_i
     assert one(inline, inline.replace("one", "two")) == ("contract_changed", ["section Inputs"])
 
 
+def adversarial(lines: int, width: int) -> tuple[str, str]:
+    """A text of `lines` repeated lines and a heading `width` spaces wide, each with one more line added."""
+
+    many = NOTES + "\n" + "\n".join("the Skill tool and more words" for _ in range(lines)) + "\n"
+    wide = NOTES + "\n## a" + " " * width + "x\n"
+    return many, wide
+
+
+def cpu_seconds(old: str, new: str, repeat: int) -> float:
+    """The least CPU time of `repeat` reads of the change `old` -> `new`: CPU time, not wall time, so the
+    workers of a shared machine waiting for a core do not count (#421 unit 10)."""
+
+    best = float("inf")
+    for _ in range(repeat):
+        start = time.process_time()
+        one(old, new)
+        best = min(best, time.process_time() - start)
+    return best
+
+
 def test_long_adversarial_text_is_read_in_bounded_time():
-    import time
-    many = NOTES + "\n" + "\n".join("the Skill tool and more words" for _ in range(20_000)) + "\n"
-    wide = NOTES + "\n## a" + " " * 40_000 + "x\n"
-    start = time.perf_counter()
-    one(many, many + "x\n")
-    one(wide, wide + "x\n")
-    assert time.perf_counter() - start < 5
+    """The bound is the growth, not a number of seconds (#421 unit 10: 5 s failed on a shared core): a read that
+    is linear in the text takes about ten times as long for ten times the text (10.5 on Windows, measured), a
+    quadratic one about a hundred times. The long text must stay under 30 times the time of the text one tenth
+    as long."""
+
+    long_many, long_wide = adversarial(20_000, 40_000)
+    short_many, short_wide = adversarial(2_000, 4_000)
+    long_cpu = cpu_seconds(long_many, long_many + "x\n", 1) + cpu_seconds(long_wide, long_wide + "x\n", 1)
+    short_cpu = cpu_seconds(short_many, short_many + "x\n", 3) + cpu_seconds(short_wide, short_wide + "x\n", 3)
+    assert long_cpu < 30 * short_cpu, (long_cpu, short_cpu)
 
 
 def test_a_heading_with_a_verb_of_writing_is_no_contract_section():

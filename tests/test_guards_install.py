@@ -12,7 +12,8 @@ import pytest
 from orch_it.cli import main
 from orch_it.events.store import Store
 from orch_it.guards import install
-from scan_repos import NO_WINDOW, Repo
+from repo_templates import clone_of, templates
+from scan_repos import NO_WINDOW
 
 CLAUDE_SETTINGS = {"hooks": {"PreToolUse": [{"matcher": "Bash|PowerShell", "hooks": [
     {"type": "command", "command": "python -m orch_it hook pre-tool-use"}]}]}}
@@ -31,17 +32,6 @@ def store(tmp_path):
     return Store.open(tmp_path / "store")
 
 
-def clone_of(tmp_path, files):
-    """A fresh clone of a repo that tracks `files` (path -> text)."""
-
-    origin = Repo(tmp_path / "origin")
-    origin.commit(files, message="the repo")
-    target = tmp_path / "clone"
-    subprocess.run(["git", "clone", "-q", str(origin.path), str(target)], check=True,
-                   capture_output=True, creationflags=NO_WINDOW, env=origin.env)
-    return target
-
-
 def config(work_tree, *args, check=True):
     done = subprocess.run(["git", "-C", str(work_tree), "config", *args], capture_output=True, text=True,
                           creationflags=NO_WINDOW)
@@ -50,9 +40,9 @@ def config(work_tree, *args, check=True):
 
 
 @pytest.fixture
-def clone(tmp_path):
+def clone(tmp_path, templates):
     return clone_of(tmp_path, {"hooks/pre-push": "#!/bin/sh\nexit 0\n",
-                               ".claude/settings.json": json.dumps(CLAUDE_SETTINGS)})
+                               ".claude/settings.json": json.dumps(CLAUDE_SETTINGS)}, templates)
 
 
 def check_rows(store):
@@ -124,9 +114,9 @@ def test_a_core_hooks_path_of_the_user_config_is_another_value_too(clone, store,
     assert config(clone, "--local", "--get", "core.hooksPath", check=False) == ""
 
 
-def test_the_claude_hook_is_reported_missing_when_settings_hold_no_pre_tool_use_entry(tmp_path, store):
+def test_the_claude_hook_is_reported_missing_when_settings_hold_no_pre_tool_use_entry(tmp_path, store, templates):
     clone = clone_of(tmp_path, {"hooks/pre-push": "#!/bin/sh\n",
-                                ".claude/settings.json": json.dumps({"hooks": {"SessionStart": []}})})
+                                ".claude/settings.json": json.dumps({"hooks": {"SessionStart": []}})}, templates)
     assert install.install(clone, store, repo="o/n").claude_hook is False
     ended = check_rows(store)[-1]
     assert json.loads(ended[7])["claude_hook"] is False
@@ -136,16 +126,16 @@ def test_the_claude_hook_is_reported_missing_when_settings_hold_no_pre_tool_use_
 @pytest.mark.parametrize("settings_text", [None, "not json", "[]", '{"hooks": []}',
                                            '{"hooks": {"PreToolUse": "x"}}',
                                            '{"hooks": {"PreToolUse": [{"hooks": [{"command": "other"}]}]}}'])
-def test_a_settings_file_that_holds_no_entry_is_no_hook(tmp_path, store, settings_text):
+def test_a_settings_file_that_holds_no_entry_is_no_hook(tmp_path, store, settings_text, templates):
     files = {"hooks/pre-push": "#!/bin/sh\n"}
     if settings_text is not None:
         files[".claude/settings.json"] = settings_text
-    clone = clone_of(tmp_path, files)
+    clone = clone_of(tmp_path, files, templates)
     assert install.install(clone, store, repo="o/n").claude_hook is False
 
 
-def test_a_repo_without_the_tracked_hook_file_cannot_be_installed(tmp_path, store):
-    clone = clone_of(tmp_path, {"README.md": "x\n"})
+def test_a_repo_without_the_tracked_hook_file_cannot_be_installed(tmp_path, store, templates):
+    clone = clone_of(tmp_path, {"README.md": "x\n"}, templates)
     with pytest.raises(install.InstallError) as refused:
         install.install(clone, store, repo="o/n")
     assert refused.value.code == "hook_file_missing"

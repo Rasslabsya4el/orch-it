@@ -10,6 +10,7 @@ import pytest
 
 from orch_it.skills import copies
 from orch_it.skills.copies import Manifest, SkillsError
+from repo_templates import templates
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 UPSTREAM = "https://github.com/mattpocock/skills"
@@ -20,20 +21,24 @@ def git(cwd, *args):
                           cwd=cwd, capture_output=True, check=True, creationflags=NO_WINDOW).stdout
 
 
-def upstream_repo(tmp_path, files: dict[str, bytes]):
+def upstream_repo(tmp_path, files: dict[str, bytes], templates):
     """A throwaway git repo holding `files`; `core.autocrlf` on, so a reader of the work tree
-    instead of the blobs would see CRLF."""
+    instead of the blobs would see CRLF. A copy of a template built once per worker (#421 unit 10)."""
 
-    root = tmp_path / "upstream"
-    root.mkdir()
-    git(root, "init", "-q")
-    git(root, "config", "core.autocrlf", "true")
-    for path, data in files.items():
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_bytes(data)
-    git(root, "add", "-A")
-    git(root, "commit", "-q", "-m", "skills")
-    return root, git(root, "rev-parse", "HEAD").decode().strip()
+    def build(folder):
+        root = folder / "upstream"
+        root.mkdir()
+        git(root, "init", "-q")
+        git(root, "config", "core.autocrlf", "true")
+        for path, data in files.items():
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).write_bytes(data)
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "skills")
+        return git(root, "rev-parse", "HEAD").decode().strip()
+
+    return templates.copy(f"skill copies: upstream {sorted(files.items())!r}", build, tmp_path / "upstream",
+                          part="upstream")
 
 
 SKILL_FILES = {
@@ -53,8 +58,8 @@ def blob(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
-def test_the_tree_holds_each_skill_folder_with_its_files_as_committed(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_the_tree_holds_each_skill_folder_with_its_files_as_committed(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     tree = copies.read_tree(root, commit)
     assert sorted(tree) == ["skills/engineering/alpha", "skills/in-progress/gamma", "skills/productivity/beta"]
     assert tree["skills/engineering/alpha"] == {
@@ -64,30 +69,30 @@ def test_the_tree_holds_each_skill_folder_with_its_files_as_committed(tmp_path):
     }
 
 
-def test_an_unknown_commit_is_refused_with_its_code(tmp_path):
-    root, _ = upstream_repo(tmp_path, SKILL_FILES)
+def test_an_unknown_commit_is_refused_with_its_code(tmp_path, templates):
+    root, _ = upstream_repo(tmp_path, SKILL_FILES, templates)
     with pytest.raises(SkillsError) as e:
         copies.read_tree(root, "0" * 40)
     assert e.value.code == "commit_unknown"
 
 
-def test_a_tree_without_skills_is_refused_not_read_as_all_removed(tmp_path):
-    root, commit = upstream_repo(tmp_path, {"README.md": b"empty\n"})
+def test_a_tree_without_skills_is_refused_not_read_as_all_removed(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, {"README.md": b"empty\n"}, templates)
     with pytest.raises(SkillsError) as e:
         copies.read_tree(root, commit)
     assert e.value.code == "no_skills"
 
 
-def test_two_skill_folders_of_one_name_are_refused(tmp_path):
+def test_two_skill_folders_of_one_name_are_refused(tmp_path, templates):
     files = dict(SKILL_FILES) | {"skills/misc/alpha/SKILL.md": b"---\nname: alpha\n---\n"}
-    root, commit = upstream_repo(tmp_path, files)
+    root, commit = upstream_repo(tmp_path, files, templates)
     with pytest.raises(SkillsError) as e:
         copies.read_tree(root, commit)
     assert e.value.code == "name_clash"
 
 
-def test_copies_are_written_byte_for_byte_and_the_manifest_hashes_every_file(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_copies_are_written_byte_for_byte_and_the_manifest_hashes_every_file(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     tree = copies.read_tree(root, commit)
     repo = tmp_path / "repo"
     manifest = Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={"gamma": "no job"})
@@ -107,16 +112,16 @@ def test_copies_are_written_byte_for_byte_and_the_manifest_hashes_every_file(tmp
     assert copies.verify(repo) == []
 
 
-def test_the_blob_hashes_are_the_ones_git_gives_the_upstream_files(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_the_blob_hashes_are_the_ones_git_gives_the_upstream_files(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     manifest = Manifest.build(copies.read_tree(root, commit), upstream=UPSTREAM, commit=commit, not_copied={})
     listed = git(root, "ls-tree", "-r", commit, "skills/engineering/alpha").decode().splitlines()
     by_path = {line.split("\t")[1]: line.split()[2] for line in listed}
     assert {f"skills/engineering/alpha/{rel}": sha for rel, sha in manifest.skills["alpha"]["files"].items()} == by_path
 
 
-def test_verify_names_every_changed_missing_and_extra_file(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_verify_names_every_changed_missing_and_extra_file(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     tree = copies.read_tree(root, commit)
     repo = tmp_path / "repo"
     copies.write(repo, tree, Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={"gamma": "no job"}))
@@ -134,8 +139,8 @@ def test_verify_names_every_changed_missing_and_extra_file(tmp_path):
     ]
 
 
-def test_a_crlf_copy_on_disk_differs_from_its_lf_blob(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_a_crlf_copy_on_disk_differs_from_its_lf_blob(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     tree = copies.read_tree(root, commit)
     repo = tmp_path / "repo"
     copies.write(repo, tree, Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={}))
@@ -144,8 +149,8 @@ def test_a_crlf_copy_on_disk_differs_from_its_lf_blob(tmp_path):
     assert copies.verify(repo) == ["beta/SKILL.md: hash differs"]
 
 
-def test_a_new_write_removes_dropped_skills_and_stale_files_but_never_ours(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_a_new_write_removes_dropped_skills_and_stale_files_but_never_ours(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     tree = copies.read_tree(root, commit)
     repo = tmp_path / "repo"
     copies.write(repo, tree, Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={}))
@@ -164,8 +169,8 @@ def test_a_new_write_removes_dropped_skills_and_stale_files_but_never_ours(tmp_p
     assert copies.verify(repo) == []
 
 
-def test_a_copy_never_overwrites_a_skill_of_ours_of_the_same_name(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_a_copy_never_overwrites_a_skill_of_ours_of_the_same_name(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     tree = copies.read_tree(root, commit)
     repo = tmp_path / "repo"
     ours = repo / ".claude" / "skills" / "beta"
@@ -198,8 +203,8 @@ def test_a_bad_or_half_written_manifest_is_refused_with_its_code(tmp_path, text,
     assert e.value.code == code
 
 
-def test_a_write_cut_part_way_is_named_by_verify_and_finished_by_the_same_write(tmp_path, monkeypatch):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_a_write_cut_part_way_is_named_by_verify_and_finished_by_the_same_write(tmp_path, monkeypatch, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     tree = copies.read_tree(root, commit)
     repo = tmp_path / "repo"
     manifest = Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={})
@@ -221,8 +226,8 @@ def test_a_write_cut_part_way_is_named_by_verify_and_finished_by_the_same_write(
     assert not (repo / ".claude" / "skills" / "pocock.pending.json").exists()
 
 
-def test_verify_names_a_cut_write(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES)
+def test_verify_names_a_cut_write(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES, templates)
     tree = copies.read_tree(root, commit)
     copies.write(tmp_path, tree, Manifest.build(tree, upstream=UPSTREAM, commit=commit, not_copied={}))
     (tmp_path / ".claude" / "skills" / "pocock.pending.json").write_text('["alpha"]', "utf-8")
@@ -248,21 +253,28 @@ def test_a_path_that_turns_from_a_file_into_a_folder_and_back_is_rewritten(tmp_p
     "skills/x/a/trail.",
     "skills/x/a/space ",
 ])
-def test_a_name_no_manifest_or_windows_folder_holds_is_refused_before_any_write(tmp_path, path):
-    root, commit = commit_of_blobs(tmp_path, ["skills/x/a/SKILL.md", path])
+def test_a_name_no_manifest_or_windows_folder_holds_is_refused_before_any_write(tmp_path, path, templates):
+    root, commit = commit_of_blobs(tmp_path, ["skills/x/a/SKILL.md", path], templates)
     with pytest.raises(SkillsError) as e:
         copies.read_tree(root, commit)
     assert e.value.code == "unsupported_entry"
 
 
-def commit_of_blobs(tmp_path, paths):
-    """A commit built from blobs alone: names a Windows work tree could never hold reach the tree."""
+def blob_repo(folder):
+    """The template of commit_of_blobs: an empty repository holding the blob `x\\n`; returns its sha."""
 
-    root = tmp_path / "upstream"
+    root = folder / "upstream"
     root.mkdir()
     git(root, "init", "-q")
+    return subprocess.run(["git", "hash-object", "-w", "--stdin"], input=b"x\n", cwd=root, capture_output=True,
+                          check=True, creationflags=NO_WINDOW).stdout.decode().strip()
+
+
+def commit_of_blobs(tmp_path, paths, templates):
+    """A commit built from blobs alone: names a Windows work tree could never hold reach the tree."""
+
+    root, sha = templates.copy("skill copies: blob repo", blob_repo, tmp_path / "upstream", part="upstream")
     run = {"cwd": root, "capture_output": True, "check": True, "creationflags": NO_WINDOW}
-    sha = subprocess.run(["git", "hash-object", "-w", "--stdin"], input=b"x\n", **run).stdout.decode().strip()
     index = "".join(f"100644 {sha}\t{path}\n" for path in paths).encode()
     subprocess.run(["git", "-c", "core.protectNTFS=false", "update-index", "--add", "--index-info"],
                    input=index, **run)
@@ -270,15 +282,15 @@ def commit_of_blobs(tmp_path, paths):
     return root, git(root, "commit-tree", tree_sha, "-m", "odd").decode().strip()
 
 
-def test_two_files_differing_only_in_case_are_refused(tmp_path):
-    root, commit = commit_of_blobs(tmp_path, ["skills/x/a/SKILL.md", "skills/x/a/Ref.md", "skills/x/a/ref.md"])
+def test_two_files_differing_only_in_case_are_refused(tmp_path, templates):
+    root, commit = commit_of_blobs(tmp_path, ["skills/x/a/SKILL.md", "skills/x/a/Ref.md", "skills/x/a/ref.md"], templates)
     with pytest.raises(SkillsError) as e:
         copies.read_tree(root, commit)
     assert e.value.code == "unsupported_entry"
 
 
-def test_a_stray_skill_file_at_the_skills_root_is_no_skill(tmp_path):
-    root, commit = upstream_repo(tmp_path, SKILL_FILES | {"skills/SKILL.md": b"stray\n"})
+def test_a_stray_skill_file_at_the_skills_root_is_no_skill(tmp_path, templates):
+    root, commit = upstream_repo(tmp_path, SKILL_FILES | {"skills/SKILL.md": b"stray\n"}, templates)
     assert len(copies.read_tree(root, commit)) == 3
 
 

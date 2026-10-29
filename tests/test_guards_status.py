@@ -14,6 +14,7 @@ from orch_it.cli import main
 from orch_it.events.store import Store
 from orch_it.guards import install, status
 from orch_it.testruns import github
+from repo_templates import clone_of, templates
 from scan_repos import NO_WINDOW, Repo
 
 CLAUDE_SETTINGS = {"hooks": {"PreToolUse": [{"matcher": "Bash|PowerShell", "hooks": [
@@ -51,28 +52,20 @@ def store(tmp_path):
 
 
 @pytest.fixture
-def installed(tmp_path, store):
+def installed(tmp_path, store, templates):
     """A clone with both hooks wired."""
 
-    origin = Repo(tmp_path / "origin")
-    origin.commit({"hooks/pre-push": "#!/bin/sh\n", ".claude/settings.json": json.dumps(CLAUDE_SETTINGS)})
-    target = tmp_path / "clone"
-    subprocess.run(["git", "clone", "-q", str(origin.path), str(target)], check=True,
-                   capture_output=True, creationflags=NO_WINDOW, env=origin.env)
+    target = clone_of(tmp_path, {"hooks/pre-push": "#!/bin/sh\n", ".claude/settings.json": json.dumps(CLAUDE_SETTINGS)},
+                      templates)
     install.install(target, store, repo="o/n")
     return target
 
 
 @pytest.fixture
-def bare(tmp_path):
+def bare(tmp_path, templates):
     """A clone that wires nothing."""
 
-    origin = Repo(tmp_path / "origin2")
-    origin.commit({"README.md": "x\n"})
-    target = tmp_path / "plain"
-    subprocess.run(["git", "clone", "-q", str(origin.path), str(target)], check=True,
-                   capture_output=True, creationflags=NO_WINDOW, env=origin.env)
-    return target
+    return clone_of(tmp_path, {"README.md": "x\n"}, templates, name="plain")
 
 
 def reading(answer):

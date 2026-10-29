@@ -13,6 +13,7 @@ import pytest
 from orch_it.events.store import Store
 from orch_it.roles import RoleSet
 from orch_it.roles.spawn import SpawnRefused, SpawnRequest, spawn
+from repo_templates import empty_repo, templates
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # #380's per-role findings: the inputs each spawned role needs (decision 1, decision 3)
@@ -44,17 +45,18 @@ def fake_gh(calls: list, *, body="The ticket's spec.", plan=PLAN):
     return gh
 
 
-def git_tree(path: Path) -> Path:
-    path.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", str(path)], check=True, creationflags=NO_WINDOW)
-    return path
+def git_tree(path: Path, templates) -> Path:
+    """A git work tree at `path`: a copy of the empty template repository, no `git init` of its own."""
+
+    tree, _ = templates.copy("spawn: empty repo", empty_repo, path, part="repo")
+    return tree
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, templates):
     diff = tmp_path / "unit.diff"
     diff.write_text("diff --git a/x.py b/x.py\n+print(1)\n", "utf-8")
-    return {"store": Store.open(tmp_path / "store"), "worktree": git_tree(tmp_path / "tree"), "diff": diff,
+    return {"store": Store.open(tmp_path / "store"), "worktree": git_tree(tmp_path / "tree", templates), "diff": diff,
             "scratch": tmp_path / "scratch", "plain": tmp_path}
 
 
