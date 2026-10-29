@@ -6,6 +6,7 @@ import http.server
 import json
 import os
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -18,7 +19,8 @@ from machine_repos import alive, dead_within
 from orch_it.research import opencode
 from orch_it.research.opencode import Client, OpencodeError, Server, find_opencode, free_port
 
-STUB = [sys.executable, str(Path(__file__).with_name("opencode_stub.py"))]
+STUB_PATH = str(Path(__file__).with_name("opencode_stub.py"))
+STUB = [sys.executable, STUB_PATH]
 CONFIG = {"provider": {"acme": {"options": {"apiKey": "{env:STUB_KEY}"}}}}
 USER_MESSAGE = {"info": {"id": "m1", "role": "user"}, "parts": [{"type": "text", "text": "brief"}]}
 ANSWER = {"info": {"id": "m2", "role": "assistant", "tokens": {"input": 5, "output": 2}},
@@ -57,7 +59,7 @@ def wait_idle(client, session, seconds=15):
 
 
 def test_a_session_runs_from_prompt_to_idle_and_its_messages_are_read(tmp_path):
-    stub = Stub(tmp_path, busy_seconds=0.4, root="root1",
+    stub = Stub(tmp_path, busy_seconds=3, root="root1",
                 sessions={"root1": {"messages": [USER_MESSAGE, ANSWER], "children": ["kid1", "kid2"]},
                           "kid1": {"messages": [], "children": []}})
     with stub.server() as client:
@@ -177,9 +179,12 @@ def test_a_reply_that_is_not_json_is_a_bad_reply():
 
 
 def test_a_server_nobody_listens_on_is_unreachable():
-    client = Client(f"http://127.0.0.1:{free_port()}", "pw", "/d")
-    with pytest.raises(OpencodeError) as caught:
-        client.messages("any")
+    # the port stays bound and is never listened on: connections are refused, and no other run can take it
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", 0))
+        client = Client(f"http://127.0.0.1:{held.getsockname()[1]}", "pw", "/d")
+        with pytest.raises(OpencodeError) as caught:
+            client.messages("any")
     assert caught.value.code == "unreachable"
 
 
@@ -219,10 +224,8 @@ def test_the_program_comes_from_the_path_a_name_a_path_or_an_argv_prefix(tmp_pat
     assert find_opencode(None) == [shutil.which("opencode")]
     assert find_opencode("opencode") == [shutil.which("opencode")]
     assert find_opencode(str(program)) == [str(program)]
-    assert find_opencode([sys.executable, "tests/opencode_stub.py"]) == [sys.executable,
-                                                                           "tests/opencode_stub.py"]
-    assert find_opencode((sys.executable, "tests/opencode_stub.py")) == [sys.executable,
-                                                                           "tests/opencode_stub.py"]
+    assert find_opencode([sys.executable, STUB_PATH]) == [sys.executable, STUB_PATH]
+    assert find_opencode((sys.executable, STUB_PATH)) == [sys.executable, STUB_PATH]
 
 
 @pytest.mark.parametrize("setting", [None, "no-such-program-orch-it", [], [""], [3], (), 7,
@@ -293,8 +296,16 @@ class Canned:
 
 def test_a_port_that_another_program_answered_on_is_not_ours(tmp_path, monkeypatch):
     flag = tmp_path / "answered"
-    # the squatter answers the first poll, and the program started for the port ends right after
-    with Canned(b"{}", on_request=lambda: flag.write_text("x")) as squatter:
+
+    def answer_once_the_program_is_gone():
+        # the squatter answers the first poll only after the program started for the port has ended,
+        # so the start sees the end before its own check (no race with the program's exit time)
+        flag.write_text("x")
+        deadline = time.monotonic() + 10
+        while server.tree.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    with Canned(b"{}", on_request=answer_once_the_program_is_gone) as squatter:
         monkeypatch.setattr(opencode, "free_port", lambda: squatter.port)
         waits = ("import os, sys, time\n"
                  "while not os.path.exists(sys.argv[1]): time.sleep(0.01)\n")

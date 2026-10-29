@@ -25,7 +25,7 @@ from machine_repos import GREEN, RED, Repos, dead_within, git, prefer_machine, s
 
 from orch_it.events.store import Store
 from orch_it.testruns.config import Machine, TestSettings
-from orch_it.testruns.machine import MachinePlace
+from orch_it.testruns.machine import REMOTE_PROGRAM, MachinePlace
 from orch_it.testruns.places import OwnPlace
 from orch_it.testruns.runner import run_tests
 
@@ -36,6 +36,7 @@ BOUND_MINUTES = 1  # a run of these tests is short; a stuck one is cut well insi
 SETUP_SECONDS = 60.0
 SLACK_SECONDS = 20.0
 HANG_GUARD_SECONDS = 240  # a test still going then dumps every thread's stack and ends the run
+SSHD_START_TRIES = 10  # ports tried for one sshd: a port taken by another process before sshd binds it is skipped
 
 
 @pytest.fixture(autouse=True)
@@ -92,9 +93,60 @@ def below(roots, table):
     return found
 
 
+def connection_victims(sshd_pid: int, table) -> list[int]:
+    """What a kill of this sshd takes: sshd and every process below it, except the far side of its
+    connections: the processes running REMOTE_PROGRAM below sshd, and all they started. The whole
+    program text is matched, because execnet's bootstrap (`import sys;exec(eval(sys.stdin.readline()))`,
+    the pytest-xdist workers) does not contain it; a process above sshd is never spared for being above."""
+
+    under = below([sshd_pid], table)
+    far = below([pid for pid, _, command in table if pid in under and REMOTE_PROGRAM in command], table)
+    return [pid for pid in under if pid not in far]
+
+
 def keygen(path: Path):
     subprocess.run([shutil.which("ssh-keygen"), "-q", "-t", "ed25519", "-N", "", "-f", str(path)],
                    check=True, capture_output=True, timeout=60, creationflags=NO_WINDOW)
+
+
+def wait_listening(process, log: Path, port: int) -> bool:
+    """Whether sshd's log says it listens on `port` before the process exits. sshd writes
+    `Server listening on 127.0.0.1 port N.` only once its bind succeeded, so a port some other
+    process holds never passes for ours."""
+
+    marker = f"listening on 127.0.0.1 port {port}."
+    deadline = time.monotonic() + 20
+    while True:
+        exited = process.poll() is not None
+        text = log.read_text("utf-8", "replace") if log.exists() else ""
+        if marker in text:
+            return True
+        if exited or time.monotonic() > deadline:
+            return False
+        time.sleep(0.1)
+
+
+def launch(sshd: list[str], folder: Path, ports, config) -> tuple[subprocess.Popen, int]:
+    """sshd on the first of `ports` it can bind, its config `config(port)` written into `folder`.
+    The probe of `free_port` closes its socket before sshd binds, so another process may take the
+    port in between: sshd then exits with `Bind to port ... failed`, and the next port is tried."""
+
+    log = folder / "sshd.log"
+    for port in ports:
+        (folder / "sshd_config").write_text(config(port), "utf-8")
+        with open(log, "wb") as out:
+            process = subprocess.Popen([*sshd, "-D", "-e", "-p", str(port), "-f", str(folder / "sshd_config")],
+                                       stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                                       start_new_session=True)
+        if wait_listening(process, log, port):
+            return process, port
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        text = log.read_text("utf-8", "replace")
+        if "Bind to port" not in text:
+            pytest.fail(f"sshd did not listen on {port} ({process.returncode}): {text}")
+    pytest.fail(f"sshd found no free port in {SSHD_START_TRIES} tries: {log.read_text('utf-8', 'replace')}")
 
 
 class Sshd:
@@ -104,37 +156,21 @@ class Sshd:
         sshd = need_sshd()
         folder = tmp_path / "sshd"
         folder.mkdir()
-        self.port = free_port()
         keygen(folder / "host_key")
         keygen(folder / "client_key")
         authorized = folder / "authorized_keys"
         shutil.copy(folder / "client_key.pub", authorized)
         authorized.chmod(0o600)
         self.client_key = folder / "client_key"
-        config = folder / "sshd_config"
-        config.write_text("\n".join([
-            f"Port {self.port}", "ListenAddress 127.0.0.1", f"HostKey {folder / 'host_key'}",
-            f"PidFile {folder / 'sshd.pid'}", f"AuthorizedKeysFile {authorized}", "StrictModes no",
-            "UsePAM no", "PasswordAuthentication no", "KbdInteractiveAuthentication no",
-            "PubkeyAuthentication yes", "AuthenticationMethods publickey", ""]), "utf-8")
-        self.log = folder / "sshd.log"
-        with open(self.log, "wb") as log:
-            self.process = subprocess.Popen([sshd, "-D", "-e", "-p", str(self.port), "-f", str(config)],
-                                            stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                            start_new_session=True)
-        self.wait_listening()
 
-    def wait_listening(self):
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                pytest.fail(f"sshd exited at once ({self.process.returncode}): {self.log.read_text()}")
-            try:
-                socket.create_connection(("127.0.0.1", self.port), timeout=1).close()
-                return
-            except OSError:
-                time.sleep(0.1)
-        pytest.fail(f"sshd is not listening: {self.log.read_text()}")
+        def config(port: int) -> str:
+            return "\n".join([
+                f"Port {port}", "ListenAddress 127.0.0.1", f"HostKey {folder / 'host_key'}",
+                f"PidFile {folder / 'sshd.pid'}", f"AuthorizedKeysFile {authorized}", "StrictModes no",
+                "UsePAM no", "PasswordAuthentication no", "KbdInteractiveAuthentication no",
+                "PubkeyAuthentication yes", "AuthenticationMethods publickey", ""])
+
+        self.process, self.port = launch([sshd], folder, (free_port() for _ in range(SSHD_START_TRIES)), config)
 
     def kill_group(self) -> int:
         """Kill sshd and its per-connection processes, whatever they are named (`sshd: user [priv]`,
@@ -144,9 +180,7 @@ class Sshd:
         from stdin, and what it started) is spared: it must notice by itself that the connection
         is gone."""
 
-        table = processes()
-        spared = below([pid for pid, _, command in table if "sys.stdin.readline" in command], table)
-        victims = [pid for pid in below([self.process.pid], table) if pid not in spared]
+        victims = connection_victims(self.process.pid, processes())
         for pid in reversed(victims):
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -251,3 +285,70 @@ def test_the_sshd_killed_mid_run_writes_no_failed_run(killed):
 def test_the_test_process_on_the_machine_is_dead_within_15_seconds_of_the_sshd_dying(killed):
     _, _, pid = killed
     assert dead_within(pid)
+
+
+# The pure checks below run on every machine, sshd or not (#421 rule 2).
+
+XDIST_WORKER = "py-demo -c import sys;exec(eval(sys.stdin.readline()))"  # execnet gateway_io.py:51
+FAR_PROGRAM = f"py-demo -c {REMOTE_PROGRAM}"  # the far side's program, as /proc shows it
+PROCESSES = [  # (pid, parent pid, command line)
+    (1, 0, "init-demo"),
+    (100, 1, "py-demo -m pytest tests -n 4"),
+    (110, 100, XDIST_WORKER),  # a worker of this run; it starts sshd, so sshd is below it
+    (111, 100, XDIST_WORKER),  # another worker, not under sshd: never a victim
+    (112, 111, "py-demo -c pass"),
+    (200, 110, "sshd-demo -D -e -p 40123"),
+    (300, 200, "sshd-session: user [priv]"),
+    (301, 300, "sshd-session: user@notty"),
+    (302, 301, f"sh -c {FAR_PROGRAM}"),
+    (303, 302, FAR_PROGRAM),  # the far side: spared with all it started
+    (304, 303, "py-demo -c import time;time.sleep(60)"),
+    (305, 303, XDIST_WORKER),  # an xdist worker of the far side's pytest: spared with it
+]
+
+
+def test_the_kill_takes_sshd_and_its_connections_and_spares_only_the_far_side():
+    assert sorted(connection_victims(200, PROCESSES)) == [200, 300, 301]
+
+
+def test_a_far_side_program_above_sshd_does_not_spare_sshd():
+    table = [(1, 0, "init-demo"), (9, 1, FAR_PROGRAM), (200, 9, "sshd-demo -D -e -p 40123")]
+    assert sorted(connection_victims(200, table)) == [200]
+
+
+FAKE_SSHD = '''
+import socket, sys, time
+port = int(sys.argv[sys.argv.index("-p") + 1])
+listener = socket.socket()
+try:
+    listener.bind(("127.0.0.1", port))
+except OSError as error:
+    print(f"error: Bind to port {port} on 127.0.0.1 failed: {error.strerror}.", file=sys.stderr, flush=True)
+    print("fatal: Cannot bind any address.", file=sys.stderr, flush=True)
+    sys.exit(1)
+listener.listen()
+print(f"Server listening on 127.0.0.1 port {port}.", file=sys.stderr, flush=True)
+time.sleep(60)
+'''
+
+
+def test_a_port_taken_before_sshd_binds_is_tried_again_on_the_next_port(tmp_path):
+    script = tmp_path / "fake_sshd.py"
+    script.write_text(FAKE_SSHD, "utf-8")
+    folder = tmp_path / "sshd"
+    folder.mkdir()
+    taken = socket.socket()  # another process's listener, taken between the probe and sshd's bind
+    taken.bind(("127.0.0.1", 0))
+    taken.listen()
+    free = free_port()
+    process = None
+    try:
+        process, port = launch([sys.executable, str(script)], folder,
+                               iter([taken.getsockname()[1], free]), lambda port: "")
+        assert port == free
+        assert process.poll() is None
+    finally:
+        taken.close()
+        if process is not None:
+            process.kill()
+            process.wait()
