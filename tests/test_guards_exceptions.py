@@ -86,7 +86,13 @@ def test_anything_under_docs_research_is_an_allowed_place():
     assert is_allowed_place("docs\\research\\brief.md", SETTINGS) is True
 
 
+def test_anything_under_docs_adr_is_an_allowed_place():
+    assert is_allowed_place("docs/adr/0007-invented-decision.md", SETTINGS) is True
+    assert is_allowed_place("docs\\adr\\0007-invented-decision.md", SETTINGS) is True
+
+
 def test_other_paths_are_not_allowed_places():
     assert is_allowed_place("src/orch_it/names.py", SETTINGS) is False
     assert is_allowed_place("docs/researchers/brief.md", SETTINGS) is False
     assert is_allowed_place("docs/research.md", SETTINGS) is False
+    assert is_allowed_place("docs/adrs/0007.md", SETTINGS) is False

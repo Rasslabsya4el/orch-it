@@ -4,8 +4,10 @@
 Job names are invented (`alpha`, `beta`); the workflow reader is checked on an invented workflow file.
 """
 
+import pytest
+
 from orch_it.guards import kinds
-from orch_it.guards.kinds import Finding, find_pattern_kinds, read_job_names
+from orch_it.guards.kinds import TICKET_PATH, Finding, find_in_ticket_text, find_pattern_kinds, read_job_names
 
 JOBS = frozenset({"alpha", "beta"})
 
@@ -154,3 +156,111 @@ def test_job_names_are_read_from_workflow_jobs_keys(tmp_path):
         encoding="utf-8",
     )
     assert read_job_names(str(workflows)) == frozenset({"alpha", "beta"})
+
+
+def workflow(tmp_path, name, text):
+    """Write one workflow file in a folder of its own under tmp_path; return the folder's path."""
+
+    folder = tmp_path / "workflows"
+    folder.mkdir(exist_ok=True)
+    (folder / name).write_text(text, encoding="utf-8")
+    return str(folder)
+
+
+def test_job_name_field_is_read_next_to_its_key(tmp_path):
+    folder = workflow(tmp_path, "tests.yml",
+                      "jobs:\n"
+                      "  alpha:\n"
+                      "    name: Alpha Gate\n"
+                      "    runs-on: box-one\n"
+                      "  beta:\n"
+                      "    runs-on: box-two\n")
+    assert read_job_names(folder) == frozenset({"alpha", "Alpha Gate", "beta"})
+
+
+def test_quoted_name_value_is_read_without_its_quotes(tmp_path):
+    folder = workflow(tmp_path, "tests.yml", 'jobs:\n  gamma:\n    name: "Gamma Gate"\n')
+    assert read_job_names(folder) == frozenset({"gamma", "Gamma Gate"})
+
+
+def test_matrix_suffixed_name_gives_its_bare_part_too(tmp_path):
+    folder = workflow(tmp_path, "tests.yml", "jobs:\n  delta:\n    name: tests (os)\n")
+    assert read_job_names(folder) == frozenset({"delta", "tests (os)", "tests"})
+
+
+def test_matrix_expression_name_gives_only_its_bare_part(tmp_path):
+    folder = workflow(tmp_path, "tests.yml", "jobs:\n  eps:\n    name: tests (${{ matrix.os }})\n")
+    assert read_job_names(folder) == frozenset({"eps", "tests"})
+
+
+def test_yaml_extension_is_read_too(tmp_path):
+    folder = workflow(tmp_path, "gate.yaml", "jobs:\n  zeta:\n    name: zeta gate\n")
+    assert read_job_names(folder) == frozenset({"zeta", "zeta gate"})
+
+
+def test_top_level_workflow_name_is_not_a_job_name(tmp_path):
+    folder = workflow(tmp_path, "tests.yml", "name: tests\non: push\njobs:\n  eta:\n    runs-on: box-one\n")
+    assert read_job_names(folder) == frozenset({"eta"})
+
+
+# ticket bodies: `find_in_ticket_text`, for unit 6's ticket checks
+
+@pytest.mark.parametrize("line", [
+    "python -m pytest -q",  # the word at a line start, with an option after it
+    "$ python3 -m tool --check",  # after a shell prompt
+    "Run `python -m tool` first.",  # after a backtick
+    "- run: python -m tool",  # after a workflow `run:` key
+])
+def test_ticket_bare_python_in_command_position_is_found_once(line):
+    findings = find_in_ticket_text(f"Steps:\n\n{line}\n")
+    assert [(f.kind, f.line) for f in findings] == [("bare_python", 3)]
+
+
+def test_ticket_bare_python_inside_a_fence_is_found_once():
+    text = "## Steps\n\n```bash\npython -m pytest -q\n```\n"
+    assert [(f.kind, f.line) for f in find_in_ticket_text(text)] == [("bare_python", 4)]
+
+
+def test_ticket_one_os_name_is_found_once():
+    text = "The fix calls ctypes.windll here.\n"
+    assert [(f.kind, f.line, f.text) for f in find_in_ticket_text(text)] == [("one_os_call", 1, "ctypes.windll")]
+
+
+@pytest.mark.parametrize("line", ['Wait for the "alpha" check.', "Wait for the `alpha` check."])
+def test_ticket_job_name_as_quoted_or_backticked_literal_is_found_once(line):
+    findings = find_in_ticket_text(line, JOBS)
+    assert [(f.kind, f.line, f.text) for f in findings] == [("check_name_literal", 1, "alpha")]
+
+
+def test_ticket_job_name_without_names_given_is_not_found():
+    assert find_in_ticket_text('Wait for the "alpha" check.') == []
+
+
+def test_ticket_body_with_all_three_kinds_is_found_in_order():
+    text = (
+        "## Steps\n"
+        "\n"
+        "```bash\n"
+        "python3 -m tool\n"
+        "```\n"
+        "\n"
+        "The fix calls `ctypes.windll` for the path.\n"
+        "\n"
+        'Wait for the "alpha" check.\n'
+    )
+    findings = find_in_ticket_text(text, JOBS)
+    assert [(f.kind, f.line, f.text) for f in findings] == [
+        ("bare_python", 4, "python3"),
+        ("one_os_call", 7, "ctypes.windll"),
+        ("check_name_literal", 9, "alpha"),
+    ]
+    assert {f.path for f in findings} == {TICKET_PATH}
+
+
+def test_ticket_prose_with_python_in_a_sentence_is_not_found():
+    text = (
+        "We chose python for the tool, and the stack keeps python in its tests.\n"
+        "python is the language of the tool we chose for the stack.\n"
+        "The checks alpha and beta are named in the workflow, unquoted.\n"
+    )
+    assert find_in_ticket_text(text, JOBS) == []

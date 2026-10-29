@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 FILE_NAME = "guards-exceptions.toml"
-ALLOWED_PLACES = ("docs/research/",)  # folders whose files may hold a literal of any kind
+ALLOWED_PLACES = ("docs/research/", "docs/adr/")  # the records: research and ADRs, whose files may hold a literal
 
 
 class ExceptionsError(Exception):
@@ -20,7 +20,6 @@ class ExceptionsError(Exception):
 
 @dataclass(frozen=True)
 class _Entry:
-    name: str  # how a message names the entry: its number and its file
     file: re.Pattern  # the entry's glob, compiled to a regex over a repo-relative path
     pattern: re.Pattern  # the entry's regex over the line
     reason: str
@@ -78,7 +77,7 @@ def _entry(number: int, table: dict) -> _Entry:
         compiled = re.compile(pattern)
     except re.error as error:
         raise ExceptionsError(f"{name}: pattern does not compile: {error}") from error
-    return _Entry(name, re.compile(_glob_regex(_posix(glob))), compiled, reason.strip())
+    return _Entry(re.compile(_glob_regex(_posix(glob))), compiled, reason.strip())
 
 
 def _glob_regex(glob: str) -> str:
