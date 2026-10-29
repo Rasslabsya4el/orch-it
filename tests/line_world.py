@@ -10,7 +10,7 @@ Every head that got a run is kept per pull request with whether it was up to dat
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from fake_github import PASSED, PENDING, FAILED, REPO, FakeGitHub
+from fake_github import PASSED, PENDING, FAILED, REPO, REQUIRED, FakeGitHub
 from follow_world import NO_AFTER_MERGE, NOW, ROWS_NO_AFTER, TITLE, Git
 
 from orch_it.events.store import Store
@@ -72,6 +72,7 @@ def line_world(tmp_path, tickets=(10, 11, 12, 13), gap_seconds=10):
     apart: (hub, store, {ticket: pr}, ci)."""
 
     hub = FakeGitHub(NOW)
+    hub.required_by_base = {"main": set(REQUIRED)}  # main requires every job: `pr open` turns auto-merge on
     store = Store.open(tmp_path / "events")
     ci = CI(hub)
     prs = {}
