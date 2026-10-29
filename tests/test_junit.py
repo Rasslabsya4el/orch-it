@@ -2,10 +2,16 @@
 refusal, never a partial list."""
 
 import time
+import tomllib
+from pathlib import Path
 
 import pytest
 
 from orch_it.testruns import junit
+
+# the nightly per-test bound of the `tests` workflow, read from the repo's settings, not retyped here
+NIGHTLY_BOUND = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text("utf-8"))[
+    "tool"]["orch_it"]["tests"]["nightly_timeout_seconds"]
 
 
 def write(tmp_path, text: str, name: str = "r.xml"):
@@ -114,7 +120,7 @@ def test_a_missing_report_is_refused_as_missing(tmp_path):
 
 
 @pytest.mark.slow  # nightly only: it writes and reads a report of some 40 MB
-def test_a_report_of_half_a_million_cases_is_read_whole_in_under_a_minute(tmp_path):
+def test_a_report_of_half_a_million_cases_is_read_whole_before_its_bound(tmp_path):
     path = tmp_path / "huge.xml"
     with open(path, "w", encoding="utf-8") as f:
         f.write("<testsuites><testsuite>")
@@ -124,4 +130,6 @@ def test_a_report_of_half_a_million_cases_is_read_whole_in_under_a_minute(tmp_pa
     started = time.monotonic()
     cases = junit.read(path)
     assert len(cases) == 500_001 and cases[-1].outcome == "failed"
-    assert time.monotonic() - started < 60
+    # The ceiling of the nightly bound: pytest-timeout is what names this test when it overruns the bound;
+    # this assertion only fails a read that returns but took longer than the bound allows.
+    assert time.monotonic() - started < NIGHTLY_BOUND

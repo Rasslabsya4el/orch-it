@@ -23,7 +23,7 @@ from orch_it.guards import scanner
 from orch_it.guards.scanner import KINDS, Hit, Patterns, ScanError
 from orch_it.testruns import github
 from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, NO_WINDOW,
-                        NOREPLY, OPENAI_KEY, PRIVATE_KEY, SOMEONE_HOME, Repo)
+                        NOREPLY, OPENAI_KEY, PRIVATE_KEY, SOMEONE_HOME, Repo, make_template)
 
 # kind -> a line holding one value of it, the value
 LINES = {
@@ -409,9 +409,15 @@ def test_a_line_of_a_million_characters_is_scanned_in_bounded_time(filler):
 
 # --- a repository of the fixture -------------------------------------------------------------
 
+@pytest.fixture(scope="session")
+def repo_template(tmp_path_factory):
+    """Built once per worker; every test copies it (never writes into it)."""
+    return make_template(tmp_path_factory.mktemp("template") / "repo")[0]
+
+
 @pytest.fixture
-def repo(tmp_path):
-    return Repo(tmp_path / "repo")
+def repo(tmp_path, repo_template):
+    return Repo(tmp_path / "repo", template=repo_template)
 
 
 def scan(repo, patterns=None, rev_range=None) -> list[Hit]:

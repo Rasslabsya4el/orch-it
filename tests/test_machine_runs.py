@@ -69,6 +69,17 @@ def ssh_that(code: str) -> tuple[str, ...]:
     return (sys.executable, "-c", code)
 
 
+def held_ssh(tmp_path, said: str = "") -> tuple[tuple[str, ...], Path, Path]:
+    """A stand-in ssh that runs `said`, then blocks until the test creates `release` (its own wait ends
+    at 60 s at most), then writes `finished`. A test that finds no `finished` when its run has returned
+    knows the place ended the ssh before the ssh could end on its own: no clock is read."""
+    release, finished = tmp_path / "release", tmp_path / "finished"
+    code = (f"import os, time\n{said}\nend = time.monotonic() + 60\n"
+            f"while not os.path.exists({str(release)!r}) and time.monotonic() < end: time.sleep(0.05)\n"
+            f"open({str(finished)!r}, 'w').close()\n")
+    return ssh_that(code), release, finished
+
+
 def place_with(repos, ssh, machine_=None, **options) -> MachinePlace:
     return MachinePlace(machine_ or Machine("box", "fakehost", "linux", "/srv/x"),
                         origin_url=str(repos.origin), ssh=ssh, **options)
@@ -206,14 +217,21 @@ def test_a_dropped_connection_after_the_start_is_lost_and_the_run_goes_to_own_ne
     assert store.query("SELECT COUNT(*) FROM events WHERE outcome = 'failed'").rows == [(0,)]
 
 
-def test_the_remote_test_process_is_dead_within_15_seconds_of_the_connection_dropping(
+def keepalive_bound() -> float:
+    """How long a dead connection may stand before the product's ssh gives it up: the keepalive's
+    interval times its count (`machine.SSH_OPTIONS`), read from the product, not retyped here."""
+    settings = dict(option.split("=", 1) for option in machine.SSH_OPTIONS[1::2])
+    return float(settings["ServerAliveInterval"]) * float(settings["ServerAliveCountMax"])
+
+
+def test_the_remote_test_process_is_dead_within_the_keepalive_bound_of_the_connection_dropping(
         tmp_path, monkeypatch):
     pidfile = tmp_path / "test.pid"
     repos, box, settings, places, store = setup(tmp_path, sleeping_suite(pidfile))
     monkeypatch.setenv("FAKE_SSH_DROP_WHEN_FILE", str(pidfile))
     done = run_at(store, repos, settings, places, place=BOX)
     assert (done.outcome, done.reason) == ("lost", "place_vanished")
-    assert dead_within(int(pidfile.read_text()))
+    assert dead_within(int(pidfile.read_text()), keepalive_bound())
 
 
 def test_a_report_cut_off_halfway_is_never_read_and_the_run_is_lost(tmp_path, monkeypatch):
@@ -248,12 +266,14 @@ def test_an_end_or_report_that_cannot_be_decoded_is_a_lost_run(tmp_path, lines):
 def test_a_protocol_line_over_the_cap_is_a_lost_run(tmp_path, monkeypatch):
     repos, *_ = setup(tmp_path)
     monkeypatch.setattr(machine, "MAX_LINE_BYTES", 1000)
-    ssh = ssh_that("print('ORCH-IT START {}', flush=True); print('ORCH-IT REPORT ' + 'A' * 5000, flush=True);"
-                   " import time; time.sleep(60)")
-    started = time.monotonic()
-    with pytest.raises(PlaceVanished):
-        place_with(repos, ssh).run(a_request(repos), tmp_path)
-    assert time.monotonic() - started < 30
+    ssh, release, finished = held_ssh(tmp_path, "print('ORCH-IT START {}', flush=True)\n"
+                                      "print('ORCH-IT REPORT ' + 'A' * 5000, flush=True)")
+    try:
+        with pytest.raises(PlaceVanished):
+            place_with(repos, ssh).run(a_request(repos), tmp_path)
+        assert not finished.exists()  # the run ended at the line; its ssh was still waiting
+    finally:
+        release.touch()
 
 
 def test_an_ssh_that_cannot_connect_refuses_the_run_place_off_keeping_what_it_said(tmp_path):
@@ -267,25 +287,32 @@ def test_an_ssh_that_cannot_connect_refuses_the_run_place_off_keeping_what_it_sa
 
 def test_an_ssh_that_never_starts_the_run_in_the_setup_time_is_refused_place_off(tmp_path):
     repos, *_ = setup(tmp_path)
-    started = time.monotonic()
-    with pytest.raises(PlaceRefused) as refused:
-        place_with(repos, ssh_that("import time; time.sleep(60)"), setup_seconds=1.0).run(
-            a_request(repos), tmp_path)
-    assert (refused.value.code, refused.value.step) == ("place_off", "start_timeout")
-    assert time.monotonic() - started < 30
+    ssh, release, finished = held_ssh(tmp_path)
+    try:
+        with pytest.raises(PlaceRefused) as refused:
+            place_with(repos, ssh, setup_seconds=1.0).run(a_request(repos), tmp_path)
+        assert (refused.value.code, refused.value.step) == ("place_off", "start_timeout")
+        assert not finished.exists()  # refused at the setup time; its ssh was still waiting
+    finally:
+        release.touch()
 
 
 def test_the_run_bound_counts_from_the_start_line_not_from_the_connection(tmp_path):
     repos, *_ = setup(tmp_path)
     pidfile = tmp_path / "ssh.pid"
-    ssh = ssh_that(f"import os, time; open({str(pidfile)!r}, 'w').write(str(os.getpid()));"
-                   " time.sleep(2); print('ORCH-IT START {}', flush=True); time.sleep(120)")
+    ssh, release, finished = held_ssh(
+        tmp_path, f"open({str(pidfile)!r}, 'w').write(str(os.getpid()))\n"
+                  "time.sleep(2)\nprint('ORCH-IT START {}', flush=True)")
     place = place_with(repos, ssh, setup_seconds=30.0, run_slack_seconds=0.5)
     started = time.monotonic()
-    with pytest.raises(PlaceVanished):
-        place.run(a_request(repos, bound_seconds=1.0), tmp_path)
-    assert 3 <= time.monotonic() - started < 30  # 2 s to the start line, then bound and slack
-    assert dead_within(int(pidfile.read_text()))
+    try:
+        with pytest.raises(PlaceVanished):
+            place.run(a_request(repos, bound_seconds=1.0), tmp_path)
+        assert 3 <= time.monotonic() - started  # 2 s to the start line, then bound and slack; a floor only
+        assert not finished.exists()  # the bound ended the ssh; it did not wait for the ssh's own end
+        assert dead_within(int(pidfile.read_text()))
+    finally:
+        release.touch()
 
 
 def test_a_machine_with_no_commit_to_check_out_is_refused_place_off(tmp_path):

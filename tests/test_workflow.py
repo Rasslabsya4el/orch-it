@@ -9,10 +9,13 @@ checks the arguments the workflow passes, not the text it holds."""
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import textwrap
+import tomllib
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -120,6 +123,47 @@ def test_each_job_uploads_its_junit_report_even_when_red():
         assert "name: junit-${{ github.job }}-${{ github.run_attempt }}" in upload, name
 
 
+PYTEST_STAND_IN = r"""
+pytest() {
+  { printf '%q ' "$@"; echo; } >> "$CALLS"
+  local out="" phase=serial rc
+  for a in "$@"; do
+    case "$a" in --junitxml=*) out="${a#--junitxml=}";; -n) phase=parallel;; esac
+  done
+  if [ "$phase" = parallel ]; then rc="${RC_PARALLEL:-0}"; else rc="${RC_SERIAL:-5}"; fi
+  if [ "$rc" = 5 ]; then
+    printf '<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="0"/></testsuites>' > "$out"
+  else
+    printf '<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="1"><testcase classname="c" name="%s"/></testsuite></testsuites>' "$phase" > "$out"
+  fi
+  return "$rc"
+}
+python() { "$PYTHON_FOR_TEST" "$@"; }
+"""
+
+
+def run_pytest_step(tmp_path, job, nightly, **extra):
+    """The job's pytest step under bash with a stand-in `pytest` that records each call and writes a one-case
+    report to the path of `--junitxml`; run in a copy of the repo's config. Returns the finished process and
+    the recorded calls (one argument string per call)."""
+
+    for leftover in ("calls.log", "junit.xml", "junit-serial.xml"):
+        (tmp_path / leftover).unlink(missing_ok=True)
+    shutil.copy(ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
+    shutil.copytree(ROOT / ".github" / "scripts", tmp_path / ".github" / "scripts", dirs_exist_ok=True)
+    script = PYTEST_STAND_IN + run_script(step_named(steps_of(job_lines(WORKFLOW.read_text("utf-8"))[job]), "pytest"))
+    env = os.environ | workflow_env() | {"NIGHTLY": nightly, "CALLS": str(tmp_path / "calls.log"),
+                                         "PYTHON_FOR_TEST": sys.executable, **extra}
+    done = subprocess.run([a_bash(), "--noprofile", "--norc", "-eo", "pipefail", "-c", script], capture_output=True,
+                          text=True, timeout=60, env=env, cwd=tmp_path, creationflags=NO_WINDOW)
+    calls = (tmp_path / "calls.log").read_text("utf-8").splitlines() if (tmp_path / "calls.log").exists() else []
+    return done, calls
+
+
+def call_args(call: str) -> list[str]:
+    return shlex.split(call)
+
+
 @pytest.mark.parametrize("nightly", ["true", "false"])
 def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
     suite = tmp_path / "suite"
@@ -128,27 +172,104 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         "import pytest\n\n"
         "@pytest.mark.slow\ndef test_slow():\n    pass\n\n"
         "@pytest.mark.live\ndef test_live():\n    pass\n\n"
+        "@pytest.mark.serial\ndef test_serial():\n    pass\n\n"
+        "@pytest.mark.slow\n"
+        "@pytest.mark.serial\ndef test_slow_serial():\n    pass\n\n"
         "def test_plain():\n    pass\n", "utf-8")
-    (tmp_path / "pyproject.toml").write_bytes((ROOT / "pyproject.toml").read_bytes())
-    bash = a_bash()
-    for name, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
-        script = 'pytest() { printf "%s\\n" "$@"; }\n' + run_script(step_named(steps_of(lines), "pytest"))
-        env = os.environ | workflow_env() | {"NIGHTLY": nightly}
-        passed = subprocess.run([bash, "-eo", "pipefail", "-c", script], capture_output=True,
-                                text=True, timeout=60, env=env, creationflags=NO_WINDOW)
-        assert passed.returncode == 0, passed.stderr
-        args = [a for a in passed.stdout.splitlines() if not a.startswith("--junitxml")]
-        collected = subprocess.run(
-            [sys.executable, "-m", "pytest", "--collect-only", "-p", "no:cacheprovider", *args, "suite"],
-            capture_output=True, text=True, timeout=60, cwd=tmp_path, creationflags=NO_WINDOW,
-            env=os.environ | {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
-        assert collected.returncode == 0, collected.stdout + collected.stderr
-        ids = sorted(line.strip() for line in collected.stdout.splitlines() if "::" in line)
-        expected = ["suite/test_marks.py::test_plain"]
+    for job in job_lines(WORKFLOW.read_text("utf-8")):
+        done, calls = run_pytest_step(tmp_path, job, nightly)
+        assert done.returncode == 0, done.stderr
+        ids = []
+        for call in calls:
+            args = call_args(call)
+            marks = args[args.index("-m") + 1]
+            collected = subprocess.run(
+                [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", "-m", marks, "suite"],
+                capture_output=True, text=True, timeout=60, cwd=tmp_path, creationflags=NO_WINDOW,
+                env=os.environ | {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
+            assert collected.returncode in (0, 5), collected.stdout + collected.stderr
+            ids += [line.strip() for line in collected.stdout.splitlines() if "::" in line]
+        expected = ["suite/test_marks.py::test_plain", "suite/test_marks.py::test_serial"]
         if nightly == "true":
-            expected = ["suite/test_marks.py::test_live", "suite/test_marks.py::test_plain",
-                        "suite/test_marks.py::test_slow"]
-        assert ids == expected, name
+            expected += ["suite/test_marks.py::test_live", "suite/test_marks.py::test_slow",
+                         "suite/test_marks.py::test_slow_serial"]
+        assert sorted(ids) == sorted(expected), job
+        assert len(ids) == len(set(ids)), job  # no test runs in both phases
+
+
+# --- the parallel run (#421 rules 1, 3, 5) ---------------------------------------------------
+
+def test_every_job_runs_xdist_on_the_core_count_read_at_run_time_and_prints_it(tmp_path):
+    for job, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
+        script = run_script(step_named(steps_of(lines), "pytest"))
+        assert "os.cpu_count()" in script, job
+        assert not re.search(r"(^|\s)-n[ =]?\d", script, re.M), job  # no core count written in the workflow
+        done, calls = run_pytest_step(tmp_path, job, "false")
+        assert done.returncode == 0, done.stderr
+        cores = os.cpu_count()
+        first = call_args(calls[0])
+        assert first[first.index("-n") + 1] == str(cores), job
+        printed = done.stdout.splitlines()[0]  # before any test runs
+        assert str(cores) in printed and "cores" in printed, done.stdout
+
+
+def pyproject_bounds() -> dict:
+    return tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))["tool"]["orch_it"]["tests"]
+
+
+@pytest.mark.parametrize("nightly, key, seconds", [("false", "per_change_timeout_seconds", 120),
+                                                   ("true", "nightly_timeout_seconds", 600)])
+def test_every_test_is_bound_by_the_setting_of_its_run_kind_in_both_phases(tmp_path, nightly, key, seconds):
+    assert pyproject_bounds()[key] == seconds
+    for job, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
+        script = run_script(step_named(steps_of(lines), "pytest"))
+        assert not re.search(r"\b(120|600)\b", script), job  # read from the config, not written here
+        done, calls = run_pytest_step(tmp_path, job, nightly)
+        assert done.returncode == 0, done.stderr
+        assert len(calls) == 2, job
+        for call in calls:
+            args = call_args(call)
+            assert args[args.index("--timeout") + 1] == str(seconds), (job, call)
+
+
+def test_the_serial_phase_runs_after_the_parallel_one_and_the_job_has_one_report_with_both(tmp_path):
+    for job in job_lines(WORKFLOW.read_text("utf-8")):
+        done, calls = run_pytest_step(tmp_path, job, "true", RC_SERIAL="0")
+        assert done.returncode == 0, done.stderr
+        parallel, serial = (call_args(c) for c in calls)
+        assert "-n" in parallel and "-n" not in serial, job
+        assert parallel[parallel.index("-m") + 1].endswith("not serial"), job
+        assert serial[serial.index("-m") + 1] == "serial", job
+        report = ET.parse(tmp_path / "junit.xml").getroot()
+        assert report.tag == "testsuites"
+        assert sorted(case.get("name") for case in report.iter("testcase")) == ["parallel", "serial"], job
+
+
+def test_no_serial_test_is_no_failure_but_a_red_test_in_either_phase_is(tmp_path):
+    for job in job_lines(WORKFLOW.read_text("utf-8")):
+        done, _ = run_pytest_step(tmp_path, job, "false", RC_SERIAL="5")
+        assert done.returncode == 0, done.stderr  # pytest exit code 5, no tests collected
+        assert [c.get("name") for c in ET.parse(tmp_path / "junit.xml").getroot().iter("testcase")] == ["parallel"]
+        done, calls = run_pytest_step(tmp_path, job, "false", RC_PARALLEL="1", RC_SERIAL="0")
+        assert done.returncode == 1, done.stderr
+        assert len(calls) == 2, job  # the serial phase still runs when the parallel one is red
+        done, _ = run_pytest_step(tmp_path, job, "false", RC_PARALLEL="0", RC_SERIAL="1")
+        assert done.returncode == 1, done.stderr
+        done, _ = run_pytest_step(tmp_path, job, "false", RC_PARALLEL="5", RC_SERIAL="0")
+        assert done.returncode == 5, done.stderr  # nothing collected in the main phase is no pass
+
+
+# --- a manual run takes the per-change kind unless asked (#421 rule 7) -----------------------
+
+def test_a_manual_run_defaults_to_the_per_change_kind_and_the_schedule_stays_full():
+    text = WORKFLOW.read_text("utf-8")
+    block = re.search(r"^  workflow_dispatch:\n((?:    .*\n)+)", text, re.M).group(1)
+    assert re.search(r"^        default: false$", block, re.M)
+    assert "default: true" not in block
+    header = "\n".join(text.splitlines()[:8])
+    assert "slow_and_live=true" in header and "workflow_dispatch" in header
+    night = re.fullmatch(r"\$\{\{ (.*) \}\}", workflow_env()["NIGHTLY"]).group(1)
+    assert night == "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)"
 
 
 def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_does_not():
