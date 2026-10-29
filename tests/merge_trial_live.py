@@ -28,10 +28,11 @@ class LiveRun:
 
 
 def wait_workflow_run(run: merge_trial._Run, workflow_file: str, since: datetime, *, head_sha: str | None = None,
-                      event: str | None = None, minutes: float | None = None) -> LiveRun:
+                      event: str | None = None, branch: str | None = None, minutes: float | None = None) -> LiveRun:
     """The first run of `workflow_file` GitHub lists that was created at or after `since` (a timezone-aware
-    moment), with `head_sha` and `event` when given, and has ended; newest first. A run that ended `skipped`
-    is returned as skipped, never as a success. `TrialTimeout` when none ends within the bound."""
+    moment), with `head_sha`, `event` and `branch` (the run's head branch) when given, and has ended; newest first.
+    A run that ended `skipped` is returned as skipped, never as a success. `TrialTimeout` when none ends within the
+    bound."""
 
     def probe() -> LiveRun | None:
         for listed in run.trial.workflow_runs(workflow_file):
@@ -41,6 +42,8 @@ def wait_workflow_run(run: merge_trial._Run, workflow_file: str, since: datetime
             if head_sha is not None and listed.get("head_sha") != head_sha:
                 continue
             if event is not None and listed.get("event") != event:
+                continue
+            if branch is not None and listed.get("head_branch") != branch:
                 continue
             if listed.get("status") != "completed":
                 continue

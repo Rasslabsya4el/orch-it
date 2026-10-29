@@ -20,6 +20,8 @@ NOW = datetime(2026, 10, 29, 10, 0, tzinfo=UTC)
 REPO = "owner/trial"
 HEAD = "c" * 40
 RED_IDS = frozenset({"tests/test_trial_main_red_x.py::test_red_on_a_push"})
+MAIN = merge_trial.MAIN_CHECK_WORKFLOW
+DEFAULT_BRANCH = "main"
 
 
 @pytest.fixture
@@ -111,9 +113,9 @@ def red_ticket_body(ids=RED_IDS):
     return body
 
 
-def listed(run_id, created, *, status="completed", conclusion="success", event="pull_request", sha=HEAD):
+def listed(run_id, created, *, status="completed", conclusion="success", event="pull_request", sha=HEAD, branch=None):
     return {"id": run_id, "created_at": created, "status": status, "conclusion": conclusion, "event": event,
-            "head_sha": sha}
+            "head_sha": sha, "head_branch": branch}
 
 
 def world_factory(trial, clock):
@@ -175,6 +177,14 @@ def test_live_is_off_by_default_and_the_flag_turns_it_on(tmp_path):
     base = ["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path)]
     assert merge_trial.parse_args(base).live is False
     assert merge_trial.parse_args([*base, "--live"]).live is True
+
+
+def test_the_help_of_live_says_row_5_live_needs_allow_default_base(capsys):
+    with pytest.raises(SystemExit):
+        merge_trial.parse_args(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+
+    assert "row 5 live needs --allow-default-base" in text
 
 
 def test_live_takes_each_row_from_the_registry_and_writes_the_rate_limit_into_the_report(tmp_path, monkeypatch):
@@ -306,6 +316,42 @@ def test_wait_workflow_run_takes_only_the_run_with_the_head_sha_and_the_event_as
                                    event="pull_request")
 
     assert found.run_id == "6"
+
+
+def test_wait_workflow_run_with_a_branch_takes_the_base_run_over_a_skipped_run_of_a_pull_request_branch(live):
+    # a pull request's own test run starts a skipped run of the same workflow inside the same window; it is listed
+    # above the base's run and has ended, so without `branch` it would be the one taken
+    clock = Clock()
+    trial = WorkflowTrial([[
+        listed("11", "2026-10-29T10:01:30Z", event="workflow_run", conclusion="skipped", branch="trial-pr"),
+        listed("12", "2026-10-29T10:01:00Z", event="workflow_run", branch=DEFAULT_BRANCH),
+    ]])
+    found = live.wait_workflow_run(make_run(trial, Hub(), clock), MAIN, NOW, event="workflow_run",
+                                   branch=DEFAULT_BRANCH)
+
+    assert found.run_id == "12" and found.conclusion == "success"
+
+
+def test_wait_workflow_run_with_a_branch_returns_a_skipped_run_of_that_branch_as_skipped(live):
+    clock = Clock()
+    trial = WorkflowTrial([[
+        listed("13", "2026-10-29T10:01:00Z", event="workflow_run", conclusion="skipped", branch=DEFAULT_BRANCH),
+    ]])
+    found = live.wait_workflow_run(make_run(trial, Hub(), clock), MAIN, NOW, event="workflow_run",
+                                   branch=DEFAULT_BRANCH)
+
+    assert found.run_id == "13" and found.conclusion == "skipped"
+    assert clock.slept == []
+
+
+def test_wait_workflow_run_without_a_branch_keeps_taking_any_branch(live):
+    clock = Clock()
+    trial = WorkflowTrial([[
+        listed("14", "2026-10-29T10:01:30Z", event="workflow_run", conclusion="skipped", branch="trial-pr"),
+    ]])
+    found = live.wait_workflow_run(make_run(trial, Hub(), clock), MAIN, NOW, event="workflow_run")
+
+    assert found.run_id == "14"
 
 
 def test_wait_workflow_run_times_out_with_trial_timeout_when_no_run_ends(live):
