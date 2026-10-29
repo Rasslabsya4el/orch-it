@@ -302,10 +302,11 @@ def _store(args) -> Store:
 
 
 def _repo_of(work_tree: str) -> str:
-    """The repo a command acts on when it is given no `--repo`: the setting `repo`, else the work
-    tree's GitHub `origin`, else `CommandError("repo_unknown")` naming the three ways to give it."""
+    """The repo a command acts on when it is given no `--repo`: the work tree's GitHub `origin`, else
+    the setting `repo` (a bad value is `bad_setting`, exit 2), else `CommandError("repo_unknown")`
+    naming the three ways to give it."""
 
-    found = settings.default_repo() or ticket_hook.repo_of(work_tree)
+    found = ticket_hook.repo_of(work_tree) or settings.default_repo()
     if not found:
         raise CommandError("repo_unknown", f"{work_tree}: give --repo, or the setting `repo` "
                                            "(owner/name), or a GitHub origin in the work tree")

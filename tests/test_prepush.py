@@ -131,6 +131,20 @@ def test_a_push_of_each_kind_in_content_is_refused_to_a_public_repo_naming_file_
     assert MACHINE_HOME not in event_text(store)
 
 
+def test_a_push_with_no_repo_known_is_still_decided_writes_no_event_and_says_so(repo, store, tmp_path, capsys):
+    (tmp_path / "settings.json").write_text("{}", "utf-8")  # no setting `repo`; the work tree has no origin
+    value = IN_CONTENT["email"][1]
+    sha = repo.commits_on(repo.base, [{"files": {"notes.txt": f"fine\nsee {value} here\n"},
+                                       "message": "add email"}])[0]
+    (text, code), _ = push(repo, store, line(sha, repo.base))
+    err = capsys.readouterr().err
+    assert (text, code) == ("", 1)
+    assert f"{sha[:12]} content notes.txt:2 email\n" in err
+    assert "no repo is known" in err
+    assert value not in err
+    assert events(store) == []
+
+
 def test_a_push_of_each_kind_in_a_file_path_is_refused_and_the_path_is_shown_without_it(
         repo, store, capsys):
     cases = list(IN_PATH.items())

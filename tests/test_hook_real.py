@@ -138,3 +138,13 @@ def test_a_deny_is_reversed_only_once(repo, store):
     hook.reverse(store, deny_id, by="owner")
     with pytest.raises(hook.ReverseError):
         hook.reverse(store, deny_id, by="owner")
+
+
+def test_a_deny_with_no_repo_known_is_still_made_writes_no_event_and_says_so(repo, store, tmp_path, capsys):
+    # no setting `repo` and no origin in the work tree: the decision is made, its events are not written.
+    # This is the one case where ADR 0004's "every triggered command writes guard.fired" does not hold.
+    (tmp_path / "settings.json").write_text("{}", "utf-8")
+    text, code = run(f"rm -rf {fwd(repo['other'])}", repo["own"], store)
+    assert denies(text) and code == 0
+    assert store.query("SELECT count(*) FROM events").rows == [(0,)]
+    assert "no repo is known" in capsys.readouterr().err

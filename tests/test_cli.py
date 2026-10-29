@@ -163,7 +163,11 @@ def test_measure_limit_writes_a_value_measured_event_with_every_envelope_field_g
         "detail": {"name": "weekly_limit_pct", "value": 26.5, "unit": "%", "source": "usage_card"}}
 
 
-def test_measure_limit_takes_the_repo_setting_when_no_repo_is_given(store, capsys):
+def test_measure_limit_takes_the_repo_setting_when_no_repo_is_given(store, capsys, tmp_path, monkeypatch):
+    plain = tmp_path / "plain"  # a work tree with no GitHub origin: the origin comes before the setting
+    plain.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=plain, check=True, capture_output=True)
+    monkeypatch.chdir(plain)
     assert run(capsys, store, "measure-limit", "3")[0] == 0
     assert store.query("SELECT repo, role, note FROM events").rows == [(REPO, "owner", None)]
 

@@ -1,4 +1,4 @@
-"""The workflow watch's sweep (orchestration-layer#411 rule 3, unit 3):
+"""The workflow watch's sweep (layer ticket 411, rule 3, unit 3):
 `watch_workflows` reads from GitHub the latest ended run of every workflow GitHub lists and the open watch tickets,
 decides with `workflow_watch.decide`, and carries out the actions: a watch ticket opened, a comment on one, or one
 closed on a green run. `reconcile` calls it beside `check_main`. The workflows whose file is `WORKFLOW_FILE` are left

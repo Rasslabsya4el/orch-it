@@ -1,10 +1,12 @@
 """The repo a command acts on is never a literal of the code (#413 unit 3): `--repo` wins, else the
-top-level setting `repo`, else the work tree's GitHub origin, else the command exits 2 with a
-message that names the three ways to give it. Seams: `cli.main(["--store", ..., "events", ...])` on
-a temp work tree (the repo it writes into the event), `guards.hook._repo_of` (no fallback), and the
-text of the modules that resolved the repo before. Invented values only: `acme-x/widgets-y`."""
+work tree's GitHub origin, else the top-level setting `repo` (the last fallback), else the command
+exits 2 with a message that names the three ways to give it. Seams: `cli.main(["--store", ..., "events",
+...])` on a temp work tree (the repo it writes into the event), `guards.hook._repo_of` (no fallback),
+`cli.main(["guards", "scan", "--range", ...])` (a bad setting is read there and exits 2), and the text
+of the modules that resolved the repo before. Invented values only: `acme-x/widgets-y`."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -71,13 +73,13 @@ def test_the_repo_flag_wins_over_the_setting_and_the_origin(tmp_path, monkeypatc
     assert measured_repo(store) == [FLAG_REPO]
 
 
-def test_the_setting_wins_over_the_origin_when_no_flag_is_given(tmp_path, monkeypatch, store, capsys):
+def test_the_origin_wins_over_the_setting_when_no_flag_is_given(tmp_path, monkeypatch, store, capsys):
     write_settings(tmp_path,{"repo": SETTING_REPO})
     tree = work_tree(tmp_path, "tree", origin=ORIGIN_REPO)
     monkeypatch.chdir(tree)
 
     assert run_measure(store, capsys)[0] == 0
-    assert measured_repo(store) == [SETTING_REPO]
+    assert measured_repo(store) == [ORIGIN_REPO]
 
 
 def test_the_origin_of_the_work_tree_is_the_repo_when_no_flag_and_no_setting(tmp_path, monkeypatch, store, capsys):
@@ -99,12 +101,35 @@ def test_no_flag_no_setting_no_origin_exits_2_and_names_the_three_ways(tmp_path,
     assert measured_repo(store) == []
 
 
-def test_the_hook_reads_the_setting_then_the_origin_and_never_a_literal(tmp_path, monkeypatch):
+def test_the_hook_reads_the_origin_then_the_setting_and_never_a_literal(tmp_path, monkeypatch):
     plain = work_tree(tmp_path, "plain")
     assert hook._repo_of(str(plain)) is None  # no fallback to any repo of the code
 
     write_settings(tmp_path,{"repo": SETTING_REPO})
     assert hook._repo_of(str(plain)) == SETTING_REPO
+    origin = work_tree(tmp_path, "origin-tree", origin=ORIGIN_REPO)
+    assert hook._repo_of(str(origin)) == ORIGIN_REPO  # the origin first, even with the setting
+
+
+def test_the_hook_reads_a_bad_setting_as_no_repo_and_says_so_on_stderr(tmp_path, capsys):
+    plain = work_tree(tmp_path, "plain")
+    write_settings(tmp_path, {"repo": "not-a-repo"})
+    assert hook._repo_of(str(plain)) is None
+    assert "bad_setting" in capsys.readouterr().err
+
+
+def test_a_bad_setting_exits_2_through_guards_scan_range_when_no_origin_exists(tmp_path, capsys):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    git(plain, "init", "-q", "-b", "main")
+    for message in ("first", "second"):
+        git(plain, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q",
+            "--allow-empty", "-m", message)
+    write_settings(tmp_path, {"repo": "not-a-repo"})
+    code = main(["guards", "scan", "--range", "HEAD~1..HEAD", "--work-tree", str(plain),
+                 "--machine-independent"])
+    assert code == 2
+    assert capsys.readouterr().err.startswith("error: bad_setting")
 
 
 def test_a_setting_that_is_no_repo_is_refused(tmp_path, monkeypatch):
@@ -114,9 +139,10 @@ def test_a_setting_that_is_no_repo_is_refused(tmp_path, monkeypatch):
     assert found.value.code == "bad_setting"
 
 
-def test_no_module_that_resolves_the_repo_names_an_owner_or_a_default_constant():
+def test_no_module_that_resolves_the_repo_names_a_literal_repo_or_a_default_constant():
     root = Path(__file__).resolve().parent.parent / "src" / "orch_it"
+    literal = re.compile(r"github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+")
     for name in MODULES:
         text = (root / f"{name}.py").read_text("utf-8")
-        assert "Rasslabsya4el" not in text, name
         assert "DEFAULT_REPO" not in text, name
+        assert not literal.search(text), name

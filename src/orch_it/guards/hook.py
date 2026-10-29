@@ -257,16 +257,10 @@ def _run_pre_tool_use(raw_stdin: str, store, platform: str) -> tuple[str, int]:
 
 
 def _repo_of(cwd: str) -> str | None:
-    """The repo this call's events are written under: the setting `repo`, else the GitHub origin of
-    cwd, else None. No repo is never a guessed one: the decision is still made, its events are not
-    written (`_no_repo` says so on stderr)."""
+    """The repo this call's events are written under: the GitHub origin of cwd, else the setting
+    `repo`, else None. A bad setting is said on stderr and read as None. No repo is never a guessed
+    one: the decision is still made, its events are not written (`_no_repo` says so on stderr)."""
 
-    try:
-        chosen = settings.default_repo()
-    except settings.SettingsError:
-        chosen = None
-    if chosen:
-        return chosen
     try:
         import subprocess
 
@@ -279,11 +273,16 @@ def _repo_of(cwd: str) -> str | None:
             return found.group(1)
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
-    return None
+    try:
+        return settings.default_repo()
+    except settings.SettingsError as exc:
+        print(f"orch-it guard: the setting `repo` is no repo, read as none: {exc}", file=sys.stderr)
+        return None
 
 
 def _no_repo(what: str) -> None:
-    print(f"orch-it guard: no repo (the setting `repo` or a GitHub origin): {what} not written", file=sys.stderr)
+    print(f"orch-it guard: no repo is known (the setting `repo` or a GitHub origin): {what} not written",
+          file=sys.stderr)
 
 
 def _deny_json(reason: str | None) -> str:
