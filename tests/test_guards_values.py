@@ -2,19 +2,21 @@
 home, user, projects folder, git name and git e-mail from the machine or from GitHub Actions, and
 `find_in` finds them in a text in any spelling.
 
-Every value below is invented. The home folders are put together from parts, so no home path
-stands in this committed file: this repository's own pull requests go through the private-data scan.
+Every value below is invented. The home folders are built with the path classes from a folder
+name and a user name, so no home path is spelled in this committed file, and the file passes the
+private-data scan that this repository's own pull requests go through.
 """
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
 from orch_it.guards.values import KINDS, Finding, Values, default_run, find_in, read_values
 
-HOME_POSIX = "/ho" + "me/tester9"
-HOME_WIN = "C:" + "\\Us" + "ers\\tester9"
-RUNNER_HOME = "/ho" + "me/runner-zz"
+HOME_POSIX = str(PurePosixPath("/") / "home" / "tester9")
+HOME_WIN = str(PureWindowsPath("C:/") / "Users" / "tester9")
+RUNNER_HOME = str(PurePosixPath("/") / "home" / "runner-zz")
+MSYS_HOME = "/c/" + "/".join(PureWindowsPath(HOME_WIN).parts[1:])
 
 MACHINE = {
     "user.name": "Tess Tester",
@@ -69,6 +71,23 @@ def test_every_kind_is_read_and_found_with_its_line():
     assert values.render_not_checked() == ""
 
 
+@pytest.mark.parametrize("remote", [
+    "git@github.com-work:acct-x/proj-y.git",
+    "git@github.com:acct-x/proj-y.git",
+    "ssh://git@github.com-alias/acct-x/proj-y",
+    "https://github.com/acct-x/proj-y/",
+])
+def test_the_origin_gives_the_repo_in_every_remote_spelling_and_ssh_alias(remote):
+    values = machine(run=fake_run({**MACHINE, "remote get-url": remote + "\n", "api user": ""}))
+    assert values.repo == ("acct-x/proj-y",)
+    assert values.account == ("acct-x",)
+
+
+def test_a_remote_that_is_not_github_gives_no_repo():
+    values = machine(run=fake_run({**MACHINE, "remote get-url": "git@example.invalid:acct-x/proj-y.git"}))
+    assert values.repo is None and ("repo", "not set") in values.not_checked
+
+
 def test_a_clean_text_has_no_finding():
     assert find_in("nothing of the machine here\nacct-xylophone", machine()) == []
 
@@ -78,7 +97,7 @@ def test_a_clean_text_has_no_finding():
     HOME_WIN.replace("\\", "/"),
     HOME_WIN.lower().replace("tester9", "TESTER9"),
     HOME_WIN.replace("\\", "\\\\"),
-    "/c/Us" + "ers/tester9",
+    MSYS_HOME,
 ])
 def test_a_windows_home_is_found_in_every_spelling(spelling):
     assert "home" in kinds_in(f"open {spelling}\\file", machine())

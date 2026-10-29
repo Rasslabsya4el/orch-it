@@ -11,6 +11,9 @@ Every read goes through an argument, so a test supplies invented values and touc
 which raises when the command fails), `home` and `host` (default this machine's; `""` says the
 machine has none). A failed or empty read is an absent value, listed in `Values.not_checked`.
 
+`Values.render_not_checked()` is the line a result prints beside itself. The callers (the scanner
+wiring, #413 unit 5) print it and must never print a clean result without it when it is not empty.
+
 A finding carries the kind, the line and the first and last character of the text matched, never the
 value (and `Values` hides its values from `repr`).
 """
@@ -35,7 +38,8 @@ NOT_SET = "not set"
 TOO_SHORT = "too short to scan"
 
 _SEP = r"[\\/]+"  # `/`, `\`, and the doubled `\\` of a string literal
-_ORIGIN = re.compile(r"github\.com[:/]+([^/\s]+)/([^/\s]+?)(?:\.git)?/?\s*$")
+# `github.com` may carry an SSH host alias (`github.com-work`) before the `:` or `/`
+_ORIGIN = re.compile(r"(?:^|[@/])github\.com[^:/\s]*[:/]+([^/\s]+)/([^/\s]+?)(?:\.git)?/?\s*$")
 _DRIVE = re.compile(r"([A-Za-z]):(?:[\\/]+(.*))?$")
 
 
