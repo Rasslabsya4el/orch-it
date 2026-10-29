@@ -18,7 +18,7 @@ from orch_it.merge.main_check import check_main
 MAIN = merge_trial.MAIN_CHECK_WORKFLOW
 DEFAULT_BRANCH = "main"
 PR_BRANCH = "trial-pr-noise"
-STALE_SHA = "2a08f827" + "0" * 32  # the base head before the merge: a skipped run on the base's branch carries it
+STALE_SHA = "5eed0001" + "0" * 32  # the base head before the merge: a skipped run on the base's branch carries it
 
 
 class LiveTrial(FakeTrial):
