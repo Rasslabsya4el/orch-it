@@ -19,7 +19,9 @@ def test_it_runs_on_every_event_that_moves_a_ticket():
 def test_it_calls_the_follow_on_the_event_and_keeps_its_events():
     assert 'python -m orch_it follow --event "$GITHUB_EVENT_PATH" --repo "$GITHUB_REPOSITORY" --role github' in TEXT
     assert "name: orch-it-events-follow-${{ github.run_id }}-${{ github.run_attempt }}" in TEXT
-    assert "ORCH_IT_STORE: ${{ runner.temp }}/orch-it-events" in TEXT
+    # the store is set in the follow step's own env: the job-level env reads no `runner` context (#411)
+    assert "          ORCH_IT_STORE: ${{ runner.temp }}/orch-it-events\n        run: python -m orch_it follow" in TEXT
+    assert "    env:\n      ORCH_IT_STORE" not in TEXT
 
 
 def test_it_runs_the_default_branch_s_code_never_the_pull_request_s():

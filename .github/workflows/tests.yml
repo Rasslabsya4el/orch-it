@@ -41,6 +41,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[test]"
+      # The workflow files are linted on every run, before pytest (#411): a context a key may not read
+      # (`runner` in a job's env, `steps` in a job's if) fails here, not as a run that never starts a job.
+      # actionlint comes with the `test` extra.
+      - name: lint the workflows
+        run: actionlint .github/workflows/*.yml
       # The commits a pull request adds hold no private data (#395 decision 4, row 7): the scan
       # reads the pull request's own commits, not the merge into main, and takes the author's and
       # the owner's public emails as allowed.
