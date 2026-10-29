@@ -16,6 +16,13 @@ from orch_it.guards import hook
 WINDOWS = sys.platform == "win32"
 
 
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    monkeypatch.delenv("ORCH_IT_STORE", raising=False)
+    (tmp_path / "settings.json").write_text('{"repo": "acme-x/widgets-y"}', "utf-8")  # the repo the events are written under
+
+
 def git(cwd, *args):
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 

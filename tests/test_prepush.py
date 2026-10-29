@@ -64,6 +64,7 @@ IN_PATH = {name: case for name, case in IN_CONTENT.items() if not name.startswit
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    (tmp_path / "settings.json").write_text('{"repo": "acme-x/widgets-y"}', "utf-8")  # the repo the events are written under
     monkeypatch.delenv("ORCH_IT_STORE", raising=False)
 
 
@@ -191,7 +192,7 @@ def test_a_clean_push_to_a_public_repo_passes_and_writes_one_pass(repo, store, c
     assert seen == ["https://example.invalid/o/n.git"]
     [row] = store.query("SELECT kind, guard, verdict, rule_id, path, repo, role FROM events").rows
     assert row == ("guard.fired", "private_data_public", "pass", "clean", None,
-                   "Rasslabsya4el/orch-it", "hook")
+                   "acme-x/widgets-y", "hook")
 
 
 @pytest.mark.parametrize("unreadable", ["unknown", "", "mystery", None, 7,
@@ -312,7 +313,8 @@ def test_a_git_that_cannot_be_read_is_a_crash_not_a_refusal(repo, store):
 def test_an_unreadable_private_words_file_is_a_crash_that_fails_open(repo, store, tmp_path, monkeypatch):
     broken = tmp_path / "words.txt"
     broken.write_bytes(b"\xff\xfe\x00 not utf-8 \xc3\x28")
-    (tmp_path / "settings.json").write_text(json.dumps({"private_words_file": str(broken)}))
+    (tmp_path / "settings.json").write_text(json.dumps(
+        {"private_words_file": str(broken), "repo": "acme-x/widgets-y"}))
     sha = repo.commit({"a.txt": f"token {GITHUB_TOKEN}\n"})
     result = prepush.run_pre_push(line(sha, repo.base), store, remote_url="x", remote_name="origin",
                                   work_tree=repo.path, visibility=lambda _: "public")

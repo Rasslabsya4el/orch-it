@@ -22,6 +22,7 @@ CLAUDE_SETTINGS = {"hooks": {"PreToolUse": [{"matcher": "Bash|PowerShell", "hook
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    (tmp_path / "settings.json").write_text('{"repo": "acme-x/widgets-y"}', "utf-8")  # the repo the events are written under
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.delenv("ORCH_IT_STORE", raising=False)

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from orch_it import identity, settings
-from orch_it.cli import DEFAULT_REPO, main
+from orch_it.cli import main
 from orch_it.skills import update
 from orch_it.testruns import remote
 
@@ -181,7 +181,7 @@ def test_a_reused_slot_gets_the_identity_it_is_given_now(tmp_path):
 
 
 def test_a_repo_with_no_github_origin_is_checked_as_noreply(tmp_path, monkeypatch):
-    write_settings(tmp_path, monkeypatch, {"repos": {DEFAULT_REPO: {"commit_identity": "any"}}})
+    write_settings(tmp_path, monkeypatch, {"repos": {REPO: {"commit_identity": "any"}}})
     path = tmp_path / "plain"
     path.mkdir()
     git(path, "init", "-q", "-b", "main")
@@ -189,7 +189,7 @@ def test_a_repo_with_no_github_origin_is_checked_as_noreply(tmp_path, monkeypatc
     commit(path, "someone@example.org", "someone@example.org")
     code = main(["guards", "scan", "--range", f"{root}..HEAD", "--work-tree", str(path),
                  "--machine-independent"])
-    assert code == 1  # the default mode applies, not the settings section of the default repo
+    assert code == 1  # the default mode applies, not the settings section of a repo the work tree has no origin for
 
 
 def test_the_all_option_checks_no_commit_email(capsys, repo):

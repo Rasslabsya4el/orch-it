@@ -13,11 +13,11 @@ import re
 import sys
 from dataclasses import dataclass, field
 
+from orch_it import settings
 from orch_it.events.schema import EventError
 from orch_it.events.store import StoreError
 from orch_it.guards import paths, processes, triggers
 
-DEFAULT_REPO = "Rasslabsya4el/orch-it"
 # the Claude Code tool names the hook fires for; a PowerShell tool reads the Windows dialect
 POWERSHELL_TOOLS = ("PowerShell",)
 
@@ -256,7 +256,17 @@ def _run_pre_tool_use(raw_stdin: str, store, platform: str) -> tuple[str, int]:
     return "", 0
 
 
-def _repo_of(cwd: str) -> str:
+def _repo_of(cwd: str) -> str | None:
+    """The repo this call's events are written under: the setting `repo`, else the GitHub origin of
+    cwd, else None. No repo is never a guessed one: the decision is still made, its events are not
+    written (`_no_repo` says so on stderr)."""
+
+    try:
+        chosen = settings.default_repo()
+    except settings.SettingsError:
+        chosen = None
+    if chosen:
+        return chosen
     try:
         import subprocess
 
@@ -269,7 +279,11 @@ def _repo_of(cwd: str) -> str:
             return found.group(1)
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
-    return DEFAULT_REPO
+    return None
+
+
+def _no_repo(what: str) -> None:
+    print(f"orch-it guard: no repo (the setting `repo` or a GitHub origin): {what} not written", file=sys.stderr)
 
 
 def _deny_json(reason: str | None) -> str:
@@ -278,7 +292,10 @@ def _deny_json(reason: str | None) -> str:
         "permissionDecisionReason": reason or "refused by the orch-it guard"}})
 
 
-def _write_events(store, decision: Decision, *, repo: str, session: str | None) -> None:
+def _write_events(store, decision: Decision, *, repo: str | None, session: str | None) -> None:
+    if repo is None:
+        _no_repo("the guard's events")
+        return
     try:
         with store.writer() as writer:
             for f in decision.fired:
@@ -312,7 +329,10 @@ def _error_event(error, repo: str, session: str | None) -> dict:
                      {"component": component, "error_code": code, "failed_open": failed_open})
 
 
-def _safe_write_error(store, component, code, *, repo, session) -> None:
+def _safe_write_error(store, component, code, *, repo: str | None, session) -> None:
+    if repo is None:
+        _no_repo("the error event")
+        return
     try:
         with store.writer() as writer:
             writer.write(_error_event((component, code, True), repo, session))
