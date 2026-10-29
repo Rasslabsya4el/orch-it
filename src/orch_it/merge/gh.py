@@ -535,9 +535,17 @@ class GhPullHub(GhHub):
         return values[0]
 
 
+_NO_PROTECTION_403 = ("Upgrade to GitHub Pro", "Branch not protected")
+
+
 def _unprotected(error: GithubError) -> bool:
-    """GitHub's refusal to say what a base requires: 404 (not protected) or 403 (the plan has no protection)."""
-    return "HTTP 403" in str(error) or "HTTP 404" in str(error)
+    """GitHub's refusal to say what a base requires: 404 (not protected), or a 403 whose message says the plan
+    or the branch has no protection. Any other 403 (rate limit, abuse, no permission) is a failure, not a base
+    that requires nothing."""
+    text = str(error)
+    if "HTTP 404" in text:
+        return True
+    return "HTTP 403" in text and any(words in text for words in _NO_PROTECTION_403)
 
 
 def _auto_merge(repo: str, value: object) -> str | None:

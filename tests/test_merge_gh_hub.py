@@ -420,10 +420,22 @@ def test_a_base_that_requires_only_one_of_two_jobs_names_only_that_one():
     assert GhPullHub(gh).required_checks_of(REPO, "main") == {FIRST}
 
 
-@pytest.mark.parametrize("error", [failed(403, "Upgrade to GitHub Pro or make this repository public"), NOT_FOUND])
+@pytest.mark.parametrize("error", [failed(403, "Upgrade to GitHub Pro or make this repository public"),
+                                   failed(403, "Branch not protected"), NOT_FOUND])
 def test_a_plan_or_protection_refusal_is_a_base_that_requires_nothing(error):
     gh = Gh(([PROTECTION], error), ([RULES], error))
     assert GhPullHub(gh).required_checks_of(REPO, "main") == set()
+
+
+@pytest.mark.parametrize("text", ["API rate limit exceeded for user ID 1",
+                                  "You have triggered an abuse detection mechanism",
+                                  "Resource not accessible by integration"])
+def test_a_403_that_is_not_the_plan_or_protection_refusal_raises(text):
+    refused = failed(403, text)
+    for gh in (Gh(([PROTECTION], refused), ([RULES], [])), Gh(([PROTECTION], NOT_FOUND), ([RULES], refused))):
+        with pytest.raises(GithubError) as error:
+            GhPullHub(gh).required_checks_of(REPO, "main")
+        assert error.value.code == "gh_failed"
 
 
 def test_empty_lists_are_a_base_that_requires_nothing():

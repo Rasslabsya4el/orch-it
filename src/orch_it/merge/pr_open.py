@@ -174,13 +174,15 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
 
 
 def after_open(hub: PullHub, repo: str, pr: int, head: str, ticket: int | None, now: datetime,
-               method: str, base: str, required: tuple[str, ...]) -> None:
+               method: str, base: str, required: tuple[str, ...], *, mark_written: bool = False) -> None:
     """Whoever opens a pull request (`pr open`, `skills update`) puts it in the merge line: the ready mark at
-    `head`, always; then auto-merge with `method`, only where `base` requires every name of `required` (#424).
+    `head`, then auto-merge with `method`, only where `base` requires every name of `required` (#424).
     A base that requires less would merge the pull request at once, checks still running, so there it keeps
-    the mark alone. `ticket` is None for a pull request that names no ticket."""
+    the mark alone. `mark_written`: the mark already stands at `head` (a re-used pull request), so no second
+    mark is written; the auto-merge rule is the same. `ticket` is None for a pull request that names no ticket."""
 
-    hub.comment(repo, pr, marks.ready_comment(ticket, head, now))
+    if not mark_written:
+        hub.comment(repo, pr, marks.ready_comment(ticket, head, now))
     auto_merge_if_required(hub, repo, pr, method, base, required)
 
 

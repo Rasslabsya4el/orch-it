@@ -101,6 +101,20 @@ def test_after_open_turns_auto_merge_on_only_where_the_base_requires_every_job(r
     assert [c for c in hub.calls if c[0] == "auto_merge"] == ([("auto_merge", pr, "merge")] if on else [])
 
 
+@pytest.mark.parametrize("requires, on", [(set(REQUIRED), True), (set(), False)])
+def test_after_open_with_the_mark_already_at_the_head_writes_no_second_mark_and_keeps_the_auto_merge_rule(requires,
+                                                                                                        on):
+    hub = FakeGitHub(NOW)
+    hub.required_by_base = {"main": requires}
+    pr = hub.open_pull(branch="feature")
+    head = hub.head(pr)
+    pr_open.after_open(hub, REPO, pr, head, None, NOW, "merge", "main", REQUIRED)
+    written = len(hub.comments(REPO, pr))
+    pr_open.after_open(hub, REPO, pr, head, None, NOW, "merge", "main", REQUIRED, mark_written=True)
+    assert len(hub.comments(REPO, pr)) == written  # the mark stands at the head: no second one
+    assert hub.pull(REPO, pr).auto_merge == ("merge" if on else None)
+
+
 def test_the_acceptance_comment_on_the_ticket_holds_every_row_and_the_body_it_was_checked_on(world):
     hub, _ = world
     done = opened(world)
