@@ -15,10 +15,11 @@ from fake_hub import REPO, FakeHub
 
 from orch_it.merge import workflow_watch as watch
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
 from orch_it.testruns.github import GithubError
 from orch_it.tickets.hub import Comment
 
-REQUIRED = ("linux", "windows")
+REQUIRED = DEFAULT_REQUIRED_CHECKS
 DEFAULT_BRANCH = "main"
 
 

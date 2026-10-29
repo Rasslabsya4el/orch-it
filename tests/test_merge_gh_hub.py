@@ -661,7 +661,7 @@ def test_the_runs_of_the_tests_workflow_on_a_branch_come_newest_first_with_their
 
 
 def test_the_required_jobs_are_the_setting_and_the_latest_job_of_a_name_counts(tmp_path):
-    (tmp_path / "settings.json").write_text('{"github_required_jobs": ["unit", "lint"]}', "utf-8")
+    (tmp_path / "settings.json").write_text('{"required_checks": ["unit", "lint"]}', "utf-8")
     gh = Gh(([WORKFLOW_RUNS], {"workflow_runs": [workflow_run(1)]}),
             ([f"repos/{REPO}/actions/runs/1/jobs?per_page=100", "--paginate"],
              json.dumps({"jobs": [job_of(20, "unit", conclusion="failure"), job_of(10, "lint")]})
@@ -677,7 +677,7 @@ def test_branch_runs_with_a_bad_answer_raise_and_a_bad_setting_raises_before_any
     assert error.value.code == "gh_bad_output"
     with pytest.raises(GithubError):
         GhPullHub(Gh(([WORKFLOW_RUNS], "nope"))).branch_runs(REPO, "main")
-    (tmp_path / "settings.json").write_text('{"github_required_jobs": []}', "utf-8")
+    (tmp_path / "settings.json").write_text('{"required_checks": []}', "utf-8")
     gh = Gh()
     with pytest.raises(settings.SettingsError):
         GhPullHub(gh).branch_runs(REPO, "main")

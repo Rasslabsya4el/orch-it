@@ -501,15 +501,15 @@ def test_a_since_that_is_no_time_is_a_coded_error_before_anything_is_asked(store
     assert error.value.code == "bad_since" and gh.calls == []
 
 
-def test_the_required_jobs_are_the_setting_github_required_jobs(store, gh):
-    settings.save("github_required_jobs", ["linux"])
+def test_the_required_checks_are_the_setting_required_checks(store, gh):
+    settings.save("required_checks", ["linux"])
     gh.add_run(100)
     run_import(store, gh)
     assert [started["run_os"] for started, _ in pairs(store).values()] == ["linux"]
 
 
 def test_a_required_job_that_is_no_list_of_names_is_a_bad_setting(store, gh):
-    settings.save("github_required_jobs", "linux")
+    settings.save("required_checks", "linux")
     with pytest.raises(settings.SettingsError) as error:
         run_import(store, gh)
     assert error.value.code == "bad_setting"
@@ -787,7 +787,7 @@ def test_a_job_timeout_that_is_no_positive_number_is_a_bad_setting(store, gh, va
 
 @pytest.mark.parametrize("names", [[" linux"], ["linux "], [""], ["  "], []])
 def test_required_job_names_with_blanks_or_empty_are_a_bad_setting(store, gh, names):
-    settings.save("github_required_jobs", names)
+    settings.save("required_checks", names)
     with pytest.raises(settings.SettingsError) as error:
         run_import(store, gh)
     assert error.value.code == "bad_setting"

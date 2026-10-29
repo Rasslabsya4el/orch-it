@@ -22,6 +22,8 @@ import pytest
 
 from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo, default_host
 
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
+
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -100,7 +102,7 @@ def a_bash() -> str:
 
 
 def test_the_required_jobs_keep_their_names():
-    assert {"linux", "windows"} <= set(job_lines(WORKFLOW.read_text("utf-8")))
+    assert set(DEFAULT_REQUIRED_CHECKS) <= set(job_lines(WORKFLOW.read_text("utf-8")))
 
 
 def test_the_linux_job_lints_every_workflow_file_before_pytest_and_never_skips_it():

@@ -76,7 +76,8 @@ from orch_it.merge.main_check import check_main
 from orch_it.merge.pr_open import Opened, open_pr
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, WORKFLOW_FILE, Gh, GithubError, run_gh
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
+from orch_it.testruns.github import WORKFLOW_FILE, Gh, GithubError, run_gh
 from orch_it.tickets.model import READY_LABEL
 from orch_it.tickets.reader import TRIAGE_LABEL
 
@@ -97,7 +98,7 @@ ROWS_FULL = """| row | result | evidence |
 | 4 | after merge | the weekly report |
 """
 ROWS = "\n".join(line for line in ROWS_FULL.splitlines() if not line.startswith("| 4 ")) + "\n"
-REQUIRED = tuple(DEFAULT_REQUIRED_JOBS)
+REQUIRED = DEFAULT_REQUIRED_CHECKS
 FOLLOW_WORKFLOW, MAIN_CHECK_WORKFLOW, RECONCILE_WORKFLOW = "follow.yml", "main-check.yml", "reconcile.yml"
 LIST_MINUTES = 3  # the longest a read of a list GitHub fills eventually waits for what must appear in it
 SETTLE_SECONDS = 60  # the fixed wait before a list is read once for what must NOT appear in it
