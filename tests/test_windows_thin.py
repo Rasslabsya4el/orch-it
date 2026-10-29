@@ -4,9 +4,16 @@ on Linux and carries no marker is named in a `needs-triage` ticket (`run_unmarke
 is red on the change run. The planted tests below run in pytest's own temporary folder, never in this repo."""
 
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fake_github import FAILED, PASSED, REPO, FakeGitHub
+from required_names import LINUX_CHECK, WINDOWS_CHECK
+
+from orch_it.events.store import Store
+from orch_it.merge.hub import Result
+from orch_it.testruns.windows_unmarked import run_unmarked_check
 
 pytest_plugins = ["pytester"]
 
@@ -51,3 +58,78 @@ def test_the_windows_job_keeps_its_name_and_its_change_run_takes_only_the_marked
     assert 'select="os_touching and ($MARKS_LEFT_OUT_OF_CHANGE_RUNS) and "' in text  # the Windows change run
     assert text.count('select="($MARKS_LEFT_OUT_OF_CHANGE_RUNS) and "') == 1  # linux stays the whole change suite
     assert text.count('select=""') == 2  # the nightly run takes everything, one line per job
+
+
+# --- the nightly's ticket for an unmarked Windows-only failure (row 5) ---
+
+NOW = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
+SETTINGS = {"repo": REPO}
+TEST = "tests/test_paths.py::test_a_windows_path"
+NIGHTLY_JOBS_RED = {LINUX_CHECK: PASSED, WINDOWS_CHECK: FAILED}
+
+
+@pytest.fixture
+def world(tmp_path):
+    return FakeGitHub(NOW), Store.open(tmp_path / "events")
+
+
+def night(hub, results, *, jobs=None, run_id=None):
+    """A nightly run of the `tests` workflow on main whose reports hold `results`."""
+
+    hub.later(days=1)
+    return hub.main_run(hub.land(), jobs or NIGHTLY_JOBS_RED, event="schedule", run_id=run_id, results=results)
+
+
+def windows_red(test_id=TEST, *, marked=False, also_linux=False):
+    results = [Result(WINDOWS_CHECK, test_id, "failed", marked), Result(LINUX_CHECK, test_id, "passed", False)]
+    if also_linux:
+        results[1] = Result(LINUX_CHECK, test_id, "failed", False)
+    return results
+
+
+def triage(hub):
+    return hub.issues_with_label(REPO, "needs-triage")
+
+
+def test_a_windows_nightly_failure_that_passes_on_linux_with_no_marker_opens_one_ticket_naming_the_test(world):
+    hub, store = world
+    night(hub, windows_red())
+    report = run_unmarked_check(store, hub, SETTINGS)
+    [number] = triage(hub)
+    assert report.opened == [number] and report.commented == []
+    issue = hub.issues[(REPO, number)]
+    assert TEST in issue.body and TEST in issue.title and "os_touching" in issue.body
+    assert set(issue.labels) == {"needs-triage"}
+
+
+def test_a_second_night_comments_on_the_open_ticket_and_opens_none(world):
+    hub, store = world
+    night(hub, windows_red())
+    [number] = run_unmarked_check(store, hub, SETTINGS).opened
+    night(hub, windows_red())
+    report = run_unmarked_check(store, hub, SETTINGS)
+    assert report.opened == [] and report.commented == [number] and triage(hub) == [number]
+    assert TEST in hub.comments(REPO, number)[0].body
+    again = run_unmarked_check(store, hub, SETTINGS)  # the same night looked at twice says nothing twice
+    assert again.opened == [] and again.commented == [] and len(hub.comments(REPO, number)) == 1
+
+
+def test_a_marked_test_opens_no_ticket(world):
+    hub, store = world
+    night(hub, windows_red(marked=True))
+    report = run_unmarked_check(store, hub, SETTINGS)
+    assert report.opened == [] and report.commented == [] and triage(hub) == []
+
+
+def test_a_test_that_also_fails_on_linux_opens_no_ticket(world):
+    hub, store = world
+    night(hub, windows_red(also_linux=True), jobs={LINUX_CHECK: FAILED, WINDOWS_CHECK: FAILED})
+    assert run_unmarked_check(store, hub, SETTINGS).opened == [] and triage(hub) == []
+
+
+def test_two_unmarked_failures_get_a_ticket_each_and_a_per_change_run_is_not_a_night(world):
+    hub, store = world
+    hub.main_run(hub.land(), NIGHTLY_JOBS_RED, event="push", results=windows_red("t::on_a_push"))
+    assert run_unmarked_check(store, hub, SETTINGS).opened == []
+    night(hub, windows_red("t::one") + windows_red("t::two"))
+    assert len(run_unmarked_check(store, hub, SETTINGS).opened) == 2
