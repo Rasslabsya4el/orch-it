@@ -47,6 +47,7 @@ Kinds, the envelope, outcomes and code lists are closed; `detail` is open, so a 
 | `unit_reason` | `format`, `result`, `merge` |
 | `pr_reason` | `merged`, `red`, `closed_unmerged`, `timeout`, `withdrawn`, `conflict` |
 | `call_target` | `gh`, `git`, `github_api`, `bridge_http`, `claude_cli` |
+| `github_budget` | `account`, `actions` |
 | `check` | `pocock_contract`, `leak`, `guard_install`, `branch_protection`, `hooks_path`, `environment` |
 | `claim_reason` | `held_by_other`, `not_ready` |
 | `plan_reason` | `ticket_changed`, `not_doable` |
