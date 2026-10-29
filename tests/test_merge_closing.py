@@ -1,9 +1,8 @@
 """A closing keyword in a pull request's title or body, read by the merge line at its merge: the line refuses
-that pull request (a `refused` turn: auto-merge off, a left mark with the reason, nothing merged), names the
+that pull request (a `refused` turn: a left mark with the reason, nothing merged), names the
 keyword, its reference, the text and the line it starts on, says to write `Refs <URL>`, keeps the ticket open,
 and goes on with the pull requests behind it. A title or body edited after `pr open` counts: the line reads
-them fresh at the merge. The refusal tests leave auto-merge ON, as `pr open` sets it, and mark the head green
-before the line starts, so no GitHub tick merges it first."""
+them fresh at the merge. The refusal tests mark the head green before the line starts, so the refusal is the only thing that stops the merge."""
 
 from datetime import timedelta
 

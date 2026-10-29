@@ -157,7 +157,7 @@ def _pr_open(args, store_of, repo_of, now: datetime) -> str:
         raise PrError("git_failed", str(e)) from None
     raw = settings.load()
     done = open_pr(GhPullHub(), store_of(), repo, args.ticket, acceptance=acceptance, branch=branch, base=args.base,
-                   required=required_checks(raw, repo), git=git, settings=MergeSettings.from_settings(raw, repo), now=now,
+                   git=git, settings=MergeSettings.from_settings(raw, repo), now=now,
                    role=args.role, notes=notes, part=part)
     return f"pr #{done.pr} {'reused' if done.reused else 'opened'} at {done.head[:12]}: {done.park}\n"
 
