@@ -46,3 +46,13 @@ same session listed 27 of them).
   one is listed in the issue and the pull request and does not wait for the brain, since nothing the layer runs
   changes.
 - **An added skill is copied and called by no role** until the brain assigns it.
+
+## D5 amd 1: the 29.10 answer
+
+The owner's answer of 2026-10-29 (comment https://github.com/Rasslabsya4el/orchestration-layer/issues/355#issuecomment-6493519363)
+amends the update path above. A skills update ORCH lands with no brain step is a change of class `text_changed` (or a
+manifest-only move) whose shape rules hold and whose pull request's required checks are green. Every other change goes to
+the brain as an issue labelled `needs-triage`, and ORCH does not take it: `renamed`, `removed`, `contract_changed`, `added`
+(a new skill is not an update of one in use, so the brain decides whether a role takes it), broken shape rules, and a red or
+no-result pull request (its issue is relabelled `needs-triage` with the failing ids). The repo setting that lets GitHub
+Actions create pull requests stays off. The decision text above is kept as it was; where the two differ, this amendment governs.

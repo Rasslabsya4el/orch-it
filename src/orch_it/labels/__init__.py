@@ -1,6 +1,6 @@
 """The label set of the new layer and `labels sync` (#398 decision 6).
 
-`labels.json` beside this module is the set: the five roles, `parked` and `priority`, each with a
+`labels.json` beside this module is the set: the five roles, `parked`, `priority` and `brain-handoff`, each with a
 colour and a description, in the order the layer shows them. "The label set is a settings file in
 orch-it" means this packaged file, shipped with orch-it: every repo gets the same set. It is not
 the per-user `settings.json` of `orch_it.settings`.
@@ -146,6 +146,19 @@ def _settle(repo: str, name: str, want: dict[str, str], held: dict | None, gh: G
         if now is None and held is None:
             raise
         return _settle(repo, name, want, now, gh, retry=False)
+
+
+def ensure(repo: str, name: str, *, gh: Gh | None = None) -> bool:
+    """Create one label of the set in the repo when the repo has none of its name (in any case);
+    True when created. A label already there is left as it is (`sync` settles its colour)."""
+
+    want = label_set()[name]
+    if not schema.is_repo(repo):
+        raise GithubError("bad_repo", str(repo))
+    gh = gh or github.run_gh
+    if any(label["name"].lower() == name.lower() for label in _read(repo, gh)):
+        return False
+    return _settle(repo, name, want, None, gh) == "created"
 
 
 def sync(repo: str, *, gh: Gh | None = None) -> list[tuple[str, str]]:

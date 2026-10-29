@@ -43,6 +43,13 @@ def test_a_role_file_naming_a_removed_skill_is_red(tmp_path):
                            " as ours (removed upstream at 1111111)"]
 
 
+def test_a_research_record_quoting_an_old_skill_is_no_naming_but_a_look_alike_folder_is_read(tmp_path):
+    said = "Then run the `finishing` skill.\n"
+    repo = repo_with(tmp_path, {"docs/research/port-table.md": said, "docs/researchers/x.md": said})
+    assert check(repo) == ["docs/researchers/x.md:1: names `finishing`, which the repo holds neither as a copy nor"
+                           " as ours"]
+
+
 def test_a_role_file_using_the_namespaced_form_is_red(tmp_path):
     repo = repo_with(tmp_path, {".claude/agents/worker.md": "Call the Skill tool with `mattpocock-skills:tdd`.\n"})
     assert check(repo) == [".claude/agents/worker.md:1: the namespaced form `mattpocock-skills:tdd`; name the copy `tdd`"]

@@ -17,7 +17,7 @@ from orch_it.testruns.github import GithubError
 REPO = "Rasslabsya4el/orch-it"
 READ_URL = f"repos/{REPO}/labels?per_page=100"
 NAMES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "parked",
-         "priority"]
+         "priority", "brain-handoff"]
 DEAD = ["autopilot", "autopilot-stuck", "provisional", "hard-push", "flow-fix"]
 
 
@@ -89,7 +89,7 @@ def rows(done):
     return dict(done)
 
 
-def test_the_label_set_is_exactly_the_seven_names_in_order():
+def test_the_label_set_is_exactly_the_eight_names_in_order():
     assert list(label_set()) == NAMES
 
 
@@ -104,7 +104,8 @@ def test_the_label_set_holds_valid_colours_and_short_descriptions():
 def test_the_colours_are_those_of_the_decision():
     assert {name: label["color"] for name, label in label_set().items()} == {
         "needs-triage": "fbca04", "needs-info": "d4c5f9", "ready-for-agent": "0e8a16",
-        "ready-for-human": "1d76db", "wontfix": "ffffff", "parked": "c5def5", "priority": "d93f0b"}
+        "ready-for-human": "1d76db", "wontfix": "ffffff", "parked": "c5def5", "priority": "d93f0b",
+        "brain-handoff": "5319e7"}
 
 
 def test_the_label_set_carries_none_of_the_dead_labels():
@@ -116,13 +117,13 @@ def test_the_label_file_is_shipped_as_package_data():
     assert "labels/*.json" in text
 
 
-def test_a_first_sync_on_an_empty_repo_creates_all_seven():
+def test_a_first_sync_on_an_empty_repo_creates_all_eight():
     gh = FakeGh()
     done = sync(REPO, gh=gh)
     assert done == [(name, "created") for name in NAMES]
     assert state(gh) == {name: (want["color"], want["description"])
                           for name, want in label_set().items()}
-    assert [c[3] for c in gh.writes()] == [f"repos/{REPO}/labels"] * 7
+    assert [c[3] for c in gh.writes()] == [f"repos/{REPO}/labels"] * len(NAMES)
     assert all(c[2] == "POST" for c in gh.writes())
 
 
@@ -147,7 +148,7 @@ def test_a_second_sync_changes_nothing():
 def test_a_foreign_label_is_listed_and_never_written():
     gh = FakeGh([{"name": "bug", "color": "d73a4a", "description": "Something is broken"}])
     done = sync(REPO, gh=gh)
-    assert done[-1] == ("bug", "foreign") and len(done) == 8
+    assert done[-1] == ("bug", "foreign") and len(done) == len(NAMES) + 1
     assert all("bug" not in " ".join(c) for c in gh.writes())
     assert state(gh)["bug"] == ("d73a4a", "Something is broken")
     assert not any(c[2] in ("PATCH", "DELETE") for c in gh.writes())
@@ -156,8 +157,8 @@ def test_a_foreign_label_is_listed_and_never_written():
 def test_foreign_labels_come_after_the_set_sorted_by_name():
     gh = FakeGh([{"name": n, "color": "000000", "description": ""} for n in ("zeta", "Alpha", "beta")])
     done = sync(REPO, gh=gh)
-    assert [name for name, _ in done[7:]] == ["Alpha", "beta", "zeta"]
-    assert {action for _, action in done[7:]} == {"foreign"}
+    assert [name for name, _ in done[len(NAMES):]] == ["Alpha", "beta", "zeta"]
+    assert {action for _, action in done[len(NAMES):]} == {"foreign"}
 
 
 @pytest.mark.parametrize("name", ["good first: issue", "type: bug", "help wanted", ":+1:", "a/b"])
@@ -223,7 +224,7 @@ def test_a_missing_description_key_is_read_as_empty():
 def test_an_empty_label_list_creates_everything_and_lists_nothing_foreign():
     gh = FakeGh()
     done = sync(REPO, gh=gh)
-    assert [action for _, action in done] == ["created"] * 7
+    assert [action for _, action in done] == ["created"] * len(NAMES)
 
 
 def test_concatenated_pages_are_all_read():
@@ -232,8 +233,8 @@ def test_concatenated_pages_are_all_read():
                   for name, want in label_set().items()]
     gh = FakeGh(existing + set_labels, page_size=2)
     done = sync(REPO, gh=gh)
-    assert [a for _, a in done[:7]] == ["kept"] * 7
-    assert [n for n, _ in done[7:]] == [f"extra-{i}" for i in range(5)]
+    assert [a for _, a in done[:len(NAMES)]] == ["kept"] * len(NAMES)
+    assert [n for n, _ in done[len(NAMES):]] == [f"extra-{i}" for i in range(5)]
     assert gh.writes() == []
 
 
@@ -333,7 +334,7 @@ def test_a_bad_repo_is_refused_before_gh_is_called(repo):
 def test_the_default_runner_is_the_github_one(monkeypatch):
     gh = FakeGh()
     monkeypatch.setattr(github, "run_gh", gh)
-    assert len(sync(REPO)) == 7
+    assert len(sync(REPO)) == len(NAMES)
 
 
 # a bad label file
