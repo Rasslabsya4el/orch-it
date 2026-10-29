@@ -22,7 +22,7 @@ from orch_it.guards import prepush, scanner
 from orch_it.guards.scanner import Patterns
 from orch_it.testruns import github
 from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, NO_WINDOW,
-                        OPENAI_KEY, PRIVATE_KEY, Repo)
+                        OPENAI_KEY, PRIVATE_KEY, Repo, make_template)
 
 ROOT = Path(__file__).resolve().parent.parent
 ZEROS = "0" * 40
@@ -72,10 +72,18 @@ def store(tmp_path):
     return Store.open(tmp_path / "store")
 
 
+@pytest.fixture(scope="session")
+def base_template(tmp_path_factory):
+    """A repository with the first commit, built once per worker; every test copies it."""
+    return make_template(tmp_path_factory.mktemp("template") / "work", {"README.md": "clean\n"},
+                         message="the first work")
+
+
 @pytest.fixture
-def repo(tmp_path):
-    work = Repo(tmp_path / "work")
-    work.base = work.commit({"README.md": "clean\n"}, message="the first work")
+def repo(tmp_path, base_template):
+    path, base = base_template
+    work = Repo(tmp_path / "work", template=path)
+    work.base = base
     return work
 
 
@@ -109,40 +117,43 @@ def event_text(store):
 
 def test_a_push_of_each_kind_in_content_is_refused_to_a_public_repo_naming_file_line_and_kind(
         repo, store, capsys):
-    for name, (kind, value) in IN_CONTENT.items():
-        sha = repo.commit({"notes.txt": f"fine\nsee {value} here\n"}, message=f"add {name}")
+    cases = list(IN_CONTENT.items())
+    shas = repo.commits_on(repo.base, [{"files": {"notes.txt": f"fine\nsee {value} here\n"},
+                                        "message": f"add {name}"} for name, (_, value) in cases])
+    for (name, (kind, value)), sha in zip(cases, shas):
         (text, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert (text, code) == ("", 1), name
         assert f"{sha[:12]} content notes.txt:2 {kind}\n" in err, (name, err)
         assert value not in err, name
-        repo.git("reset", "-q", "--hard", repo.base)
     assert value not in event_text(store)
     assert MACHINE_HOME not in event_text(store)
 
 
 def test_a_push_of_each_kind_in_a_file_path_is_refused_and_the_path_is_shown_without_it(
         repo, store, capsys):
-    for name, (kind, value) in IN_PATH.items():
-        sha = repo.commit({f"data/{value}": "fine\n"}, message=f"add {name}")
+    cases = list(IN_PATH.items())
+    shas = repo.commits_on(repo.base, [{"files": {f"data/{value}": "fine\n"}, "message": f"add {name}"}
+                                       for name, (_, value) in cases])
+    for (name, (kind, value)), sha in zip(cases, shas):
         (_, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert code == 1, name
         assert f"{sha[:12]} path data/<{kind}>:- {kind}\n" in err, (name, err)
         assert value not in err, name
-        repo.git("reset", "-q", "--hard", repo.base)
     assert value not in event_text(store)
 
 
 def test_a_push_of_each_kind_in_a_commit_message_is_refused(repo, store, capsys):
-    for name, (kind, value) in IN_CONTENT.items():
-        sha = repo.commit({"a.txt": "fine\n"}, message=f"first line\nthen {value}")
+    cases = list(IN_CONTENT.items())
+    shas = repo.commits_on(repo.base, [{"files": {"a.txt": "fine\n"},
+                                        "message": f"first line\nthen {value}"} for _, (_, value) in cases])
+    for (name, (kind, value)), sha in zip(cases, shas):
         (_, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert code == 1, name
         assert f"{sha[:12]} message -:2 {kind}\n" in err, (name, err)
         assert value not in err, name
-        repo.git("reset", "-q", "--hard", repo.base)
     assert value not in event_text(store)
 
 
@@ -159,13 +170,14 @@ def test_a_non_noreply_author_or_committer_email_is_refused(repo, store, capsys)
 
 
 def test_the_same_pushes_to_a_private_repo_pass_and_say_nothing(repo, store, capsys):
-    for visibility in ("private", "internal"):
-        for name, (kind, value) in IN_CONTENT.items():
-            sha = repo.commit({"notes.txt": f"see {value}\n"}, message=f"add {name} {value}")
-            (text, code), _ = push(repo, store, line(sha, repo.base), visibility=visibility)
-            assert (text, code) == ("", 0), (visibility, name)
-            assert capsys.readouterr().err == ""
-            repo.git("reset", "-q", "--hard", repo.base)
+    cases = [(visibility, name, value) for visibility in ("private", "internal")
+             for name, (_, value) in IN_CONTENT.items()]
+    shas = repo.commits_on(repo.base, [{"files": {"notes.txt": f"see {value}\n"},
+                                        "message": f"add {name} {value}"} for _, name, value in cases])
+    for (visibility, name, _), sha in zip(cases, shas):
+        (text, code), _ = push(repo, store, line(sha, repo.base), visibility=visibility)
+        assert (text, code) == ("", 0), (visibility, name)
+        assert capsys.readouterr().err == ""
     bad_author = repo.commit({"a.txt": "x\n"}, author=EMAIL)
     assert push(repo, store, line(bad_author, repo.base), visibility="private")[0] == ("", 0)
     assert events(store) == []
