@@ -24,7 +24,8 @@ def test_a_per_test_bound_is_set_for_both_run_kinds():
 
 def run_collect(tmp_path, marker: str) -> subprocess.CompletedProcess:
     (tmp_path / "pyproject.toml").write_bytes((ROOT / "pyproject.toml").read_bytes())
-    (tmp_path / "test_one.py").write_text(f"import pytest\n\n@pytest.mark.{marker}\ndef test_one():\n    pass\n", "utf-8")
+    (tmp_path / "test_one.py").write_text("import pytest\n\n"
+                                                f"@pytest.mark.{marker}\ndef test_one():\n    pass\n", "utf-8")
     return subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "--strict-markers",
                            "-p", "no:cacheprovider", "test_one.py"], capture_output=True, text=True, timeout=60, cwd=tmp_path,
                           creationflags=NO_WINDOW, env=os.environ | {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})

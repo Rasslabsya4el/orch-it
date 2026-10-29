@@ -173,7 +173,8 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         "@pytest.mark.slow\ndef test_slow():\n    pass\n\n"
         "@pytest.mark.live\ndef test_live():\n    pass\n\n"
         "@pytest.mark.serial\ndef test_serial():\n    pass\n\n"
-        "@pytest.mark.slow\n@pytest.mark.serial\ndef test_slow_serial():\n    pass\n\n"
+        "@pytest.mark.slow\n"
+        "@pytest.mark.serial\ndef test_slow_serial():\n    pass\n\n"
         "def test_plain():\n    pass\n", "utf-8")
     for job in job_lines(WORKFLOW.read_text("utf-8")):
         done, calls = run_pytest_step(tmp_path, job, nightly)
