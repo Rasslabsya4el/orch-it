@@ -241,14 +241,48 @@ def test_the_hook_entry_point_prints_nothing_for_a_clean_call(capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_the_hook_denies_when_the_module_itself_cannot_be_imported():
+    # a broken import of the language module (a failure at module load, before main) must still deny, exit 0
+    import os
+    import subprocess
+
+    src = str(Path(__file__).parents[1] / "src")
+    code = ("import sys; sys.modules['orch_it.language'] = None; "
+            "from orch_it.guards import text_hook; raise SystemExit(text_hook.main())")
+    payload = call("Agent", {"prompt": "hello"})
+    env = {**os.environ, "PYTHONPATH": src}
+    done = subprocess.run([sys.executable, "-c", code], input=payload, capture_output=True, text=True,
+                          env=env, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "pip install" in out["permissionDecisionReason"]
+
+
+def test_a_broken_language_module_at_refusal_time_still_denies_with_the_install_step(monkeypatch, capsys):
+    import orch_it
+
+    monkeypatch.setattr(orch_it, "language", None)
+    monkeypatch.setattr(text_hook, "read_context", lambda folder: CTX)
+    reason, _ = text_hook.decide(call("Agent", {"prompt": KIND_SAMPLES["git_email"]}), context=lambda f: CTX)
+    assert reason is not None and "pip install" in reason
+    assert text_hook.main(call("Agent", {"prompt": KIND_SAMPLES["git_email"]})) == 0
+    out = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+
+
 def test_the_wiring_in_settings_names_the_module_under_a_catch_all_matcher():
     # a catch-all matcher (empty): the hook judges each call by its input, so a tool no list names is judged too
     settings = json.loads((Path(__file__).parents[1] / ".claude" / "settings.json").read_text("utf-8"))
     entries = [e for e in settings["hooks"]["PreToolUse"] if "text_hook" in e["hooks"][0]["command"]]
     assert len(entries) == 1
     assert entries[0]["matcher"] == ""
-    assert entries[0]["hooks"][0]["command"].endswith("-m orch_it.guards.text_hook")
+    command = entries[0]["hooks"][0]["command"]
+    assert "-m orch_it.guards.text_hook" in command
     assert entries[0]["hooks"][0]["timeout"] == 120
+    # fail closed: a non-zero exit of the shim or the hook (no Python, a crash) becomes exit 2, a block, with the
+    # install step on stderr; Claude Code blocks a PreToolUse call on exit 2
+    assert re.search(r"\|\|\s*\{[^}]*>&2;\s*exit 2;\s*\}\s*$", command), command
 
 
 # --- guards check-text (the CLI) -------------------------------------------------------------------------

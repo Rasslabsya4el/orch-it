@@ -25,8 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orch_it import language
-
 if TYPE_CHECKING:
     from orch_it.guards.values import Values
 
@@ -124,34 +122,55 @@ def decide(raw: str, *, context: Callable[[str | None], Context] | None = None) 
         if not isinstance(payload, dict):
             return None, ""
         hits, notice = judge_call(payload, read_context if context is None else context)
+        if not hits:
+            return None, notice
+        return _refusal(hits), notice
     except Exception as e:  # noqa: BLE001 - a check that cannot run refuses the call; it never passes
-        reason = language.text_or_refusal("text_check_unreachable", error=f"{type(e).__name__}: {e}",
-                                          python=sys.executable)
-        return reason, ""
-    if not hits:
-        return None, notice
-    return _refusal(hits), notice
+        return _unreachable(e), ""
 
 
 def main(text: str | None = None) -> int:
     """Read the PreToolUse payload (stdin, or `text`) and print a deny as JSON when the call is refused. Exits 0
-    whatever happens: the deny is the JSON on stdout, not the exit code."""
+    whatever happens: the deny is the JSON on stdout, not the exit code. Any failure of the read, the check or the
+    print is a deny naming the install step."""
 
     try:
         raw = sys.stdin.read() if text is None else text
-    except Exception:  # noqa: BLE001 - an unreadable payload is no JSON: decide refuses it
-        raw = ""
-    reason, notice = decide(raw)
-    if reason is None:
-        return 0
-    if notice:
-        reason = f"{reason}\n{notice}"
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                             "permissionDecisionReason": reason}}))
+        reason, notice = decide(raw)
+        if reason is None:
+            return 0
+        if notice:
+            reason = f"{reason}\n{notice}"
+        print(_deny(reason))
+    except Exception as e:  # noqa: BLE001 - whatever stops the hook, the call is refused, never passed
+        print(_deny(_unreachable(e)))
     return 0
 
 
+def _deny(reason: str) -> str:
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                              "permissionDecisionReason": reason}})
+
+
+def _unreachable(error: BaseException) -> str:
+    """The refusal of a check that cannot run: `text_check_unreachable` in the human language, or the same sentence
+    in English when the language module itself cannot be used."""
+
+    detail = f"{type(error).__name__}: {error}"
+    python = sys.executable
+    try:
+        from orch_it import language
+
+        return language.text_or_refusal("text_check_unreachable", error=detail, python=python)
+    except Exception:  # noqa: BLE001 - the language module is part of what may be broken
+        return (f"the text check cannot run ({detail}), so the call is refused, not passed; install orch-it into "
+                f"the Python the hooks run with `{python} -m pip install -e <orch-it checkout>`, then send the call "
+                "again")
+
+
 def _refusal(hits: list[Hit]) -> str:
+    from orch_it import language
+
     findings = "\n".join(language.text_or_refusal("text_finding", line=hit.line, kind=hit.kind) for hit in hits)
     rule = language.text_or_refusal("text_rule")
     return (language.text_or_refusal("text_refused", rule=rule, findings=findings)
