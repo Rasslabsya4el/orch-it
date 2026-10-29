@@ -152,3 +152,48 @@ def test_batch_size_is_a_setting_default_four_at_least_one():
     for bad in (0, -1, 1.5, True, "4"):
         with pytest.raises(SettingsError):
             MergeSettings.from_settings({"merge": {"batch_size": bad}}, REPO)
+
+
+def git_in(folder, *args):
+    from orch_it.merge import git as merge_git
+
+    identity = ["-c", "user.name=" + "t".join(("tes", "ter")), "-c", "user.email=" + "@".join(("tester", "example.invalid"))]
+    done = merge_git.run(["-C", str(folder), *identity, *args])
+    assert done.code == 0, done.err
+    return done.out.strip()
+
+
+def test_git_checkout_makes_a_work_tree_of_a_commit_only_the_origin_has_and_removes_it(tmp_path):
+    from pathlib import Path
+
+    from orch_it.merge.batch import git_checkout
+    from orch_it.merge.git import GitError
+
+    origin, maker, line_tree = tmp_path / "origin.git", tmp_path / "maker", tmp_path / "line"
+    git_in(tmp_path, "init", "--quiet", "--bare", "--initial-branch=main", str(origin))
+    git_in(tmp_path, "clone", "--quiet", str(origin), str(maker))
+    (maker / "base.txt").write_text("base", "utf-8")
+    git_in(maker, "add", "-A")
+    git_in(maker, "commit", "--quiet", "-m", "base")
+    git_in(maker, "push", "--quiet", "origin", "HEAD:main")
+    git_in(tmp_path, "clone", "--quiet", str(origin), str(line_tree))  # the line's work tree knows only the base
+    heads = {}
+    for name in ("first", "second"):
+        git_in(maker, "checkout", "--quiet", "-b", name, "origin/main")
+        (maker / f"{name}.txt").write_text(name, "utf-8")
+        git_in(maker, "add", "-A")
+        git_in(maker, "commit", "--quiet", "-m", name)
+        heads[name] = git_in(maker, "rev-parse", "HEAD")
+    git_in(maker, "checkout", "--quiet", "-b", "batch", heads["first"])
+    git_in(maker, "merge", "--quiet", "--no-edit", "--no-ff", heads["second"])
+    batch = git_in(maker, "rev-parse", "HEAD")
+    git_in(maker, "push", "--quiet", "origin", "batch")
+    checkout = git_checkout(line_tree)
+    with checkout(batch) as tree:
+        assert {p.name for p in Path(tree).iterdir() if p.name != ".git"} == {"base.txt", "first.txt", "second.txt"}
+        assert git_in(tree, "rev-parse", "HEAD") == batch
+        kept = Path(tree)
+    assert not kept.exists()
+    assert len(git_in(line_tree, "worktree", "list").splitlines()) == 1
+    with pytest.raises(GitError), checkout("0" * 40):
+        pass
