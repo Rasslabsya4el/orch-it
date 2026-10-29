@@ -63,7 +63,7 @@ _Avoid_: scheduler, routing, placement policy
 
 **Availability**:
 The readiness verdict of the `github` test place: whether it may be offered (Actions on, its request budget with room,
-GitHub readable), its machines busy of their limit, and the note the decision carries (`18 busy of 20`, or why it is off).
+GitHub readable), its machines busy of their limit, and the note the decision carries (its busy-of-limit count, or why it is off).
 _Avoid_: status, health, state
 
 **Queue wait**:
@@ -79,8 +79,9 @@ _Avoid_: sandbox, isolated environment
 The longest a test run or a research run may take; a run that reaches it is cut, which is never a failed run. A
 research run also has a stall bound: the longest its session tree may go without a new step. The merge line's run, its
 wait for its head's checks and the wait for its line lock each have a bound of their own. The bound check's bound is
-a median instead: the median run time of the last ten ended test runs at a test place and OS, or a GitHub place's
-median queue wait; a median past its bound opens one `needs-triage` ticket, and a later crossing comments on it.
+a median instead: the median run time of the newest `LAST_RUNS` ended test runs at a test place and OS (passed or failed
+ones), or a GitHub place's median queue wait over the same window; a median past its bound opens one `needs-triage`
+ticket, and a later crossing comments on it.
 _Avoid_: timeout, limit, deadline
 
 ## Research

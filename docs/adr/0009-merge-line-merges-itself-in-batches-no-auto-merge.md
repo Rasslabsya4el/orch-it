@@ -6,9 +6,8 @@ Ready pull requests land on a repo's main line through the merge line, which mer
 
 ## Considered Options
 
-- **Keep ADR 0008**: auto-merge on the line's members, turned off while they wait. Rejected because the repo setting is off by the owner's decision (#397 C4), so the line's own `--auto` fails, and a member's auto-merge state is one more thing a killed line can leave behind.
-- **Parallel speculative passes, one per member**: rejected because the account's runner concurrency is shared by every repo of the account; a batch costs one pass, a speculative pass per member costs one each.
-- **GitHub's merge queue**: not offered to a personal repo, so ordering, batching and re-running would be the line's anyway.
+- **GitHub's merge queue**: not offered to a personal repo (ADR 0008, Considered Options), so ordering and batching stay the line's.
+- **Parallel speculative passes, one per member**: a batch costs one full pass where a speculative pass costs one per member (Rasslabsya4el/orchestration-layer#414, item 5).
 
 ## Consequences
 
