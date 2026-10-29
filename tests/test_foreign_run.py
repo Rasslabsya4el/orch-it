@@ -65,7 +65,7 @@ def test_the_child_env_holds_no_identity_no_github_repository_and_a_fresh_home(t
         **{name: "given" for name in IDENTITY_NAMES},
     }
     env = foreign_run.child_env(source, home=home, empty_config=empty, path=str(tmp_path / "bin"),
-                                os_name="linux")
+                                os_name="posix")
     assert not [key for key in env if key.startswith("GITHUB_")], env
     assert not [key for key in IDENTITY_NAMES if key in env], env
     assert not {"CI", "GH_TOKEN", "GIT_CONFIG_PARAMETERS"} & set(env), env
@@ -99,7 +99,7 @@ def test_on_linux_the_path_resolves_python3_and_not_python(tmp_path):
     bin_dir = tmp_path / "bin"
     foreign_run.make_bin(bin_dir, python_dir, tools={})
     env = foreign_run.child_env(os.environ, home=tmp_path / "home", empty_config=tmp_path / "e",
-                                path=str(bin_dir), os_name="linux")
+                                path=str(bin_dir), os_name="posix")
     assert shutil.which("python3", path=env["PATH"]) is not None
     assert shutil.which("python", path=env["PATH"]) is None
 

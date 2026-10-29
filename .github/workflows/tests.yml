@@ -117,7 +117,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: junit-${{ github.job }}-${{ github.run_attempt }}
-          path: junit.xml
+          path: |
+            junit.xml
+            actions-rate-limit.json
           if-no-files-found: ignore
 
   windows:
@@ -173,15 +175,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: junit-${{ github.job }}-${{ github.run_attempt }}
-          path: junit.xml
+          path: |
+            junit.xml
+            actions-rate-limit.json
           if-no-files-found: ignore
 
   # The foreign run (#414 unit 10): the suite and the layer's setup commands in a copy that is not the owner's setup (another
   # folder name, an invented origin, no git identity, no GitHub variable; on Linux and macOS a PATH with no bare `python`).
-  # Bound: 20 minutes, not measured yet (a single-process suite, the pip install and the copy); the first runs measure it.
   foreign-linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 20  # unmeasured: a guess until the first runs measure it
     steps:
       - uses: actions/checkout@v4
         with:
@@ -202,8 +205,7 @@ jobs:
 
   foreign-windows:
     runs-on: windows-latest
-    # Bound: 20 minutes, not measured yet (see foreign-linux).
-    timeout-minutes: 20
+    timeout-minutes: 20  # unmeasured: a guess until the first runs measure it
     steps:
       - uses: actions/checkout@v4
         with:
@@ -226,8 +228,7 @@ jobs:
   foreign-macos:
     if: github.event_name == 'schedule'
     runs-on: macos-latest
-    # Bound: 30 minutes, not measured yet (see foreign-linux); macOS runners are slower than Linux ones.
-    timeout-minutes: 30
+    timeout-minutes: 30  # unmeasured: a guess until the first nightly run measures it
     steps:
       - uses: actions/checkout@v4
         with:

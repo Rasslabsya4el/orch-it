@@ -27,10 +27,9 @@ PYTHON_BARE_NAME = "python"
 TOOLS = ("git", "bash", "sh")
 # the OS's base variables a test process gets; mirrors `clean_environment` (src/orch_it/testruns/environment.py)
 BASE_NAMES = {
-    "windows": ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP",
+    "nt": ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP",
                 "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA"),
-    "linux": ("PATH", "HOME", "TMPDIR"),
-    "macos": ("PATH", "HOME", "TMPDIR"),
+    "posix": ("PATH", "HOME", "TMPDIR"),
 }
 WINDOWS_HOME_NAMES = ("PATH", "HOME", "USERPROFILE")
 
@@ -47,11 +46,9 @@ class Names:
 
 
 def this_os() -> str:
-    """This machine's OS as the test places name it: `linux`, `windows` or `macos`."""
+    """This machine's key in BASE_NAMES: `nt` on Windows, `posix` elsewhere."""
 
-    if sys.platform == "win32":
-        return "windows"
-    return "macos" if sys.platform == "darwin" else "linux"
+    return "nt" if os.name == "nt" else "posix"
 
 
 def _random_part() -> str:
@@ -96,16 +93,16 @@ def child_env(source: Mapping[str, str], *, home: Path, empty_config: Path, path
     home (and USERPROFILE on Windows), and git's configuration read from `empty_config` alone. Nothing else of
     `source` reaches the child: no identity, no GitHub variable, no token, no CI flag."""
 
-    if os_name == "windows":
+    if os_name == "nt":
         upper = {name.upper(): name for name in source}
         env = {upper[name.upper()]: str(source[upper[name.upper()]])
-               for name in BASE_NAMES["windows"] if name.upper() in upper}
+               for name in BASE_NAMES["nt"] if name.upper() in upper}
         env = {key: value for key, value in env.items() if key.upper() not in WINDOWS_HOME_NAMES}
     else:
         env = {name: str(source[name]) for name in BASE_NAMES[os_name] if name in source}
     env["PATH"] = path
     env["HOME"] = str(home)
-    if os_name == "windows":
+    if os_name == "nt":
         env["USERPROFILE"] = str(home)
     env["XDG_CONFIG_HOME"] = str(home / ".config")
     env["GIT_CONFIG_GLOBAL"] = str(empty_config)

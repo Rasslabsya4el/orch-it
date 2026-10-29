@@ -31,7 +31,9 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
 # the jobs that run pytest themselves; the foreign jobs run `.github/scripts/foreign_run.py` (#414 unit 10)
 PYTEST_JOBS = (LINUX_CHECK, WINDOWS_CHECK)
-FOREIGN_JOBS = ("foreign-linux", "foreign-windows", "foreign-macos")
+FOREIGN_PREFIX = "foreign-"  # the job names are built from the required names (no quoted job name in code)
+FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS = FOREIGN_PREFIX + LINUX_CHECK, FOREIGN_PREFIX + WINDOWS_CHECK, FOREIGN_PREFIX + "macos"
+FOREIGN_JOBS = (FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS)
 
 
 pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
@@ -135,7 +137,11 @@ def test_each_job_uploads_its_junit_report_even_when_red():
         upload = "\n".join(step_named(steps, "upload the JUnit report"))
         assert "uses: actions/upload-artifact@v4" in upload, name
         assert "if: always()" in upload, name
-        assert "path: junit.xml" in upload, name
+        if name in PYTEST_JOBS:  # the report and the rate-limit file beside it, one artifact (#414 unit 10 fix)
+            assert re.search(r"^          path: \|\n            junit\.xml\n            actions-rate-limit\.json$", upload, re.M), name
+            assert "if-no-files-found: ignore" in upload, name  # a missing file never fails the upload
+        else:
+            assert "path: junit.xml" in upload, name
         # a re-run of a job uploads under a new name, never onto the first attempt's
         assert "name: junit-${{ github.job }}-${{ github.run_attempt }}" in upload, name
 
@@ -508,13 +514,13 @@ def test_the_foreign_jobs_run_the_script_under_bash_and_upload_their_report():
 
 def test_the_foreign_linux_and_windows_jobs_run_on_every_change_as_the_suite_jobs_do():
     jobs = job_lines(WORKFLOW.read_text("utf-8"))
-    for name in ("foreign-linux", "foreign-windows"):
+    for name in (FOREIGN_LINUX, FOREIGN_WINDOWS):
         assert not any(line.startswith("    if:") for line in jobs[name]), name  # no job-level condition
 
 
 def test_the_foreign_macos_job_runs_on_the_nightly_schedule_only():
     jobs = job_lines(WORKFLOW.read_text("utf-8"))
-    assert jobs["foreign-macos"].count("    if: github.event_name == 'schedule'") == 1
+    assert jobs[FOREIGN_MACOS].count("    if: github.event_name == 'schedule'") == 1
 
 
 def test_the_pytest_jobs_save_the_rate_limit_after_pytest_and_never_fail_the_job():
@@ -526,3 +532,10 @@ def test_the_pytest_jobs_save_the_rate_limit_after_pytest_and_never_fail_the_job
         assert re.search(r"^\s+run: gh api rate_limit > actions-rate-limit\.json$", text, re.M), job
         assert steps.index(step) > steps.index(step_named(steps, "pytest")), job
         assert steps.index(step) < steps.index(step_named(steps, "upload the JUnit report")), job
+
+
+def test_each_foreign_job_bound_says_on_its_line_that_it_is_unmeasured():
+    text = WORKFLOW.read_text("utf-8")
+    for job in FOREIGN_JOBS:
+        value, _ = timeout_of(text, job)
+        assert "# unmeasured" in value, (job, value)
