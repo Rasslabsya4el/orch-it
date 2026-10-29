@@ -24,7 +24,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from orch_it.guards import hook, scanner
-from orch_it.merge import marks
 from orch_it.testruns import github
 
 GUARD = "private_data_public"
@@ -36,6 +35,8 @@ EXIT_REFUSED = 1
 # lines of hits printed to the person pushing; the rest is counted
 SHOWN_HITS = 50
 PATH_BOUND = 200
+# characters of the commit line a closing refusal quotes
+LINE_BOUND = 200
 
 _SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _GITHUB_REMOTE = re.compile(
@@ -132,29 +133,46 @@ def _refusal(hits: list[scanner.Hit]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _closing_refusal(closing: list[tuple[str, str]]) -> str:
+def _closing_refusal(closing: list[tuple[str, int, str, str]]) -> str:
     lines = ["orch-it: push refused, a commit message holds a closing keyword before a ticket reference"
              " (GitHub closes the ticket when the commit reaches its default branch):"]
-    lines += [f"  {sha} {' '.join(hit.split())}" for sha, hit in closing[:SHOWN_HITS]]
+    lines += [f'  {sha}, line {number}, "{text[:LINE_BOUND]}", {" ".join(hit.split())}'
+              for sha, number, text, hit in closing[:SHOWN_HITS]]
     if len(closing) > SHOWN_HITS:
         lines.append(f"  ... and {len(closing) - SHOWN_HITS} more")
     lines.append("write `Refs <URL>` or `Ticket: <URL>` in its place (amend or rebase) and push again")
     return "\n".join(lines) + "\n"
 
 
-def _closing_hits(work_tree: Path, commits: list[str], store, repo: str) -> list[tuple[str, str]]:
-    """(commit sha, hit) for each closing keyword before a ticket reference in the messages of the
-    commits this push sends. A git failure of the read is a crash: it is written, and the check
-    finds nothing, so the push goes on to the private-data scan (a hit always refuses)."""
+def _closing_in(sha: str, message: str, marks) -> list[tuple[str, int, str, str]]:
+    """(sha, 1-based line, that line's text, hit) for each closing keyword hit of one message. A hit
+    is located from a cursor that moves past the one before, so two hits of one text are told apart."""
 
+    found, cursor = [], 0
+    lines = message.split("\n")
+    for hit in marks.closing_keywords(message):
+        at = message.index(hit, cursor)
+        cursor = at + len(hit)
+        number = message.count("\n", 0, at) + 1
+        found.append((sha, number, lines[number - 1].rstrip("\r"), hit))
+    return found
+
+
+def _closing_hits(work_tree: Path, commits: list[str], store, repo: str) -> list[tuple[str, int, str, str]]:
+    """The closing keyword hits in the messages of the commits this push sends. The import of the
+    matcher is inside the fail-open read, so a failure of it is written like any other. A git failure
+    of a batch ends the read there: the hits of the batches before it still refuse, and the unread
+    rest is written as `error.raised` and fails open (the private-data scan still runs)."""
+
+    found = []
     try:
-        found = []
+        from orch_it.merge import marks
+
         for sha, message in scanner.messages_of_commits(work_tree, commits):
-            found += [(sha, hit) for hit in marks.closing_keywords(message)]
-        return found
+            found += _closing_in(sha, message, marks)
     except Exception as exc:
         _write_crash(store, exc, repo)
-        return []
+    return found
 
 
 def _say(text: str) -> None:
