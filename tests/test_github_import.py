@@ -1070,6 +1070,13 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     require_enough_judged(judged, runs, completed_since, newest)
     assert judged, "no run completed since the first pull request run and before the moment"
     required = ("linux", "windows")
+    # ROW 4 SCRATCH (#417, never merged): plant a loss of one stored job pair of a judged run
+    import sqlite3
+    planted = sorted(k for k, (started, _) in pairs(store).items()
+                     if k.startswith(f"github:{judged[0]['id']}/") and started["run_os"] in required)[0]
+    with sqlite3.connect(store.index_path) as db:
+        db.execute("DELETE FROM events WHERE run = ? AND step = 'test_run'", (planted,))
+    print("PLANTED LOSS:", planted)
     run_pairs, waits = pairs(store), pairs(store, "wait")
     jobs_of = {}
     for run in judged:
