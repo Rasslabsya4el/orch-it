@@ -1,18 +1,21 @@
-"""The workflow watch's decision (#411 rule 3, unit 2): what a non-green workflow run opens, comments on or
-closes. `decide` reads the latest ended run of each workflow and the open watch issues, and returns actions;
-it does no I/O. A run is non-green when it ended `failure`, `cancelled` or `timed_out`, or when it started
-no job at all whatever GitHub labels its outcome. A run is green only when it ended `success` with a job
-started; any other run gets no action. The caller passes the workflows it leaves to other checks in `skip`.
+"""The workflow watch's decision (https://github.com/Rasslabsya4el/orchestration-layer/issues/411 rule 3, unit 2):
+what a non-green workflow run opens, comments on or closes. `decide` reads the latest ended run of each workflow and
+the open watch issues, and returns actions; it does no I/O. A run is non-green when it ended `failure`, `cancelled`
+or `timed_out`, or when it started no job at all whatever GitHub labels its outcome. A run is green only when it
+ended `success` with a job started; any other run gets no action. The caller passes the workflows it leaves to other
+checks in `skip`.
 
-A watch ticket is written in #398's shape and checked by `tickets.violations` before it is returned, as
-`red_main.build` does: a broken body is a bug of this module, so it raises. The title and the human block
-carry `display_name` (a short, shape-clean name); the exact workflow name rides in the mark line, which
-`workflow_of` reads back.
+A workflow is identified by its file path (`.github/workflows/x.yml`), never by its display name: two files can
+share a name. A watch ticket is written in #398's shape and checked by `tickets.violations` before it is returned, as
+`red_main.build` does: a broken body is a bug of this module, so it raises. The title and the human block carry
+`display_name` (a short, shape-clean name); the file path rides in the mark line, which `workflow_of` reads back.
+A watch ticket's second line is the run mark of the run it names, which `last_run_id` reads back.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import quote, unquote
 
@@ -25,6 +28,8 @@ HOW = {"failure": "failure", "cancelled": "cancelled", "timed_out": "timed out"}
 NO_JOB = "no job started"
 NAME_MAX = 49  # `Workflow ` + name + ` did not end green` stays within the title limit of 80
 _MARK = re.compile(r"<!-- orch-it workflow-watch workflow=(\S+) -->")
+RUN_MARK = "<!-- orch-it workflow-watch run={run_id} -->"
+_RUN = re.compile(r"<!-- orch-it workflow-watch run=(\d+) -->")
 _PARKED = re.compile(r"parked", re.IGNORECASE)
 _NOT_NAME = re.compile(r"[^\w\- ]+")
 
@@ -35,7 +40,7 @@ class WatchShapeError(AssertionError):
 
 @dataclass(frozen=True)
 class WorkflowRun:
-    workflow: str
+    workflow: str  # the workflow's file path, as GitHub gives it
     run_id: int
     url: str
     ended_at: str
@@ -103,17 +108,30 @@ def display_name(workflow: str) -> str:
 
 
 def mark(workflow: str) -> str:
-    """The mark line of a watch ticket: the exact workflow name, percent-encoded so it can hold any
+    """The mark line of a watch ticket: the workflow's file path, percent-encoded so it can hold any
     character and the comment never ends early."""
 
     return f"<!-- orch-it workflow-watch workflow={quote(workflow, safe='')} -->"
 
 
 def workflow_of(body: str | None) -> str | None:
-    """The exact workflow name a watch ticket's mark holds; None for a body that is no watch ticket."""
+    """The workflow file path a watch ticket's mark holds; None for a body that is no watch ticket."""
 
     found = _MARK.search(body or "")
     return unquote(found.group(1)) if found else None
+
+
+def run_mark(run_id: int) -> str:
+    """The run mark of a run: the second line of a watch ticket it opened, the first line of a comment on it."""
+
+    return RUN_MARK.format(run_id=run_id)
+
+
+def last_run_id(texts: Iterable[str | None]) -> int | None:
+    """The highest run a watch ticket's body or comments name; None when none names one."""
+
+    found = [int(number) for text in texts for number in _RUN.findall(text or "")]
+    return max(found) if found else None
 
 
 def _checked(title: str, body: str) -> tuple[str, str]:

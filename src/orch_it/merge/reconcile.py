@@ -3,7 +3,8 @@ on GitHub and repairs what no event fixed, starting no work. It follows every pu
 ticket waits on (`pr_ended`) and every member of the merge line, so a merged pull request whose
 follow never ran closes its ticket (MERGE-9), a stuck check is cancelled and run again, a pull
 request open too long goes to the brain; then it runs the main check, so red main without a ticket
-gets one and green main closes it.
+gets one and green main closes it; then the workflow watch (#411) opens, comments on or closes the
+watch tickets of the workflows' latest runs.
 
 It runs the same code wherever it runs: on its schedule in the workflow `reconcile`, and on the
 machine when Actions are off or refused (it says whether they are on, and runs anyway). On the
@@ -35,6 +36,7 @@ from orch_it.merge.follow import FollowReport, follow
 from orch_it.merge.hub import PullHub
 from orch_it.merge.main_check import MainReport, check_main
 from orch_it.merge.settings import MergeSettings
+from orch_it.merge.workflow_watch_run import checked_names, watch_workflows
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
 from orch_it.tickets import park
 from orch_it.tickets.model import parse
@@ -85,6 +87,10 @@ def reconcile(hub: PullHub, store: Store, repo: str, base: str, *, settings: Mer
         main = check_main(hub, store, repo, base, role=role)
     except Exception as e:
         failed.append(_failed(store, repo, role, run, "main", e))
+    try:
+        watch_workflows(hub, repo, checked_names(hub, repo))
+    except Exception as e:  # a watch that breaks never ends the sweep (#411 rule 3)
+        failed.append(_failed(store, repo, role, run, "workflows", e))
     if main is not None:
         repairs += [("red_ticket_opened", f"#{n}") for n in main.opened]
         repairs += [("closed", f"#{n}") for n in main.closed]
