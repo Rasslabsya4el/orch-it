@@ -57,7 +57,7 @@ def check_main(hub: PullHub, store: Store, repo: str, branch: str, *, role: str 
     if states == {PASSED}:
         if not newest:
             return MainReport("waiting", run.run_id, run.sha)
-        held = held_passed(hub, repo, run)
+        held = held_passed(hub, repo, run) if reds else frozenset()  # no ticket to close: no report to read
         return MainReport("green", run.run_id, run.sha,
                           closed=[_close(hub, store, repo, red.number, run, role) for red in reds
                                   if red.ids is None or red.ids <= held])
@@ -96,7 +96,7 @@ def held_passed(hub: PullHub, repo: str, run: MainRun) -> frozenset[str]:
 
 def _red(hub: PullHub, store: Store, repo: str, run: MainRun, failing: set[str], reds: list[red_main.RedTicket],
          may_close: bool, role: str) -> MainReport:
-    held = held_passed(hub, repo, run) if may_close else frozenset()
+    held = held_passed(hub, repo, run) if may_close and reds else frozenset()
     closed = [_close(hub, store, repo, red.number, run, role) for red in reds
               if may_close and red.ids is not None and not red.truncated and not red.ids & failing
               and red.ids <= held]

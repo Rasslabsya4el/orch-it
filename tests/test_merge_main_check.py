@@ -238,3 +238,21 @@ def test_a_job_that_did_not_run_the_id_keeps_the_ticket_open_though_another_job_
     hub.main_run(hub.land(), GREEN, run_id="night", results=[Result(LINUX_CHECK, "t::windows_only", "passed", False),
                                                            Result(WINDOWS_CHECK, "t::windows_only", "passed", False)])
     assert check(hub, store).closed == [number]
+
+
+def test_no_report_is_read_when_no_red_on_main_ticket_is_open(world):
+    """The artifact list and the downloads of a run are GitHub requests: a run with no ticket to close reads none."""
+
+    hub, store = world
+    reads = []
+    results = hub.results
+    hub.results = lambda repo, run_id: reads.append(run_id) or results(repo, run_id)
+    hub.main_run(hub.land(), GREEN, passed=["t::a"])
+    assert check(hub, store).outcome == "green" and reads == []
+    hub.later(minutes=10)
+    hub.main_run(hub.land(), RED, failing=["t::b"], run_id="red")
+    [number] = check(hub, store).opened
+    assert reads == []  # a red run with a ticket to open and none open before reads none
+    hub.later(minutes=10)
+    hub.main_run(hub.land(), GREEN, passed=["t::b"], run_id="fixed")
+    assert check(hub, store).closed == [number] and reads == ["fixed"]
