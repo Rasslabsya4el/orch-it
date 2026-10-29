@@ -22,7 +22,11 @@
 - `merge unlock [--repo R]`: remove the repo lock of the merge line, only when it is stale (older
   than `lock_stale_minutes`); prints whose it was and writes `lock.removed`. A lock that is not
   stale is never removed (`error: lock_not_stale`, naming its holder); one it cannot remove whole
-  is `error: lock_unwritable` and still names its holder.
+  is `error: lock_unwritable` and still names its holder;
+- `merge closing-check [--base main] [--head HEAD] [--work-tree .]`: a closing word before a reference
+  in the commits of `origin/<base>..<head>`, and in the title and body the environment carries as
+  `PR_TITLE` and `PR_BODY` (`orch_it.merge.closing_check`, https://github.com/Rasslabsya4el/orchestration-layer/issues/422); exits 1 and names each hit (its sha
+  or `title`/`body`, and the line) when there is one, 0 when there is none.
 
 `--repo` defaults to the work tree's GitHub origin. A refusal prints `error: <code>` and exits 2.
 """
@@ -37,6 +41,7 @@ from pathlib import Path
 
 from orch_it import settings
 from orch_it.events.store import Store
+from orch_it.merge import closing_check
 from orch_it.merge import git as merge_git
 from orch_it.merge import lock
 from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_event
@@ -53,7 +58,7 @@ from orch_it.tickets.gh_check import read_event
 from orch_it.tickets.park import ROLE as SCRIPT
 
 GROUPS = ("merge", "pr", "follow", "main", "reconcile")
-ERRORS = (lock.LockError, PrError, FollowError)
+ERRORS = (lock.LockError, PrError, FollowError, closing_check.ClosingError)
 
 
 def add_parsers(commands, common: argparse.ArgumentParser) -> None:
@@ -61,6 +66,10 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     repo.add_argument("--repo", help="owner/name (default: the work tree's GitHub origin)")
     group = commands.add_parser("merge", help="the merge line").add_subparsers(dest="command", required=True)
     group.add_parser("unlock", parents=[repo], help="remove the repo lock of the merge line when it is stale")
+    p = group.add_parser("closing-check", help="refuse a closing word before a reference in a pull request's text")
+    p.add_argument("--base", default="main", help="the branch the pull request merges into (default: main)")
+    p.add_argument("--head", default="HEAD", help="the pull request's head (default: HEAD)")
+    p.add_argument("--work-tree", default=".", metavar="PATH")
     p = group.add_parser("line", parents=[repo], help="land the repo's green pull requests one by one")
     p.add_argument("--base", default="main", help="the branch the line merges into (default: main)")
     group = commands.add_parser("pr", help="the pull request of a ticket").add_subparsers(dest="command",
@@ -101,9 +110,16 @@ def run(args, store_of: Callable[[], Store], repo_of: Callable[[str], str]) -> t
         return _main_check(args, store_of, repo_of, now), 0
     if args.group == "reconcile":
         return _reconcile(args, store_of, repo_of, now), 0
+    if args.command == "closing-check":
+        return _closing_check(args)
     if args.command == "line":
         return _line(args, store_of, repo_of), 0
     return _unlock(args, store_of, repo_of, now), 0
+
+
+def _closing_check(args) -> tuple[str, int]:
+    done = closing_check.check(merge_git.work_tree(Path(args.work_tree)), args.base, args.head, os.environ)
+    return closing_check.render(done), (1 if done.hits else 0)
 
 
 def _unlock(args, store_of, repo_of, now: datetime) -> str:

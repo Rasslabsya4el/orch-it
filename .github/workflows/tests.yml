@@ -4,7 +4,9 @@ name: tests
 # Pull request and push runs leave the `slow` and `live` tests out; the nightly run (schedule, or
 # workflow_dispatch with slow_and_live on) runs the full suite with them (#394 decision 8).
 on:
+  # `edited` too: a title or body edit reruns the closing check (https://github.com/Rasslabsya4el/orchestration-layer/issues/422), which reads the text as it stands then
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   schedule:
@@ -64,6 +66,19 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           python -m orch_it guards scan --range "$BASE..$HEAD" --machine-independent --allow-email-of "$AUTHOR" --allow-email-of "$OWNER"
+      # A closing word before a reference (`fixes <URL>`, `Resolves #N`) makes GitHub close the ticket on merge (https://github.com/Rasslabsya4el/orchestration-layer/issues/422):
+      # the commits of the pull request, and its title and body, are read here, before the merge. The title and body
+      # reach the command as environment variables only, never on the shell line.
+      - name: closing words in the pull request's commits, title and body
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python -m orch_it merge closing-check --base "$BASE_REF" --head "$HEAD"
       - name: pytest
         shell: bash
         env:
