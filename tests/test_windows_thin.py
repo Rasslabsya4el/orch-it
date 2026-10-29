@@ -13,12 +13,14 @@ from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 from orch_it.events.store import Store
 from orch_it.merge.hub import Result
+from orch_it.testruns import junit
 from orch_it.testruns.windows_unmarked import run_unmarked_check
 
 pytest_plugins = ["pytester"]
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
+CONFTEST = ROOT / "tests" / "conftest.py"
 CHANGE_SELECTION = "os_touching and (not slow and not live)"  # the Windows change run's `-m` expression (the workflow)
 
 
@@ -133,3 +135,15 @@ def test_two_unmarked_failures_get_a_ticket_each_and_a_per_change_run_is_not_a_n
     assert run_unmarked_check(store, hub, SETTINGS).opened == []
     night(hub, windows_red("t::one") + windows_red("t::two"))
     assert len(run_unmarked_check(store, hub, SETTINGS).opened) == 2
+
+
+def test_a_marked_test_carries_the_marker_in_its_report_and_the_reader_sees_it(pytester):
+    """The repo's conftest writes `os_touching` into a marked test's report; the JUnit reader reads it as `marked`."""
+
+    planted(pytester, "import pytest\n\n"
+                      "@pytest.mark.os_touching\ndef test_marked():\n    pass\n\n"
+                      "def test_plain():\n    pass\n")
+    pytester.makeconftest(CONFTEST.read_text("utf-8"))
+    report = pytester.path / "report.xml"
+    pytester.runpytest("--junitxml", str(report)).assert_outcomes(passed=2)
+    assert {case.name: case.marked for case in junit.read(report)} == {"test_marked": True, "test_plain": False}

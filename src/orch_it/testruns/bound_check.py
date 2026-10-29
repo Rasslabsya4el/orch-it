@@ -71,11 +71,11 @@ def run_bound_check(store: Store, hub: PullHub, settings: dict) -> BoundReport:
     opened, commented = [], []
     for crossing in _crossings(_recent_runs(store, repo), run_bounds, queue_bound):
         mark, note = _key_mark(crossing), _note_mark(crossing)
-        ticket = _open_ticket_with(hub, repo, mark)
+        ticket = open_ticket_with(hub, repo, mark)
         if ticket is None:
             title, body = _ticket(crossing, mark, note)
             opened.append(main_check.open_triage(hub, store, repo, ROLE, title, body, (TRIAGE_LABEL,)))
-        elif not _told(hub, repo, ticket, note):
+        elif not told(hub, repo, ticket, note):
             hub.comment(repo, ticket.number, _comment(crossing, note))
             commented.append(ticket.number)
     return BoundReport(opened=opened, commented=commented)
@@ -182,14 +182,14 @@ def _comment(c: _Crossing, note: str) -> str:
     return f"{LAYER_MARK}{note}\nCrossed again. {_facts(c)}"
 
 
-def _open_ticket_with(hub: PullHub, repo: str, mark: str) -> Issue | None:
+def open_ticket_with(hub: PullHub, repo: str, mark: str) -> Issue | None:
     """The lowest-numbered open issue, whatever its labels, whose body holds `mark`; None when there is none."""
 
     found = sorted((issue for issue in hub.open_issues(repo) if mark in issue.body), key=lambda issue: issue.number)
     return found[0] if found else None
 
 
-def _told(hub: PullHub, repo: str, ticket: Issue, note: str) -> bool:
+def told(hub: PullHub, repo: str, ticket: Issue, note: str) -> bool:
     if note in ticket.body:
         return True
     return any(note in said.body for said in hub.comments(repo, ticket.number))
