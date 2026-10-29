@@ -103,6 +103,15 @@ jobs:
           python .github/scripts/merge_junit.py junit.xml junit.xml junit-serial.xml
           if [ "$serial" = 5 ]; then serial=0; fi
           exit $(( parallel != 0 ? parallel : serial ))
+      # The account's rate limit as GitHub reports it at the end of the run (#414 unit 9; the importer, unit 12a, reads
+      # this file name beside junit.xml). Never fails the job: `continue-on-error`.
+      - name: save the rate limit of the account
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api rate_limit > actions-rate-limit.json
       - name: upload the JUnit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -150,6 +159,85 @@ jobs:
           python .github/scripts/merge_junit.py junit.xml junit.xml junit-serial.xml
           if [ "$serial" = 5 ]; then serial=0; fi
           exit $(( parallel != 0 ? parallel : serial ))
+      # The account's rate limit as GitHub reports it at the end of the run (#414 unit 9; the importer, unit 12a, reads
+      # this file name beside junit.xml). Never fails the job: `continue-on-error`.
+      - name: save the rate limit of the account
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api rate_limit > actions-rate-limit.json
+      - name: upload the JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ github.job }}-${{ github.run_attempt }}
+          path: junit.xml
+          if-no-files-found: ignore
+
+  # The foreign run (#414 unit 10): the suite and the layer's setup commands in a copy that is not the owner's setup (another
+  # folder name, an invented origin, no git identity, no GitHub variable; on Linux and macOS a PATH with no bare `python`).
+  # Bound: 20 minutes, not measured yet (a single-process suite, the pip install and the copy); the first runs measure it.
+  foreign-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: the foreign run
+        shell: bash
+        run: python3 .github/scripts/foreign_run.py
+      - name: upload the JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ github.job }}-${{ github.run_attempt }}
+          path: junit.xml
+          if-no-files-found: ignore
+
+  foreign-windows:
+    runs-on: windows-latest
+    # Bound: 20 minutes, not measured yet (see foreign-linux).
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: the foreign run
+        shell: bash
+        run: python .github/scripts/foreign_run.py
+      - name: upload the JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ github.job }}-${{ github.run_attempt }}
+          path: junit.xml
+          if-no-files-found: ignore
+
+  # The nightly schedule only: macOS is no machine of the owner's, so its foreign run is read on the nightly (#414 row 11).
+  foreign-macos:
+    if: github.event_name == 'schedule'
+    runs-on: macos-latest
+    # Bound: 30 minutes, not measured yet (see foreign-linux); macOS runners are slower than Linux ones.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: the foreign run
+        shell: bash
+        run: python3 .github/scripts/foreign_run.py
       - name: upload the JUnit report
         if: always()
         uses: actions/upload-artifact@v4

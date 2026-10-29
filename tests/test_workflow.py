@@ -29,6 +29,9 @@ ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
+# the jobs that run pytest themselves; the foreign jobs run `.github/scripts/foreign_run.py` (#414 unit 10)
+PYTEST_JOBS = (LINUX_CHECK, WINDOWS_CHECK)
+FOREIGN_JOBS = ("foreign-linux", "foreign-windows", "foreign-macos")
 
 
 pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
@@ -65,6 +68,10 @@ def job_lines(text: str) -> dict[str, list[str]]:
         elif current:
             by_job[current].append(line)
     return by_job
+
+
+def pytest_job_lines() -> dict[str, list[str]]:
+    return {name: lines for name, lines in job_lines(WORKFLOW.read_text("utf-8")).items() if name in PYTEST_JOBS}
 
 
 def steps_of(lines: list[str]) -> list[list[str]]:
@@ -120,7 +127,11 @@ def test_the_linux_job_lints_every_workflow_file_before_pytest_and_never_skips_i
 def test_each_job_uploads_its_junit_report_even_when_red():
     for name, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
         steps = steps_of(lines)
-        assert "--junitxml=junit.xml" in run_script(step_named(steps, "pytest")), name
+        if name in PYTEST_JOBS:
+            assert "--junitxml=junit.xml" in run_script(step_named(steps, "pytest")), name
+        else:
+            assert name in FOREIGN_JOBS, name
+            assert "foreign_run.py" in "\n".join(step_named(steps, "the foreign run")), name
         upload = "\n".join(step_named(steps, "upload the JUnit report"))
         assert "uses: actions/upload-artifact@v4" in upload, name
         assert "if: always()" in upload, name
@@ -183,7 +194,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         "@pytest.mark.serial\ndef test_slow_serial():\n    pass\n\n"
         "@pytest.mark.os_touching\ndef test_touching():\n    pass\n\n"
         "def test_plain():\n    pass\n", "utf-8")
-    for job in job_lines(WORKFLOW.read_text("utf-8")):
+    for job in PYTEST_JOBS:
         done, calls = run_pytest_step(tmp_path, job, nightly)
         assert done.returncode == 0, done.stderr
         ids = []
@@ -210,7 +221,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
 # --- the parallel run (#421 rules 1, 3, 5) ---------------------------------------------------
 
 def test_every_job_runs_xdist_on_the_core_count_read_at_run_time_and_prints_it(tmp_path):
-    for job, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
+    for job, lines in pytest_job_lines().items():
         script = run_script(step_named(steps_of(lines), "pytest"))
         assert "os.cpu_count()" in script, job
         assert not re.search(r"(^|\s)-n[ =]?\d", script, re.M), job  # no core count written in the workflow
@@ -232,7 +243,7 @@ def pyproject_bounds() -> dict:
                                                    ("true", "nightly_timeout_seconds", 600)])
 def test_every_test_is_bound_by_the_setting_of_its_run_kind_in_both_phases(tmp_path, nightly, key, seconds):
     assert pyproject_bounds()[key] == seconds
-    for job, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
+    for job, lines in pytest_job_lines().items():
         script = run_script(step_named(steps_of(lines), "pytest"))
         assert not re.search(r"\b(120|600)\b", script), job  # read from the config, not written here
         done, calls = run_pytest_step(tmp_path, job, nightly)
@@ -244,7 +255,7 @@ def test_every_test_is_bound_by_the_setting_of_its_run_kind_in_both_phases(tmp_p
 
 
 def test_the_serial_phase_runs_after_the_parallel_one_and_the_job_has_one_report_with_both(tmp_path):
-    for job in job_lines(WORKFLOW.read_text("utf-8")):
+    for job in PYTEST_JOBS:
         done, calls = run_pytest_step(tmp_path, job, "true", RC_SERIAL="0")
         assert done.returncode == 0, done.stderr
         parallel, serial = (call_args(c) for c in calls)
@@ -257,7 +268,7 @@ def test_the_serial_phase_runs_after_the_parallel_one_and_the_job_has_one_report
 
 
 def test_no_serial_test_is_no_failure_but_a_red_test_in_either_phase_is(tmp_path):
-    for job in job_lines(WORKFLOW.read_text("utf-8")):
+    for job in PYTEST_JOBS:
         done, _ = run_pytest_step(tmp_path, job, "false", RC_SERIAL="5")
         assert done.returncode == 0, done.stderr  # pytest exit code 5, no tests collected
         assert [c.get("name") for c in ET.parse(tmp_path / "junit.xml").getroot().iter("testcase")] == ["parallel"]
@@ -479,3 +490,39 @@ def test_the_scan_step_passes_names_that_only_look_like_a_default_host_name(tmp_
     repo, base, head = pull_request_with(tmp_path, {"notes.txt": lookalikes})
     done = run_scan_step(tmp_path, repo, base, head)
     assert (done.returncode, done.stdout) == (0, "hits=0 commits=1\n"), done.stderr
+
+
+# --- the foreign run (#414 unit 10) and the rate-limit file of the pytest jobs (#414 unit 9) --------------------------
+
+def test_the_foreign_jobs_run_the_script_under_bash_and_upload_their_report():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    for name in FOREIGN_JOBS:
+        steps = steps_of(jobs[name])
+        run = "\n".join(step_named(steps, "the foreign run"))
+        assert re.search(r"^\s+shell: bash$", run, re.M), name
+        assert re.search(r"^\s+run: python3? \.github/scripts/foreign_run\.py$", run, re.M), name
+        upload = "\n".join(step_named(steps, "upload the JUnit report"))
+        assert "if: always()" in upload and "path: junit.xml" in upload, name
+        assert "name: junit-${{ github.job }}-${{ github.run_attempt }}" in upload, name
+
+
+def test_the_foreign_linux_and_windows_jobs_run_on_every_change_as_the_suite_jobs_do():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    for name in ("foreign-linux", "foreign-windows"):
+        assert not any(line.startswith("    if:") for line in jobs[name]), name  # no job-level condition
+
+
+def test_the_foreign_macos_job_runs_on_the_nightly_schedule_only():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    assert jobs["foreign-macos"].count("    if: github.event_name == 'schedule'") == 1
+
+
+def test_the_pytest_jobs_save_the_rate_limit_after_pytest_and_never_fail_the_job():
+    for job in PYTEST_JOBS:
+        steps = steps_of(pytest_job_lines()[job])
+        step = step_named(steps, "save the rate limit of the account")
+        text = "\n".join(step)
+        assert "continue-on-error: true" in text, job
+        assert re.search(r"^\s+run: gh api rate_limit > actions-rate-limit\.json$", text, re.M), job
+        assert steps.index(step) > steps.index(step_named(steps, "pytest")), job
+        assert steps.index(step) < steps.index(step_named(steps, "upload the JUnit report")), job
