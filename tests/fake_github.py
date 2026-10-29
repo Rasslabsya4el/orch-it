@@ -8,8 +8,11 @@ A branch is a list of commit shas; a pull request's head is its branch's last sh
 pull request merged, a push), `push` adds one to a branch. A sha's checks are set with `checks_on`.
 """
 
+import json
+import zipfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from fake_hub import REPO, FakeHub
 
@@ -314,8 +317,200 @@ class FakeGitHub(FakeHub):
         return found
 
 
+def stamp(base, seconds):
+    return (base + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def junit_xml(cases):
+    body = ""
+    for classname, name, kind in cases:
+        child = {"failed": "<failure message='boom'/>", "skipped": "<skipped message='why'/>"}.get(kind, "")
+        body += f"<testcase classname='{classname}' name='{name}' time='0.5'>{child}</testcase>"
+    return f"<testsuites><testsuite name='pytest' tests='{len(cases)}'>{body}</testsuite></testsuites>"
+
+
+@dataclass
+class DispatchedJob:
+    """What a dispatched job does: its runner label, the seconds after the dispatch it is queued, starts and
+    completes (completed None: still running), its conclusion and the cases of its JUnit report (None: no
+    artifact)."""
+
+    label: str = "ubuntu-latest"
+    queued: int = 0
+    started: int = 130
+    completed: int | None = 400
+    conclusion: str = "success"
+    cases: list | None = field(default_factory=lambda: [("tests.test_a", "test_one", "passed")])
+
+
+class FakeActions:
+    """GitHub's Actions API as the `gh` helper sees it, for one account: its repos, their runs and jobs, the refs
+    of the layer's branches and a dispatch of `tests.yml` that makes a run of `dispatch_jobs`. A call is answered
+    with the JSON text GitHub would give; a refusal is a `GithubError`."""
+
+    def __init__(self, tmp_path, repo, dispatched_at, *, jobs=None, now=None):
+        self.repo = repo
+        self.at = dispatched_at  # the stamps of a dispatched run count from here
+        self.now = now or dispatched_at  # the stamps of the account's other jobs (`hold`) count back from here
+        self.zips = Path(tmp_path) / "zips"
+        self.zips.mkdir()
+        self.repos = [repo]
+        self.runs: dict[str, list[dict]] = {repo: []}
+        self.jobs: dict[int, list[dict]] = {}
+        self.artifacts: dict[int, list[dict]] = {}
+        self.dispatch_jobs = jobs or {}
+        self.run_status = "in_progress"  # a dispatched run's own status: GitHub leaves it so long after its jobs end
+        self.run_updated = 1100  # seconds after the dispatch the run's own record was last updated
+        self.enabled = True
+        self.known_shas = None  # None: every sha exists on GitHub
+        self.refs: dict[str, str] = {}
+        self.deleted: list[str] = []
+        self.cancelled: list[int] = []
+        self.calls: list[list[str]] = []
+        self._ids = 7000
+
+    def _next(self):
+        self._ids += 1
+        return self._ids
+
+    # building the account
+
+    def hold(self, other_repo, running, *, queued=0, queued_for=0):
+        """`other_repo` of the account runs `running` jobs and has `queued` jobs waiting for `queued_for` seconds."""
+
+        if other_repo not in self.repos:
+            self.repos.append(other_repo)
+            self.runs[other_repo] = []
+        run_id = self._next()
+        created = self.now - timedelta(seconds=queued_for + 60)
+        self.runs[other_repo].append(self._run(run_id, "in_progress", None, "pull_request", "feat/x", "o1", created))
+        jobs = [self._job(self._next(), f"job{n}", "in_progress", None, "ubuntu-latest", created, 5, None)
+                for n in range(running)]
+        jobs += [self._job(self._next(), f"wait{n}", "queued", None, "ubuntu-latest", created, None, None)
+                 for n in range(queued)]
+        self.jobs[run_id] = jobs
+        return run_id
+
+    def hold_jobs(self, other_repo, labels, *, status="in_progress", queued_for=0):
+        """One run of `other_repo` with one `status` job per entry of `labels` (a runner label or a list of them)."""
+
+        if other_repo not in self.repos:
+            self.repos.append(other_repo)
+            self.runs[other_repo] = []
+        run_id = self._next()
+        created = self.now - timedelta(seconds=queued_for + 60)
+        self.runs[other_repo].append(self._run(run_id, status, None, "pull_request", "feat/x", "o1", created))
+        self.jobs[run_id] = [self._job(self._next(), f"job{n}", status, None, label, created, 5, None)
+                             for n, label in enumerate(labels)]
+        return run_id
+
+    @staticmethod
+    def _run(run_id, status, conclusion, event, branch, sha, created):
+        return {"id": run_id, "status": status, "conclusion": conclusion, "event": event, "head_branch": branch,
+                "head_sha": sha, "run_attempt": 1, "created_at": stamp(created, 0),
+                "updated_at": stamp(created, 0), "pull_requests": []}
+
+    @staticmethod
+    def _job(job_id, name, status, conclusion, label, created, started, completed):
+        def at(seconds):
+            return None if seconds is None else stamp(created, seconds)
+
+        return {"id": job_id, "name": name, "status": status, "conclusion": conclusion, "run_attempt": 1,
+                "labels": [label] if isinstance(label, str) else list(label),
+                "created_at": at(0), "started_at": at(started), "completed_at": at(completed),
+                "steps": [{"name": "pytest", "started_at": at(started and started + 30),
+                           "completed_at": at(completed and completed - 30)}]}
+
+    # what GitHub answers
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        if args[0] == "run":
+            return self._download(args)
+        method = args[args.index("-X") + 1] if "-X" in args else "GET"
+        endpoint = next(a for a in args[1:] if a.startswith(("repos/", "user/")))
+        fields = {a.partition("=")[0]: a.partition("=")[2] for a in args[1:] if "=" in a and a != endpoint}
+        path, _, query = endpoint.partition("?")
+        asked = dict(part.partition("=")[::2] for part in query.split("&") if part)
+        parts = path.split("/")
+        if path == "user/repos":
+            return self._pages(args, asked, None, [{"full_name": r, "owner": {"login": r.split("/")[0]},
+                                                    "archived": False} for r in self.repos])
+        repo, rest = "/".join(parts[1:3]), "/".join(parts[3:])
+        if rest == "actions/permissions":
+            return json.dumps({"enabled": self.enabled})
+        if rest == "git/refs" and method == "POST":
+            if self.known_shas is not None and fields["sha"] not in self.known_shas:
+                raise GithubError("gh_failed", "422 Object does not exist")
+            self.refs[fields["ref"].removeprefix("refs/heads/")] = fields["sha"]
+            return "{}"
+        if rest.startswith("git/refs/heads/") and method == "DELETE":
+            self.deleted.append(rest.removeprefix("git/refs/heads/"))
+            return ""
+        if rest == "actions/workflows/tests.yml/dispatches":
+            self._dispatch(repo, fields["ref"])
+            return ""
+        if rest == "actions/workflows/tests.yml/runs":
+            return json.dumps({"workflow_runs": [r for r in self.runs[repo] if r["head_sha"] == asked["head_sha"]]})
+        if rest == "actions/runs":
+            return self._pages(args, asked, "workflow_runs",
+                               [r for r in self.runs[repo] if r["status"] == asked["status"]])
+        run_id, tail = int(parts[5]), (parts[6] if len(parts) > 6 else "")
+        if tail == "":
+            return json.dumps(next(r for r in self.runs[repo] if r["id"] == run_id))
+        if tail == "jobs":
+            return self._pages(args, asked, "jobs", self.jobs[run_id])
+        if tail == "artifacts":
+            return json.dumps({"artifacts": self.artifacts.get(run_id, [])})
+        if tail == "timing":
+            return json.dumps({"billable": {}})
+        if tail == "cancel":
+            self.cancelled.append(run_id)
+            return ""
+        raise AssertionError(args)
+
+    @staticmethod
+    def _pages(args, asked, key, items):
+        """What `gh api` prints for a list: the page asked for (`page`, `per_page`; GitHub's default is 30 items), or,
+        with `--paginate`, every page one after the other."""
+
+        size = int(asked.get("per_page", 30))
+        chunks = [items[i:i + size] for i in range(0, len(items), size)] or [[]]
+        if "--paginate" not in args:
+            chunks = chunks[int(asked.get("page", 1)) - 1:][:1] or [[]]
+        return "".join(json.dumps(chunk if key is None else {"total_count": len(items), key: chunk})
+                       for chunk in chunks)
+
+    def _dispatch(self, repo, ref):
+        run_id, sha = self._next(), self.refs[ref]
+        run = self._run(run_id, self.run_status, None, "workflow_dispatch", ref, sha, self.at)
+        run["updated_at"] = stamp(self.at, self.run_updated)
+        self.runs[repo].append(run)
+        self.jobs[run_id] = []
+        for name, spec in self.dispatch_jobs.items():
+            done = spec.completed is not None
+            created = self.at + timedelta(seconds=spec.queued)
+            self.jobs[run_id].append(self._job(
+                self._next(), name, "completed" if done else "in_progress", spec.conclusion if done else None,
+                spec.label, created, spec.started - spec.queued, spec.completed - spec.queued if done else None))
+            if spec.cases is not None and done:
+                artifact = f"junit-{name}-1"
+                self.artifacts.setdefault(run_id, []).append({"name": artifact, "expired": False})
+                with zipfile.ZipFile(self.zips / f"{run_id}-{artifact}.zip", "w") as z:
+                    z.writestr("junit.xml", junit_xml(spec.cases))
+
+    def _download(self, args):
+        run_id, name, folder = int(args[2]), args[args.index("-n") + 1], Path(args[args.index("-D") + 1])
+        source = self.zips / f"{run_id}-{name}.zip"
+        if not source.exists():
+            raise GithubError("gh_failed", f"no artifact {name}")
+        with zipfile.ZipFile(source) as z:
+            z.extractall(folder)
+        return ""
+
+
 def ago(hub, **delta):
     return hub.now - timedelta(**delta)
 
 
-__all__ = ["FAILED", "NO_RESULT", "PASSED", "PENDING", "REPO", "REQUIRED", "Comment", "FakeGitHub", "ago"]
+__all__ = ["DispatchedJob", "FakeActions", "FAILED", "NO_RESULT", "PASSED", "PENDING", "REPO", "REQUIRED", "Comment", "FakeGitHub", "ago"]

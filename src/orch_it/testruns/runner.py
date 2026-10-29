@@ -15,7 +15,7 @@ import math
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,6 +24,8 @@ from orch_it.events import schema
 from orch_it.events.store import Store
 from orch_it.testruns import environment, outcome, place_rule
 from orch_it.testruns.config import TestSettings
+from orch_it.testruns.github import run_gh
+from orch_it.testruns.github_place import GithubPlace
 from orch_it.testruns.machine import MachinePlace
 from orch_it.testruns.places import OwnPlace, PlaceEnd, PlaceRefused, PlaceVanished, Request
 
@@ -98,20 +100,25 @@ def selection_of(ids: list[str] | None) -> str:
 
 def offers_of(settings: TestSettings, places: dict) -> list[place_rule.Offer]:
     """Every test place in the rule's tie order: own, the machines in settings order, github.
-    A place with no adapter here is offered switched off."""
+    A place with no adapter here is offered switched off. The github place is offered for the OSes its
+    required jobs run on (`places["github"].oses`, else its adapter's `os`), never for the check names."""
 
     own = places.get("own")
     offers = [place_rule.Offer("own", (own.os if own else environment.this_os(),), own is not None,
                                settings.own_capacity)]
     offers += [place_rule.Offer(m.place, (m.os,), m.on and m.place in places, m.capacity)
                for m in settings.machines]
-    offers.append(place_rule.Offer("github", settings.required_checks,
-                                   settings.github_tests and "github" in places, settings.github_capacity))
+    github = places.get("github")
+    github_oses = tuple(getattr(github, "oses", None) or ((github.os,) if getattr(github, "os", None) else ()))
+    offers.append(place_rule.Offer("github", github_oses, settings.github_tests and github is not None,
+                                   settings.github_capacity))
     return offers
 
 
-def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, ...] = ("ssh",)) -> dict:
-    """The own place and one machine place per machine of the settings. A machine clones and
+def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, ...] = ("ssh",),
+                   repo: str | None = None, store: Store | None = None) -> dict:
+    """The own place, one machine place per machine of the settings, and the github place when the
+    setting `github_tests` is on (it needs the `repo` and the `store`). A machine clones and
     fetches from its own `origin` setting, else from the work tree's `origin`."""
 
     places = {"own": OwnPlace()}
@@ -119,6 +126,8 @@ def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, .
         origin = git_output(work_tree, "remote", "get-url", "origin")
         for machine in settings.machines:
             places[machine.place] = MachinePlace(machine, origin_url=origin, ssh=ssh)
+    if settings.github_tests and repo is not None and store is not None:
+        places["github"] = GithubPlace.for_work_tree(work_tree, repo=repo, store=store, settings=settings, gh=run_gh)
     return places
 
 
@@ -139,11 +148,11 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     if need_os not in NEED_OSES:
         raise RunError("bad_os", need_os)
     ids = read_ids(ids_file) if ids_file is not None else None
-    places = places if places is not None else default_places(settings, work_tree)
+    places = places if places is not None else default_places(settings, work_tree, repo=repo, store=store)
     if place is not None and place not in places:
         raise RunError("unknown_place", place)
     run = _Run(store, work_tree, repo, settings, ids, role, ticket, offers_of(settings, places),
-               need_os, now or (lambda: datetime.now(UTC)))
+               need_os, now or (lambda: datetime.now(UTC)), places)
     with store.writer() as writer:
         if place is not None:  # a human's choice: taken as it is, the rule's view kept beside it
             decision = place_rule.Decision(place, "forced", run.decide({}).offered)
@@ -179,10 +188,10 @@ def _polls(settings: TestSettings, wait_minutes: float | None) -> int:
 class _Run:
     """The facts every attempt of one run shares, and the events of one attempt."""
 
-    def __init__(self, store, work_tree, repo, settings, ids, role, ticket, offers, need_os, now):
+    def __init__(self, store, work_tree, repo, settings, ids, role, ticket, offers, need_os, now, places=None):
         self.store, self.work_tree, self.repo, self.settings = store, work_tree, repo, settings
         self.ids, self.selection = ids, selection_of(ids)
-        self.offers, self.need_os, self.now = offers, need_os, now
+        self.offers, self.need_os, self.now, self.places = offers, need_os, now, places or {}
         self.base = {"repo": repo, "ticket": ticket, "role": role, "session": None,
                      "parent_session": None, "turn": None, "note": None}
         self.commit = git_output(work_tree, "rev-parse", "HEAD")
@@ -196,7 +205,17 @@ class _Run:
     def decide(self, excluded: dict[str, str]) -> place_rule.Decision:
         live, measured = place_rule.read_facts(self.store, repo=self.repo, selection=self.selection,
                                                need_os=self.need_os, now=self.now())
-        return place_rule.choose(self.need_os, self.offers, live, measured, excluded)
+        offers, notes = self.offers, {}
+        github = self.places.get("github")
+        if hasattr(github, "availability"):  # the place whose room is the account's, read from GitHub
+            offers = []
+            for offer in self.offers:
+                if offer.place == "github" and offer.on:
+                    room = github.availability(self.now())
+                    live["github"], notes["github"] = room.busy, room.note
+                    offer = replace(offer, on=room.on, capacity=room.limit)
+                offers.append(offer)
+        return place_rule.choose(self.need_os, offers, live, measured, excluded, notes)
 
     def may_free(self, decision: place_rule.Decision, excluded: dict[str, str]) -> bool:
         """A place busy with live runs that has room once they end: the only drop a wait can
@@ -250,7 +269,8 @@ class _Run:
 
     def attempt(self, writer, adapter, decision) -> RunDone:
         envelope = self.envelope("test_run")
-        self._started(writer, envelope, decision, adapter.os)
+        self._started(writer, envelope, decision,
+                      adapter.os or (self.need_os if self.need_os != "any" else None))
         request = Request(self.work_tree, self.commit, self.settings.command, self.settings.test_env,
                           self.settings.bound_minutes * 60, self.ids)
         with tempfile.TemporaryDirectory(prefix="orch-it-run-") as scratch:
