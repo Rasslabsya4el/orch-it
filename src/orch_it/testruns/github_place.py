@@ -106,6 +106,15 @@ def _unquote(text: str) -> str:
     return text[1:-1] if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"" else text
 
 
+def _is_machine_of_the_limit(job: dict) -> bool:
+    """A job on a GitHub-hosted Linux or Windows runner: the machines the account's limit is about (a self-hosted
+    runner or a macOS one is not counted against it)."""
+
+    labels = [label for label in job.get("labels") or [] if isinstance(label, str)]
+    hosted = "self-hosted" not in (label.lower() for label in labels)
+    return hosted and os_of({"labels": labels}) in ("linux", "windows")
+
+
 def _stored_oses(store: Store, repo: str) -> tuple[str, ...]:
     """The OSes of the github-role test runs the store holds for `repo`, in the order of the closed list."""
 
@@ -181,12 +190,15 @@ class GithubPlace:
                     or str((entry.get("owner") or {}).get("login", "")).lower() != owner):
                 continue
             for status in ("in_progress", "queued"):
-                runs = items_of(self.gh(["api", f"repos/{full}/actions/runs?status={status}&per_page={PER_PAGE}"]),
+                runs = items_of(self.gh(["api", "--paginate",
+                                         f"repos/{full}/actions/runs?status={status}&per_page={PER_PAGE}"]),
                                 "workflow_runs")
                 for run in runs:
-                    jobs = items_of(self.gh(["api", f"repos/{full}/actions/runs/{run['id']}/jobs"
+                    jobs = items_of(self.gh(["api", "--paginate", f"repos/{full}/actions/runs/{run['id']}/jobs"
                                                     f"?filter=latest&per_page={PER_PAGE}"]), "jobs")
                     for job in jobs:
+                        if not _is_machine_of_the_limit(job):
+                            continue
                         if job.get("status") == "in_progress":
                             busy += 1
                         elif job.get("status") == "queued":

@@ -223,6 +223,34 @@ def test_a_job_that_only_just_queued_does_not_make_the_runs_show_a_limit(world):
     assert offered(starts(world.store)[0])["note"] == "8 busy of 20"
 
 
+def test_the_busy_count_pages_through_every_run_of_the_account(world):
+    for _ in range(130):
+        world.actions.hold_jobs(OTHER, ["ubuntu-latest"])
+    run(world)
+    assert offered(starts(world.store)[0])["note"] == "130 busy of 20"
+
+
+def test_the_busy_count_pages_through_every_job_of_a_run(world):
+    world.actions.hold_jobs(OTHER, ["windows-latest"] * 130)
+    run(world)
+    assert offered(starts(world.store)[0])["note"] == "130 busy of 20"
+
+
+def test_only_github_hosted_linux_and_windows_jobs_are_machines_of_the_limit(world):
+    world.actions.hold_jobs(OTHER, ["ubuntu-24.04", "ubuntu-latest", "windows-2022", "windows-latest"])
+    world.actions.hold_jobs(OTHER, ["macos-latest", "macos-14", ["self-hosted", "linux", "x64"],
+                                    ["self-hosted", "windows"], ["self-hosted"]])
+    run(world)
+    assert offered(starts(world.store)[0])["note"] == "4 busy of 20"
+
+
+def test_a_queued_self_hosted_or_macos_job_does_not_make_the_runs_show_a_limit(world):
+    world.actions.hold(OTHER, 5)
+    world.actions.hold_jobs(OTHER, ["macos-latest", ["self-hosted", "linux"]], status="queued", queued_for=300)
+    run(world)
+    assert offered(starts(world.store)[0])["note"] == "5 busy of 20"
+
+
 # --- off, out of requests ------------------------------------------------------------------------------
 
 def test_github_is_not_offered_while_actions_is_off_and_the_decision_says_so(world):

@@ -396,6 +396,19 @@ class FakeActions:
         self.jobs[run_id] = jobs
         return run_id
 
+    def hold_jobs(self, other_repo, labels, *, status="in_progress", queued_for=0):
+        """One run of `other_repo` with one `status` job per entry of `labels` (a runner label or a list of them)."""
+
+        if other_repo not in self.repos:
+            self.repos.append(other_repo)
+            self.runs[other_repo] = []
+        run_id = self._next()
+        created = self.now - timedelta(seconds=queued_for + 60)
+        self.runs[other_repo].append(self._run(run_id, status, None, "pull_request", "feat/x", "o1", created))
+        self.jobs[run_id] = [self._job(self._next(), f"job{n}", status, None, label, created, 5, None)
+                             for n, label in enumerate(labels)]
+        return run_id
+
     @staticmethod
     def _run(run_id, status, conclusion, event, branch, sha, created):
         return {"id": run_id, "status": status, "conclusion": conclusion, "event": event, "head_branch": branch,
@@ -408,7 +421,8 @@ class FakeActions:
             return None if seconds is None else stamp(created, seconds)
 
         return {"id": job_id, "name": name, "status": status, "conclusion": conclusion, "run_attempt": 1,
-                "labels": [label], "created_at": at(0), "started_at": at(started), "completed_at": at(completed),
+                "labels": [label] if isinstance(label, str) else list(label),
+                "created_at": at(0), "started_at": at(started), "completed_at": at(completed),
                 "steps": [{"name": "pytest", "started_at": at(started and started + 30),
                            "completed_at": at(completed and completed - 30)}]}
 
@@ -425,8 +439,8 @@ class FakeActions:
         asked = dict(part.partition("=")[::2] for part in query.split("&") if part)
         parts = path.split("/")
         if path == "user/repos":
-            return json.dumps([{"full_name": r, "owner": {"login": r.split("/")[0]}, "archived": False}
-                               for r in self.repos])
+            return self._pages(args, asked, None, [{"full_name": r, "owner": {"login": r.split("/")[0]},
+                                                    "archived": False} for r in self.repos])
         repo, rest = "/".join(parts[1:3]), "/".join(parts[3:])
         if rest == "actions/permissions":
             return json.dumps({"enabled": self.enabled})
@@ -444,12 +458,13 @@ class FakeActions:
         if rest == "actions/workflows/tests.yml/runs":
             return json.dumps({"workflow_runs": [r for r in self.runs[repo] if r["head_sha"] == asked["head_sha"]]})
         if rest == "actions/runs":
-            return json.dumps({"workflow_runs": [r for r in self.runs[repo] if r["status"] == asked["status"]]})
+            return self._pages(args, asked, "workflow_runs",
+                               [r for r in self.runs[repo] if r["status"] == asked["status"]])
         run_id, tail = int(parts[5]), (parts[6] if len(parts) > 6 else "")
         if tail == "":
             return json.dumps(next(r for r in self.runs[repo] if r["id"] == run_id))
         if tail == "jobs":
-            return json.dumps({"total_count": len(self.jobs[run_id]), "jobs": self.jobs[run_id]})
+            return self._pages(args, asked, "jobs", self.jobs[run_id])
         if tail == "artifacts":
             return json.dumps({"artifacts": self.artifacts.get(run_id, [])})
         if tail == "timing":
@@ -458,6 +473,18 @@ class FakeActions:
             self.cancelled.append(run_id)
             return ""
         raise AssertionError(args)
+
+    @staticmethod
+    def _pages(args, asked, key, items):
+        """What `gh api` prints for a list: the page asked for (`page`, `per_page`; GitHub's default is 30 items), or,
+        with `--paginate`, every page one after the other."""
+
+        size = int(asked.get("per_page", 30))
+        chunks = [items[i:i + size] for i in range(0, len(items), size)] or [[]]
+        if "--paginate" not in args:
+            chunks = chunks[int(asked.get("page", 1)) - 1:][:1] or [[]]
+        return "".join(json.dumps(chunk if key is None else {"total_count": len(items), key: chunk})
+                       for chunk in chunks)
 
     def _dispatch(self, repo, ref):
         run_id, sha = self._next(), self.refs[ref]
