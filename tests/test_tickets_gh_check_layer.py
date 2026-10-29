@@ -23,7 +23,7 @@ pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # the writer and the
 OWNER = REPO.split("/")[0]
 WORKFLOW = "name: tests\non: push\njobs:\n  linux:\n    name: tests\n    runs-on: ubuntu-latest\n    steps: []\n"
 NL = chr(10)
-LITERAL = "Facts: taskkill ends the old run before the new one starts."  # one literal finding (#413 unit 6)
+LITERAL = "Facts: run `python -m pytest` by hand before the new run starts."  # one literal finding (#413 unit 6): a bare python
 
 
 def red():
