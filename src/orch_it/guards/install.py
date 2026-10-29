@@ -106,7 +106,7 @@ def pre_push_present(root: Path) -> bool:
 
 
 def claude_hook_present(root: Path) -> bool:
-    """Whether `.claude/settings.json` wires `python -m orch_it hook pre-tool-use` on PreToolUse.
+    """Whether `.claude/settings.json` wires `orch_it hook pre-tool-use` (through hooks/orch-it) on PreToolUse.
     A missing, unreadable or differently shaped file holds no hook."""
 
     try:

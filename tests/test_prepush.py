@@ -483,7 +483,8 @@ def test_the_pre_push_hook_script_fails_open_on_a_launcher_failure(tmp_path, fak
         pytest.skip("no POSIX sh to run the hook script")
     script = Path(__file__).resolve().parents[1] / "hooks" / "pre-push"
     fake = tmp_path / "fake-interpreter"
-    fake.write_text(f"#!/bin/sh\nexit {fake_code}\n")
+    # the probe `-c "import orch_it"` exits 0 so the shim picks this fake; the run then exits with fake_code
+    fake.write_text(f'#!/bin/sh\ncase "$*" in\n  *"import orch_it"*) exit 0 ;;\nesac\nexit {fake_code}\n')
     fake.chmod(0o755)
     env = dict(os.environ)
     env["ORCH_IT_PYTHON"] = fake.as_posix()  # the shim runs this interpreter, whatever PATH holds
