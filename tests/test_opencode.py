@@ -51,6 +51,40 @@ class Stub:
         return json.loads(self.record.read_text())
 
 
+class Squatter(http.server.ThreadingHTTPServer):
+    """Another program holding a port: it listens and answers 404 to every call. Off the reuse flag,
+    as the stub's listener is, so a bind to its port is refused on every OS."""
+
+    allow_reuse_address = False
+
+
+class SquatterHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def squatters():
+    """A function that starts one squatter and returns it; every squatter is closed after the test."""
+    started = []
+
+    def squat():
+        httpd = Squatter(("127.0.0.1", 0), SquatterHandler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        started.append(httpd)
+        return httpd
+
+    yield squat
+    for httpd in started:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def wait_idle(client, session, seconds=15):
     deadline = time.monotonic() + seconds
     while client.busy(session):
@@ -106,6 +140,66 @@ def test_a_program_that_cannot_start_is_a_start_failure(tmp_path):
     with pytest.raises(OpencodeError) as caught:
         Stub(tmp_path).server(["no-such-program-orch-it"]).__enter__()
     assert caught.value.code == "server_start_failed"
+
+
+def test_a_port_another_program_holds_is_skipped_and_the_next_one_is_used(tmp_path, monkeypatch, squatters):
+    taken = squatters().server_address[1]
+    real_free_port = opencode.free_port
+    picks = [taken]
+    monkeypatch.setattr(opencode, "free_port", lambda: picks.pop(0) if picks else real_free_port())
+    stub = Stub(tmp_path)
+    server = stub.server()
+    with server as client:
+        assert client.busy("any") is False
+        assert server.port != taken
+    log = (stub.dir / "state" / "server.log").read_text()
+    assert f"start on port {taken}" in log and f"start on port {server.port}" in log
+
+
+def test_when_every_port_is_taken_the_start_fails_after_its_tries(tmp_path, monkeypatch, squatters):
+    monkeypatch.setattr(opencode, "START_TRIES", 3)
+    taken = [squatters().server_address[1] for _ in range(3)]
+    ports = iter(taken)
+    monkeypatch.setattr(opencode, "free_port", lambda: next(ports))
+    stub = Stub(tmp_path)
+    server = stub.server()
+    with pytest.raises(OpencodeError) as caught:
+        server.__enter__()
+    assert caught.value.code == "server_start_failed"
+    assert "no free port in 3 tries" in str(caught.value)
+    assert "the last 1" in str(caught.value)
+    log = (stub.dir / "state" / "server.log").read_text()
+    assert log.count("start on port") == 3
+    assert all(f"start on port {port}" in log for port in taken)
+    assert server.port == taken[-1]
+    assert dead_within(server.pid)
+
+
+def test_three_servers_started_at_once_each_answer_on_a_port_of_their_own(tmp_path):
+    for round_no in range(5):
+        stubs = [Stub(tmp_path, f"round{round_no}-{i}", root=f"s{i}") for i in range(3)]
+        servers = [stub.server() for stub in stubs]
+        answers = [None] * 3
+        errors = []
+        alive_together = threading.Barrier(3)
+
+        def run(i):
+            try:
+                with servers[i] as client:
+                    answers[i] = (servers[i].port, client.busy("any") is False)
+                    alive_together.wait(60)  # all three are up before any of them stops
+            except Exception as e:  # reported below, from the test's own thread
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=run, args=(i,)) for i in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(120)
+        assert not any(thread.is_alive() for thread in threads), f"round {round_no}: a start hung"
+        assert errors == [], f"round {round_no}"
+        assert all(answer is not None and answer[1] for answer in answers), f"round {round_no}"
+        assert len({answer[0] for answer in answers}) == 3, f"round {round_no}: ports {answers}"
 
 
 def test_a_server_that_never_answers_is_cut_at_its_bound_and_its_tree_is_killed(tmp_path):

@@ -106,6 +106,12 @@ def generate_forever() -> None:
                 assistant_message(index, int(time.time() * 1000), f"step {index} of the work"))
 
 
+class Listener(ThreadingHTTPServer):
+    # HTTPServer sets allow_reuse_address, which on Windows lets this socket bind a port another
+    # process already holds; off, a taken port refuses the bind, as on the real opencode
+    allow_reuse_address = False
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -191,6 +197,11 @@ def main(argv: list) -> int:
     if SCENARIO.get("mode") == "exit":
         print("stub: told to exit at start", file=sys.stderr)
         return 3
+    try:  # a taken port ends the process at once with code 1, as the real opencode does
+        server = Listener((options.get("--hostname", "127.0.0.1"), int(options["--port"])), Handler)
+    except OSError as e:
+        print(f"stub: cannot listen on {options.get('--port')}: {e}", file=sys.stderr)
+        return 1
     config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT") or "{}")
     key_env, key_present = key_facts(config)
     RECORD.update({"pid": os.getpid(), "prompts": [], "aborted": [], "directories": [], "config": config,
@@ -204,7 +215,6 @@ def main(argv: list) -> int:
     write_record()
     if SCENARIO.get("mode") == "hang":
         threading.Thread(target=generate_forever, daemon=True).start()
-    server = ThreadingHTTPServer((options.get("--hostname", "127.0.0.1"), int(options["--port"])), Handler)
     server.daemon_threads = True
     server.serve_forever()
     return 0
