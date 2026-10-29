@@ -79,17 +79,23 @@ def read_context(folder: str | None) -> Context:
                    roots=repo_roots(work))
 
 
-def find_text(text: str, *, stays: bool, context: Context) -> list[Hit]:
-    """The hits of `text`: each value of the setup in any spelling (`guards.values.find_in`) and each pattern kind
-    (`guards.kinds.find_in_ticket_text`). For text that stays on this machine, the run-time locations are masked
-    first, so a token that is a session's scratchpad, a worktree, or a path inside a root is no hit."""
+def find_text(text: str, *, stays: bool, context: Context, path: str | None = None) -> list[Hit]:
+    """The hits of `text`: each value of the setup in any spelling (`guards.values.find_in`) and each pattern kind.
+    The pattern kinds are judged by the file `path` when the text is a file's (`guards.kinds.find_pattern_kinds`),
+    and as ticket text otherwise (`guards.kinds.find_in_ticket_text`). For text that stays on this machine, the
+    run-time locations are masked first, so a token that is a session's scratchpad, a worktree, or a path inside a
+    root is no hit."""
 
-    from orch_it.guards.kinds import find_in_ticket_text
+    from orch_it.guards.kinds import find_in_ticket_text, find_pattern_kinds
     from orch_it.guards.values import find_in
 
     checked = _masked(text, context.roots) if stays else text
     found = [Hit(finding.kind, finding.line) for finding in find_in(checked, context.values)]
-    found += [Hit(finding.kind, finding.line) for finding in find_in_ticket_text(checked, context.job_names)]
+    if path is None:
+        pattern = find_in_ticket_text(checked, context.job_names)
+    else:
+        pattern = find_pattern_kinds(path, checked, context.job_names)
+    found += [Hit(finding.kind, finding.line) for finding in pattern]
     return sorted(found, key=lambda hit: (hit.line, hit.kind))
 
 
@@ -110,10 +116,12 @@ def judge_call(payload: dict, context: Callable[[str | None], Context]) -> tuple
     folder = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
     setup = context(folder)
     file = tool_input.get(FILE_KEY)
-    stays = not isinstance(file, str)
-    if not stays and not _inside(file, folder, setup.roots):
-        return [], ""
-    hits = [hit for text in texts for hit in find_text(text, stays=stays, context=setup)]
+    if isinstance(file, str):
+        if not _inside(file, folder, setup.roots):
+            return [], ""
+        hits = [hit for text in texts for hit in find_text(text, stays=False, context=setup, path=file)]
+    else:
+        hits = [hit for text in texts for hit in find_text(text, stays=True, context=setup)]
     return hits, setup.values.render_not_checked()
 
 

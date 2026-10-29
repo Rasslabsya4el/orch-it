@@ -115,17 +115,46 @@ def test_a_message_holding_a_kind_is_refused(kind):
     assert kind in kinds_of(hits)
 
 
-@pytest.mark.parametrize("kind", sorted(KIND_SAMPLES))
-def test_a_write_of_a_repo_record_holding_a_kind_is_refused(kind):
+MACHINE_VALUE_KINDS = sorted(k for k in KIND_SAMPLES if k not in kinds.KINDS)
+
+
+@pytest.mark.parametrize("kind", MACHINE_VALUE_KINDS)
+def test_a_write_of_a_repo_record_holding_a_machine_value_is_refused(kind):
     hits = judge(call("Write", {"file_path": f"{REPO_ROOT}/docs/STATE.md", "content": KIND_SAMPLES[kind]}))
     assert kind in kinds_of(hits)
 
 
-@pytest.mark.parametrize("kind", sorted(KIND_SAMPLES))
-def test_an_edit_of_a_grill_record_holding_a_kind_is_refused(kind):
+@pytest.mark.parametrize("kind", MACHINE_VALUE_KINDS)
+def test_an_edit_of_a_grill_record_holding_a_machine_value_is_refused(kind):
     hits = judge(call("Edit", {"file_path": f"{REPO_ROOT}/docs/grill/2026-10-29.md",
                                "old_string": "x", "new_string": KIND_SAMPLES[kind]}))
     assert kind in kinds_of(hits)
+
+
+def test_a_file_write_is_judged_by_the_file_it_writes_for_the_pattern_kinds():
+    # a record (.md) holds a bare python only inside a code fence, where a prose mention is no command
+    fenced = "step:\n```\npython -m pytest -q\n```\n"
+    assert "bare_python" in kinds_of(judge(call("Write", {"file_path": f"{REPO_ROOT}/docs/STATE.md",
+                                                          "content": fenced})))
+    prose = "run `python -m pytest -q` first\n"
+    assert judge(call("Write", {"file_path": f"{REPO_ROOT}/docs/STATE.md", "content": prose})) == []
+
+
+def test_a_python_file_is_judged_by_its_call_forms_and_its_job_names():
+    call_form = 'import subprocess\nsubprocess.run(["python", "-m", "pytest", "-q"])\n'
+    assert "bare_python" in kinds_of(judge(call("Write", {"file_path": f"{REPO_ROOT}/tests/t_x.py",
+                                                          "content": call_form})))
+    job = 'check = "lint-and-types"\n'
+    assert "check_name_literal" in kinds_of(judge(call("Write", {"file_path": f"{REPO_ROOT}/tests/t_x.py",
+                                                                "content": job})))
+
+
+def test_legitimate_python_code_with_no_machine_value_or_call_form_is_not_refused():
+    code = ('import re\n'
+            'PYTHON_WORD = re.compile(r"^python3?$")\n'
+            '# a comment that says python -m pytest in prose\n'
+            'def run(): return None\n')
+    assert judge(call("Write", {"file_path": f"{REPO_ROOT}/src/orch_it/x.py", "content": code})) == []
 
 
 def test_the_refusal_names_the_rule_and_the_kind():
