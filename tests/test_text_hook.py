@@ -385,9 +385,36 @@ def run_cli(monkeypatch, capsys, argv, stdin_text):
 
 
 def test_check_text_leaves_the_machine_is_clean_with_exit_0(monkeypatch, capsys):
-    code, out, _ = run_cli(monkeypatch, capsys, ["guards", "check-text", "--leaves-machine"], "fix the parser\n")
+    code, out, err = run_cli(monkeypatch, capsys, ["guards", "check-text", "--leaves-machine"], "fix the parser\n")
     assert code == 0
-    assert json.loads(out) == {"ok": True, "findings": []}
+    assert json.loads(out) == {"ok": True, "findings": [], "not_checked": []}
+    assert err == ""
+
+
+def test_check_text_pass_names_the_kinds_it_could_not_read_and_prints_the_line(monkeypatch, capsys):
+    # no git e-mail on this setup: a clean result still says which kind was not checked
+    no_email = read_values(env={"USERNAME": "tester9"}, home=HOME_WIN, host="testbox-17",
+                           run=fake_run({k: v for k, v in MACHINE.items() if k != "user.email"}))
+    bare = text_hook.Context(values=no_email, job_names=JOB_NAMES, roots=REPO_ROOTS, repo=REPO_ROOT)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("fix the parser\n"))
+    monkeypatch.setattr(text_hook, "read_context", lambda folder: bare)
+    code = cli.main(["guards", "check-text", "--leaves-machine"])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert json.loads(captured.out)["not_checked"] == ["git_email"]
+    assert "not checked" in captured.err and "git_email" in captured.err
+
+
+def test_check_text_with_a_finding_also_names_the_kinds_not_read(monkeypatch, capsys):
+    no_email = read_values(env={"USERNAME": "tester9"}, home=HOME_WIN, host="testbox-17",
+                           run=fake_run({k: v for k, v in MACHINE.items() if k != "user.email"}))
+    bare = text_hook.Context(values=no_email, job_names=JOB_NAMES, roots=REPO_ROOTS, repo=REPO_ROOT)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(KIND_SAMPLES["account"] + "\n"))
+    monkeypatch.setattr(text_hook, "read_context", lambda folder: bare)
+    code = cli.main(["guards", "check-text", "--leaves-machine"])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert result["not_checked"] == ["git_email"]
 
 
 def test_check_text_leaves_the_machine_refuses_a_kind_with_exit_1(monkeypatch, capsys):

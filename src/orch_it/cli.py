@@ -366,8 +366,10 @@ def _guards(args) -> tuple[str, int]:
 
 def _guards_check_text(args) -> tuple[str, int]:
     """`guards check-text`: the value check (`guards.text_hook`) on the text on stdin, judged as text that leaves the
-    machine or as text that stays on it. One JSON line, `{"ok", "findings"}`; exit 0 clean, 1 on a finding, and
-    `CommandError("check_unreachable")` (exit 2) when the check cannot run: a check that cannot run is no clean result."""
+    machine or as text that stays on it. One JSON line, `{"ok", "findings", "not_checked"}`, where `not_checked` lists
+    the kinds the setup could not read; exit 0 clean, 1 on a finding, and `CommandError("check_unreachable")` (exit 2)
+    when the check cannot run: a check that cannot run is no clean result. On a clean result with kinds not checked,
+    the not-checked line goes to stderr, so a clean result is never shown without it."""
 
     text = sys.stdin.read()
     try:
@@ -376,7 +378,12 @@ def _guards_check_text(args) -> tuple[str, int]:
     except Exception as e:  # noqa: BLE001 - whatever stops the check, the check did not run
         raise CommandError("check_unreachable", f"{type(e).__name__}: {e}") from e
     findings = [{"kind": hit.kind, "rule": language.english("text_rule")} for hit in hits]
-    return json.dumps({"ok": not findings, "findings": findings}) + "\n", 1 if findings else 0
+    not_checked = [kind for kind, _ in context.values.not_checked]
+    notice = context.values.render_not_checked()
+    if not findings and notice:
+        sys.stderr.write(notice + "\n")
+    result = {"ok": not findings, "findings": findings, "not_checked": not_checked}
+    return json.dumps(result) + "\n", 1 if findings else 0
 
 
 def _guards_status(args) -> tuple[str, int]:
