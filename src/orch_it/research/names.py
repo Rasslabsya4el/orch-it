@@ -30,19 +30,17 @@ their line numbers.
 from __future__ import annotations
 
 import ast
-import json
 import re
 from collections.abc import Iterable
 from pathlib import Path
 
 from orch_it import settings as installation
 from orch_it.research.settings import ResearchSettings
-from orch_it.settings import SettingsError
+from orch_it.settings import TREE_SETTINGS, tree_settings  # the one reader of the work tree's settings.json (#453)
 
 NEUTRAL = frozenset({"research", "model", "provider"})
 MIN_LENGTH = 3  # a whole name
 WORD_MIN_LENGTH = 4  # a word of a name
-TREE_SETTINGS = "settings.json"  # the settings file a work tree carries at its root
 MARKER = "_Avoid_"
 WHOLE_FILES = (".mcp.json", "src/orch_it/research/mcp.py", "GLOSSARY.md", "README.md",
                ".claude/agents/*.md", ".claude/skills/**/SKILL.md", "docs/**/*.md")
@@ -100,22 +98,6 @@ def refused_names_from_installation(known: Iterable[str] = (), work_tree: Path |
     if work_tree is not None:
         names |= refused_names_of_tree(work_tree)
     return names
-
-
-def tree_settings(root: Path) -> dict | None:
-    """The settings file a work tree carries at its root, parsed; None when it has none. A file that is
-    no JSON object raises `SettingsError`, as the installation's does."""
-
-    path = Path(root) / TREE_SETTINGS
-    if not path.is_file():
-        return None
-    try:
-        raw = json.loads(path.read_text("utf-8-sig"))
-    except (OSError, ValueError) as e:
-        raise SettingsError("settings_unreadable", f"{path}: {e}") from None
-    if not isinstance(raw, dict):
-        raise SettingsError("settings_unreadable", f"{path}: not an object")
-    return raw
 
 
 def refused_names_of_tree(root: Path, known: Iterable[str] = ()) -> set[str]:

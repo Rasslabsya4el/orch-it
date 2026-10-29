@@ -2,14 +2,16 @@
 
 Every test gets ORCH_IT_SETTINGS set, through monkeypatch, to a settings file in a folder of its own under pytest's
 temporary base. A test that sets the variable itself runs later and its own monkeypatch value wins.
-"""
 
-import json
-import os
-from pathlib import Path
+The language (#453 unit 1) is read from the `settings.json` at the root of the cwd's git work tree. The cwd of every
+test is a folder of its own that is no git tree (GIT_CEILING_DIRECTORIES stops the lookup at the test's base), so the
+suite's language is English unless a test writes its own tree file.
+"""
 
 import pytest
 from orch_it.testruns.junit import MARKER_PROPERTY
+
+from language_tree import git_tree, write_language
 
 
 @pytest.fixture(autouse=True)
@@ -20,13 +22,20 @@ def isolated_settings(tmp_path_factory, monkeypatch):
     # the per-user data folder (store, locks, caches) is the OS base plus "orch-it": point both bases at the test's own
     monkeypatch.setenv("LOCALAPPDATA", str(folder / "local"))
     monkeypatch.setenv("XDG_DATA_HOME", str(folder / "share"))
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(folder))
+    cwd = folder / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
 
 
 @pytest.fixture
-def ticket_language_ru(isolated_settings):
-    """The human block of a ticket is Russian (#413 unit 10a): the setting `human_language` is `ru`. For a test
+def ticket_language_ru(tmp_path, monkeypatch):
+    """The human block of a ticket is Russian (#413 unit 10a): the `settings.json` at the root of the git work tree
+    of the test's cwd sets `human_language` to `ru` (#453 unit 1; the installation file never carries it). For a test
     module whose ticket bodies (fixtures, texts the code writes) are Russian: `pytestmark = usefixtures(...)`."""
-    Path(os.environ["ORCH_IT_SETTINGS"]).write_text(json.dumps({"human_language": "ru"}), "utf-8")
+    tree = git_tree(tmp_path / "ru-tree")
+    monkeypatch.chdir(tree)
+    write_language(tree, "ru")
 
 
 @pytest.fixture(scope="session")

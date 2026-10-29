@@ -13,13 +13,13 @@ the check names of the workflows in the workspace. A values line that is not che
 
 A ticket the layer's own code writes (the skills issue, the red-on-main, no-result and workflow-watch tickets) is
 marked with `CODE_WRITTEN_MARK` among the leading comment lines of its body and opened by a bot or the repo's owner
-login. It is written in the writer's `human_language` and with the layer's own commands in it; no runner has the
-owner's settings, so on GitHub such a ticket is judged by the shape rules alone, without the language rule and the
-literal rules (#424 unit 8); the writers do not run those two either (the openers check with `violations` only). An
-edit counts only when its sender is a bot or the owner too; a person's ticket is judged in full whatever its body
-says. Known limits: anyone writing under the owner login can paste the mark (bounded by its place among the leading
-lines and by the sender test), and an organisation-owned repo whose layer account is not the owner login loses the
-exemption.
+login. The runner reads `human_language` from the `settings.json` at the root of its checkout's work tree (#453
+unit 1), the file the writers read, so the same language judges a code-written ticket on both sides: it is judged by
+the shape rules, the language rule included. It is still not judged by the literal rules, because it carries the
+layer's own commands on purpose (#424 unit 8). An edit counts only when its sender is a bot or the owner too; a
+person's ticket is judged in full whatever its body says. Known limits: anyone writing under the owner login can paste
+the mark (bounded by its place among the leading lines and by the sender test), and an organisation-owned repo whose
+layer account is not the owner login loses the exemption.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ from orch_it.tickets.model import CODE_WRITTEN_MARK, PARK_PREFIX, READY_LABEL, p
 from orch_it.tickets.shape import literal_violations, violations
 
 CHECK_ERROR_CODES = ("event_unreadable",)
-WRITER_BOUND_CODES = frozenset({"human_field_wrong_language"})  # judged where the ticket is written, not on a runner
 
 
 class CheckError(ValueError):
@@ -99,9 +98,7 @@ def check_event(event: object, hub: Hub, *, env=None, run=None, home=None, host=
     values = read_values(env=env, run=run, home=home, host=host)
     checks = read_job_names(str(Path(workspace) / ".github" / "workflows"))
     found = violations(parse(issue.body, title=issue.title, labels=issue.labels))
-    if _opened_by_the_layer(issue_part, repository, event, issue.body):
-        found = [v for v in found if v.code not in WRITER_BOUND_CODES]
-    else:
+    if not _opened_by_the_layer(issue_part, repository, event, issue.body):
         found += literal_violations(issue.body, values=values, checks=checks)
     if not found:
         return CheckResult(number, "kept")
