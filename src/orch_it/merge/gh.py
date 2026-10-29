@@ -60,6 +60,7 @@ from orch_it.tickets.hub import Comment, GhHub, _moment, _text
 
 CACHE_FOLDER = "merge-cache"
 RUN_OUTCOMES = ("success", "failure", "cancelled", "timed_out", "skipped")  # a run's conclusion the watch keeps
+WORKFLOW_TOKEN_REFUSAL = "Resource not accessible by integration"  # GitHub's 403 text for a workflow token
 RUNS_SCANNED = 10  # the newest completed runs of a workflow the watch reads for its latest run not skipped
 EVENTS_ARTIFACT_PREFIX = "orch-it-events-"
 EVENT_ARTIFACT_PAGES = 3  # of 100 artifacts each, newest first
@@ -428,7 +429,17 @@ class GhPullHub(GhHub):
         return found
 
     def actions_enabled(self, repo: str) -> bool:
-        found = self._object(["api", f"repos/{repo}/actions/permissions"], missing_ok=True)
+        """Whether Actions is on for the repo. The workflow's own token holds no administration scope, so GitHub
+        refuses it this read with a 403 saying "Resource not accessible by integration": that one answer reads as
+        on, because a sweep running on a workflow token is running on Actions. Any other failure, a 403 of another
+        kind (a rate limit, a person's login without admin) included, raises."""
+
+        try:
+            found = self._object(["api", f"repos/{repo}/actions/permissions"], missing_ok=True)
+        except GithubError as e:
+            if "HTTP 403" in str(e) and WORKFLOW_TOKEN_REFUSAL in str(e):
+                return True
+            raise
         if found is None:
             return False
         if not isinstance(found.get("enabled"), bool):

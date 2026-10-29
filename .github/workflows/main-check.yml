@@ -10,9 +10,10 @@ on:
     types: [completed]
 
 permissions:
-  contents: read
-  issues: write
-  actions: write
+  contents: read  # check out the default branch's code
+  pull-requests: read  # read the pull requests of the commit a red run brings, to name the one that did
+  issues: write  # open, comment on and close the red-on-main tickets
+  actions: write  # read a tests run's jobs and reports, rerun a run with no result
 
 # one check at a time: two checks of two runs never open the same ticket twice
 concurrency:
