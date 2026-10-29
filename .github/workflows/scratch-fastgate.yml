@@ -1,0 +1,9 @@
+name: scratch-fastgate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+jobs:
+  fastgate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
