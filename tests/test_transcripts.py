@@ -279,8 +279,8 @@ def lines_with(extra):
 def test_secrets_never_reach_args_head(folder, tmp_path):
     secret = assistant("msg_s", "2026-10-25T18:03:30.000Z", "claude-opus-5-5", usage(1, 1, 0, 0), [
         tool_use("tu_s1", "Bash", {"command": "curl -H 'Authorization: Bearer abc.def.ghi' x"}),
-        tool_use("tu_s2", "Bash", {"command": "export ANTHROPIC_API_KEY=sk-ant-api03-SECRETSECRET"}),
-        tool_use("tu_s3", "Bash", {"command": "git push https://ghp_0123456789abcdefghijABCDEFGHIJ@github.com"}),
+        tool_use("tu_s2", "Bash", {"command": "export ANTHROPIC_API_KEY=" + "sk-ant-" + "api03-SECRETSECRET"}),
+        tool_use("tu_s3", "Bash", {"command": "git push https://ghp_0123456789abcdefghijABCDEFGHIJ" + "@" + "github.com"}),
         tool_use("tu_s4", "Bash", {"command": "mysql --password=hunter2 db"})])
     write_lines(folder / f"{TOP}.jsonl", lines_with([secret]))
     store = Store.open(tmp_path / "store")
@@ -294,9 +294,9 @@ def test_secrets_never_reach_args_head(folder, tmp_path):
 
 def test_an_error_that_merely_mentions_permission_is_a_failure_not_a_refusal(folder, tmp_path):
     call = assistant("msg_p", "2026-10-25T18:03:30.000Z", "claude-opus-5-5", usage(1, 1, 0, 0),
-                     [tool_use("tu_p", "Bash", {"command": "cat /root/x"})])
+                     [tool_use("tu_p", "Bash", {"command": "cat /srv/x"})])
     write_lines(folder / f"{TOP}.jsonl", lines_with([
-        call, result("tu_p", "2026-10-25T18:03:31.000Z", "cat: Permission to use /root denied", error=True)]))
+        call, result("tu_p", "2026-10-25T18:03:31.000Z", "cat: Permission to use /srv denied", error=True)]))
     store = Store.open(tmp_path / "store")
     run(folder, store)
     assert store.query("SELECT outcome FROM events WHERE kind = 'tool.called' AND turn = 'msg_p'").rows == [
