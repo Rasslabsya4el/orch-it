@@ -180,8 +180,27 @@ def test_an_invented_tool_name_with_the_git_e_mail_in_a_message_is_refused():
     assert reason is not None and "git_email" in reason
 
 
-def test_a_tool_input_key_no_text_field_names_is_not_judged():
-    assert judge(call("SendToTeammate", {"payload": "author t9@example.invalid"})) == []
+@pytest.mark.parametrize("key", ["text", "summary", "payload"])
+def test_an_invented_input_key_carrying_the_git_e_mail_is_refused(key):
+    # a tool no list names: its text is found by the input's shape, every string leaf but the structural keys
+    assert "git_email" in kinds_of(judge(call("SendToTeammate", {key: "author t9@example.invalid"})))
+
+
+def test_a_string_nested_under_an_invented_key_is_judged_at_any_depth():
+    tool_input = {"items": [{"text": "fine"}, {"note": ["see t9@example.invalid"]}]}
+    assert "git_email" in kinds_of(judge(call("SendToTeammate", tool_input)))
+
+
+def test_a_url_is_judged_and_a_structural_key_is_not():
+    assert "repo" in kinds_of(judge(call("WebFetch", {"url": "https://github.com/acct-x/proj-y"})))
+    assert judge(call("Agent", {"subagent_type": "t9@example.invalid", "prompt": "fix the parser"})) == []
+    assert judge(call("Glob", {"pattern": "**/*.md", "path": "/srv/ws/proj-y"}), context_=context(REPO_ROOTS)) == []
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_a_shell_call_is_not_judged_by_the_text_hook(tool):
+    tool_input = {"command": "echo t9@example.invalid", "description": KIND_SAMPLES["git_email"]}
+    assert judge(call(tool, tool_input)) == []
 
 
 def test_a_write_outside_the_repo_is_not_judged():

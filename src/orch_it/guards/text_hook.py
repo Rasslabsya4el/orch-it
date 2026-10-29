@@ -28,8 +28,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from orch_it.guards.values import Values
 
-# the keys whose value is text for another reader, found in any nesting of the call's input
-TEXT_KEYS = ("prompt", "message", "content", "new_string", "description", "body")
+# every string of the call's input is text for another reader, except the keys that name a place or a kind of
+# agent, never text for a reader; a tool no list names is judged too
+STRUCTURAL_KEYS = ("file_path", "path", "subagent_type", "model")
+SHELL_TOOLS = ("Bash", "PowerShell")  # their commands and descriptions are other guards' business, not judged here
 FILE_KEY = "file_path"  # a write of a file: judged only when the file is inside the repo
 
 _SESSION_ID = r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
@@ -94,11 +96,14 @@ def find_text(text: str, *, stays: bool, context: Context) -> list[Hit]:
 def judge_call(payload: dict, context: Callable[[str | None], Context]) -> tuple[list[Hit], str]:
     """The hits of the call's text and the not-checked line of the setup it was judged with (`""` when none).
 
-    The text is found by the input's keys, so a tool no list names is judged too; a call with no text reads no
-    setup. A call with a `file_path` is judged only when that file is inside the repo, as text that leaves the
-    machine; any other call is judged as text that stays on this machine. `context(folder)` gives the setup."""
+    The text is every string leaf of the input but the structural keys, whatever the tool's name; a shell call is not
+    judged. A call with no text reads no setup. A call with a `file_path` is judged only when that file is inside the
+    repo, as text that leaves the machine; any other call is judged as text that stays on this machine.
+    `context(folder)` gives the setup."""
 
     tool_input = payload.get("tool_input")
+    if payload.get("tool_name") in SHELL_TOOLS:
+        return [], ""
     texts = list(_texts(tool_input)) if isinstance(tool_input, dict) else []
     if not texts:
         return [], ""
@@ -177,19 +182,19 @@ def _refusal(hits: list[Hit]) -> str:
             + "\n" + language.text_or_refusal("text_refused_way"))
 
 
-def _texts(node: object) -> Iterator[str]:
-    """Every non-empty string under a text key of `node`, at any depth (a `MultiEdit`'s `edits` included)."""
+def _texts(node: object, key: str | None = None) -> Iterator[str]:
+    """Every non-empty string leaf of `node`, at any depth (a `MultiEdit`'s `edits` included), except a string under a
+    structural key; a list's strings take the key of the list."""
 
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key in TEXT_KEYS and isinstance(value, str):
-                if value:
-                    yield value
-            else:
-                yield from _texts(value)
+    if isinstance(node, str):
+        if node and key not in STRUCTURAL_KEYS:
+            yield node
+    elif isinstance(node, dict):
+        for name, value in node.items():
+            yield from _texts(value, name)
     elif isinstance(node, list):
         for item in node:
-            yield from _texts(item)
+            yield from _texts(item, key)
 
 
 def _masked(text: str, roots: tuple[str, ...]) -> str:
