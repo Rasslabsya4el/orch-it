@@ -45,6 +45,7 @@ is the owner's to reset.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import re
 import sys
@@ -79,6 +80,11 @@ from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, WORKFLOW_FILE, Gh, Gi
 from orch_it.tickets.model import READY_LABEL
 from orch_it.tickets.reader import TRIAGE_LABEL
 
+if __name__ == "__main__":
+    # run as a script this module is `__main__`; the live module's `import merge_trial` must get this same
+    # object, or TrialError and _Run would exist twice
+    sys.modules["merge_trial"] = sys.modules[__name__]
+
 TITLE, FULL_BODY = fixture("good_basic")
 AFTER_MERGE_ROW = "| 4 after merge | abandoned carts at the payment step | under 30 % in the weekly report |\n"
 BODY = FULL_BODY.replace(AFTER_MERGE_ROW, "")
@@ -92,7 +98,10 @@ ROWS_FULL = """| row | result | evidence |
 """
 ROWS = "\n".join(line for line in ROWS_FULL.splitlines() if not line.startswith("| 4 ")) + "\n"
 REQUIRED = tuple(DEFAULT_REQUIRED_JOBS)
-FOLLOW_WORKFLOW, MAIN_CHECK_WORKFLOW = "follow.yml", "main-check.yml"
+FOLLOW_WORKFLOW, MAIN_CHECK_WORKFLOW, RECONCILE_WORKFLOW = "follow.yml", "main-check.yml", "reconcile.yml"
+LIST_MINUTES = 3  # the longest a read of a list GitHub fills eventually waits for what must appear in it
+SETTLE_SECONDS = 60  # the fixed wait before a list is read once for what must NOT appear in it
+LIVE_ROW_MODULES = {4: "merge_trial_live_r4", 5: "merge_trial_live_r5", 6: "merge_trial_live_r6"}
 RED_ON_PR = "def test_red():\n    assert False, 'the trial: a pull request that is red'\n"
 # green in the pull request's run, red in the push run after its merge: a merge that turns the base red
 # red in a run of the base (a push, or the run `--dispatch-base-runs` asks for), green on a pull request
@@ -119,6 +128,7 @@ class Trial(Protocol):
     base: str
     git: Callable[[list[str]], str]  # `git <args>` in the work tree (for `open_pr`)
     lock_root: Path | None  # the merge line's lock folder (None: the default one)
+    default_branch: str | None  # the repo's default branch as its preflight read it (None before a preflight)
 
     def preflight(self) -> dict: ...
 
@@ -143,6 +153,15 @@ class Trial(Protocol):
         """Ask for a run of `tests` on the base when the base gets none of its own on a push (a trial
         branch `tests.yml` does not name under `push`); nothing otherwise."""
 
+    def dispatch_workflow(self, file: str) -> None:
+        """`gh workflow run <file>` on the base; returns None."""
+
+    def workflow_runs(self, file: str) -> list[dict]:
+        """The runs GitHub lists for the workflow `file`, newest first: the gh JSON of each run."""
+
+    def rate_remaining(self) -> int:
+        """The core REST quota GitHub has left (`gh api rate_limit`), read once at the end of a run."""
+
     def adopt(self, ticket: int) -> None:
         """A ticket the merge flow opened during the trial (a red-on-main one): `cleanup` closes it too."""
 
@@ -159,6 +178,7 @@ class Plan:
     wait_minutes: float = 45  # the longest any one wait (checks, a run on the base) lasts
     owner: str | None = None  # the login of the layer's comments (default: the repo's owner)
     open_workers: int = OPEN_WORKERS  # pull requests `pr open`ed at once
+    list_minutes: float = LIST_MINUTES  # the longest a read of an eventually consistent list waits for its ticket
 
 
 # --- the rows -----------------------------------------------------------------------------------------
@@ -252,11 +272,32 @@ def line_rows(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], date
     return row2, row3
 
 
+def end_judges(tag: str) -> dict[str, Callable[[dict], bool]]:
+    """The judge of each end of row 4: the ticket as GitHub holds it after the end (`_Run.read`) says the end's
+    outcome. Shared by `row_4` and its live form (`tests/merge_trial_live_r4.py`), so both judge alike."""
+
+    return {
+        "closed_unmerged": lambda r: (
+            r["needs_triage"] and not r["ready"] and not r["parked"] and r["open"] and r["pr_state"] == "closed"),
+        "comment": lambda r: (
+            r["auto_merge"] is None and r["needs_triage"] and not r["ready"] and not r["parked"]
+            and r["pr_state"] == "open"),
+        "merged": lambda r: (
+            not r["open"] and r["state_reason"] == "completed" and r["pr_state"] == "merged"
+            and all(f"| {row} | pass |" in r["comment"] for row in "123")),
+        "after_merge": lambda r: (
+            r["open"] and r["ready"] and not r["parked"] and r["pr_state"] == "merged" and "row 4" in r["comment"]),
+        "red": lambda r: (
+            r["open"] and r["ready"] and not r["parked"] and f"test_trial_pr_red_{tag}" in r["comment"]),
+    }
+
+
 def row_4(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime], sleep: Callable[[float], None],
           plan: Plan | None = None) -> dict:
     """Row 4: the ticket follows its pull request, every end, read back from GitHub and the store."""
 
     run = _Run(trial, hub, store, clock, sleep, plan, "r4")
+    judge = end_judges(run.tag)
     out: dict = {}
     opened: list[int] = []
     with run.without(FOLLOW_WORKFLOW) as off:
@@ -269,31 +310,23 @@ def row_4(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
             closed = run.pull_request("closed", {f"trial/{run.tag}/closed.txt": "closed\n"})
             opened.append(closed[2].pr)
             trial.close_pull(closed[2].pr)
-            out["closed_unmerged"] = _ending(run, closed, "closed_unmerged", lambda r: (
-                r["needs_triage"] and not r["ready"] and not r["parked"] and r["open"] and r["pr_state"] == "closed"))
+            out["closed_unmerged"] = _ending(run, closed, "closed_unmerged", judge["closed_unmerged"])
             said = run.pull_request("comment", {f"trial/{run.tag}/comment.txt": "comment\n"})
             opened.append(said[2].pr)
             trial.comment_as_person(said[2].pr, "Wait, please look at the zones before this lands.")
-            out["comment"] = _ending(run, said, "commented", lambda r: (
-                r["auto_merge"] is None and r["needs_triage"] and not r["ready"] and not r["parked"]
-                and r["pr_state"] == "open"), wanted_event="pr.commented")
+            out["comment"] = _ending(run, said, "commented", judge["comment"], wanted_event="pr.commented")
             merged = run.pull_request("merged", {f"trial/{run.tag}/merged.txt": "merged\n"})
             opened.append(merged[2].pr)
             run.land(merged[2].pr)
-            out["merged"] = _ending(run, merged, "closed", lambda r: (
-                not r["open"] and r["state_reason"] == "completed" and r["pr_state"] == "merged"
-                and all(f"| {row} | pass |" in r["comment"] for row in "123")), wanted_event="ticket.closed")
+            out["merged"] = _ending(run, merged, "closed", judge["merged"], wanted_event="ticket.closed")
             later = run.pull_request("after-merge", {f"trial/{run.tag}/later.txt": "later\n"}, body=FULL_BODY,
                                      rows=ROWS_FULL)
             opened.append(later[2].pr)
             run.land(later[2].pr)
-            out["after_merge"] = _ending(run, later, "after_merge", lambda r: (
-                r["open"] and r["ready"] and not r["parked"] and r["pr_state"] == "merged" and "row 4" in r["comment"]),
-                unwanted_event="ticket.closed")
+            out["after_merge"] = _ending(run, later, "after_merge", judge["after_merge"],
+                                         unwanted_event="ticket.closed")
             run.wait("the red pull request's checks to end", lambda: run.ended_red(red[2].pr))
-            out["red"] = _ending(run, red, "red", lambda r: (
-                r["open"] and r["ready"] and not r["parked"] and f"test_trial_pr_red_{run.tag}" in r["comment"]),
-                wanted_event="attempt.counted", counted=True)
+            out["red"] = _ending(run, red, "red", judge["red"], wanted_event="attempt.counted", counted=True)
         finally:
             for pr in opened:
                 pull = hub.pull(run.repo, pr)
@@ -339,8 +372,9 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
         again = run.ended_run(first.sha, attempt=first.attempt + 1)
         two = check_main(hub, store, run.repo, run.base)
         run.adopt(two)
+        # the rerun must open none: what the list holds after the settle is what counts, not a wait for a ticket
         out["second_check"] = {"outcome": two.outcome, "attempt": again.attempt, "opened": two.opened,
-                               "red_tickets": run.red_tickets_of(ids)}
+                               "red_tickets": run.red_tickets_of(ids, settle=True)}
         run.say(f"second main check: {two.outcome} opened {two.opened}")
         fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: None})
         fix_merge = run.land(fixed.pr)
@@ -409,6 +443,25 @@ def _swept(run: _Run, label: str, *, actions: bool | None, workflow_off: bool) -
 
 
 ROW_FUNCTIONS = {4: row_4, 5: row_5, 6: row_6}
+LIVE_ROW_FUNCTIONS: dict[int, Callable] = {}  # filled lazily by `live_row_function`, one module per row
+
+
+def live_row_function(number: int) -> Callable:
+    """The live form of row `number` (`row_<n>_live` of its module in `LIVE_ROW_MODULES`), imported on first use;
+    a module that is not there yet is a `TrialError` naming it."""
+
+    if number not in LIVE_ROW_FUNCTIONS:
+        module = LIVE_ROW_MODULES[number]
+        try:
+            found = importlib.import_module(module)
+        except ModuleNotFoundError as e:
+            if e.name != module:  # a module the live row imports is missing, not the row's own
+                raise
+            raise TrialError(f"--live: row {number} has no live form yet (tests/{module}.py is not there)") from None
+        if not callable(getattr(found, f"row_{number}_live", None)):
+            raise TrialError(f"--live: tests/{module}.py has no row_{number}_live function")
+        LIVE_ROW_FUNCTIONS[number] = getattr(found, f"row_{number}_live")
+    return LIVE_ROW_FUNCTIONS[number]
 
 
 # --- the numbers of rows 2 and 3 ---------------------------------------------------------------------------
@@ -480,8 +533,9 @@ class _Run:
     """The parts of a row (trial, hub, store, clock, sleep, plan) with the steps most rows share."""
 
     def __init__(self, trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime],
-                 sleep: Callable[[float], None], plan: Plan | None, row: str):
+                 sleep: Callable[[float], None], plan: Plan | None, row: str, live: bool = False):
         self.trial, self.hub, self.store, self.clock, self.sleep = trial, hub, store, clock, sleep
+        self.live = live  # the row runs its workflows on GitHub (`--live`), the harness only waits and reads
         self.plan = plan or Plan()
         self.settings = self.plan.settings
         self.repo, self.base = trial.repo, trial.base
@@ -648,9 +702,29 @@ class _Run:
         for number in (*report.opened, *report.brain):
             self.trial.adopt(number)
 
-    def red_tickets_of(self, ids: frozenset[str]) -> list[int]:
-        """The open red-on-main tickets that list exactly `ids`."""
+    def red_tickets_of(self, ids: frozenset[str], *, settle: bool = False) -> list[int]:
+        """The open red-on-main tickets that list exactly `ids`. The label list fills eventually, so the default
+        waits (`Plan.list_minutes`) until a ticket appears; past that bound it returns the list as last read (so
+        a check that opened no ticket records `[]`). `settle=True` is for what must NOT appear: wait
+        `SETTLE_SECONDS`, read the list once and return it as read."""
 
+        if settle:
+            self.sleep(SETTLE_SECONDS)
+            return self._red_tickets_read(ids)
+        last: list[int] = []
+
+        def read() -> list[int]:
+            nonlocal last
+            last = self._red_tickets_read(ids)
+            return last
+
+        try:
+            return self.wait(f"a red-on-main ticket of {len(ids)} failing test(s)", read,
+                             minutes=self.plan.list_minutes)
+        except TrialTimeout:
+            return last
+
+    def _red_tickets_read(self, ids: frozenset[str]) -> list[int]:
         found = []
         for number in self.hub.issues_with_label(self.repo, "priority"):
             issue = self.hub.issue(self.repo, number)
@@ -703,6 +777,7 @@ class RealTrial:
         self.identity = identity
         self.allow_default_base = allow_default_base
         self.dispatch_base_runs = dispatch_base_runs
+        self.default_branch: str | None = None  # what the last preflight read from the repo
         self.tickets: list[int] = []  # every ticket the trial made or adopted
         self.branches: set[str] = set()  # every branch it made
         self._workflows_off: set[str] = set()
@@ -721,6 +796,7 @@ class RealTrial:
         if not info.get("allow_auto_merge"):
             raise TrialError(f"{self.repo} does not allow auto-merge (settings > General): `pr open` needs it")
         default = info.get("default_branch")
+        self.default_branch = default
         if default == self.base and not self.allow_default_base:
             raise TrialError(f"{self.base} is the default branch of {self.repo} and row 5 puts a red test on the "
                              "base: use a throwaway repo or a trial branch, or give --allow-default-base")
@@ -822,6 +898,23 @@ class RealTrial:
         if self.dispatch_base_runs:
             self.gh(["workflow", "run", "tests.yml", "--repo", self.repo, "--ref", self.base,
                      "-f", "slow_and_live=false"])
+
+    def dispatch_workflow(self, file: str) -> None:
+        self.gh(["workflow", "run", file, "--repo", self.repo, "--ref", self.base])
+
+    def workflow_runs(self, file: str) -> list[dict]:
+        # GithubError is left to propagate: `_Run.wait` reads a failed listing again, a few times
+        text = self.gh(["api", f"repos/{self.repo}/actions/workflows/{file}/runs?per_page=30"])
+        try:
+            listed = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise GithubError("gh_bad_output", f"{self.repo}: the runs of {file} are not JSON ({e})") from None
+        if not isinstance(listed, dict):
+            raise GithubError("gh_bad_output", f"{self.repo}: the runs of {file} are not an object")
+        return list(listed.get("workflow_runs") or [])
+
+    def rate_remaining(self) -> int:
+        return self._json(["api", "rate_limit"])["resources"]["core"]["remaining"]
 
     def set_actions(self, on: bool) -> None:
         self.gh(["api", "-X", "PUT", f"repos/{self.repo}/actions/permissions", "-F", f"enabled={str(on).lower()}"])
@@ -931,6 +1024,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--line-minutes", type=float, default=90, help="the bound of the line's run (default: 90)")
     p.add_argument("--check-minutes", type=float, default=30, help="the line's wait for one head's checks (30)")
     p.add_argument("--wait-minutes", type=float, default=45, help="the bound of every other wait (45)")
+    p.add_argument("--live", action="store_true",
+                   help="rows 4, 5 and 6 run on the repo's own workflows (the live forms, "
+                        "tests/merge_trial_live_r*.py): the trial only waits and reads; the repo is a throwaway one; "
+                        "row 5 live needs --allow-default-base, its base being the default branch where the main "
+                        "check runs")
     args = p.parse_args(argv)
     if not schema.is_repo(args.repo):
         p.error(f"--repo {args.repo!r} is no OWNER/NAME")
@@ -968,9 +1066,9 @@ def main(argv: list[str] | None = None, *, world=_real_world) -> int:
         if 2 in wanted or 3 in wanted:
             _attempt(report, (2, 3), lambda: dict(zip((2, 3), line_rows(trial, hub, store, clock, sleep, plan))))
         for number in (4, 5, 6):
-            if number in wanted:
-                function = ROW_FUNCTIONS[number]
-                _attempt(report, (number,), lambda f=function: {number: f(trial, hub, store, clock, sleep, plan)})
+            if number in wanted:  # a live row's function is looked up inside the attempt: a missing module is its error
+                _attempt(report, (number,), lambda n=number: {n: _row_function(n, args.live)(
+                    trial, hub, store, clock, sleep, plan)})
     finally:
         if not args.keep:  # before the workflows are on again: closing a trial ticket or pull request starts none
             try:
@@ -984,11 +1082,20 @@ def main(argv: list[str] | None = None, *, world=_real_world) -> int:
         except Exception as e:  # noqa: BLE001 - say what stayed off, and still write what was measured
             report["restore_error"] = f"{type(e).__name__}: {e}"
             print(f"RESTORE FAILED: {e} - turn Actions and the disabled workflows on by hand", flush=True)
+        try:  # the cost of the run: one call, shown in the report so a live run says what it used
+            report["rate_limit"] = trial.rate_remaining()
+            print(f"gh rate limit remaining (core): {report['rate_limit']}", flush=True)
+        except Exception as e:  # noqa: BLE001 - the report is written without it
+            report["rate_limit"] = f"{type(e).__name__}: {e}"[:200]
         report["finished"] = clock().isoformat()
         out.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n", "utf-8")
         _table(report, wanted, out)
     clean = not ({"restore_error", "cleanup_error"} & report.keys()) and not (report.get("cleanup") or {}).get("errors")
     return 0 if ready and clean and all(report["rows"].get(str(n), {}).get("passed") for n in wanted) else 1
+
+
+def _row_function(number: int, live: bool) -> Callable:
+    return live_row_function(number) if live else ROW_FUNCTIONS[number]
 
 
 def _attempt(report: dict, numbers: tuple[int, ...], make: Callable[[], dict]) -> None:
