@@ -55,7 +55,7 @@ from orch_it.merge.main_check import check_main
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr, parse_part
 from orch_it.merge.settings import MergeSettings
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, REQUIRED_JOBS_SETTING
+from orch_it.testruns.config import required_checks
 from orch_it.tickets.commands import OWNER_SETTING
 from orch_it.tickets.gh_check import read_event
 from orch_it.tickets.park import ROLE as SCRIPT
@@ -157,7 +157,7 @@ def _pr_open(args, store_of, repo_of, now: datetime) -> str:
         raise PrError("git_failed", str(e)) from None
     raw = settings.load()
     done = open_pr(GhPullHub(), store_of(), repo, args.ticket, acceptance=acceptance, branch=branch, base=args.base,
-                   required=required_jobs(raw), git=git, settings=MergeSettings.from_settings(raw, repo), now=now,
+                   required=required_checks(raw, repo), git=git, settings=MergeSettings.from_settings(raw, repo), now=now,
                    role=args.role, notes=notes, part=part)
     return f"pr #{done.pr} {'reused' if done.reused else 'opened'} at {done.head[:12]}: {done.park}\n"
 
@@ -179,7 +179,7 @@ def _follow(args, store_of, repo_of, now: datetime) -> str:
     lines = []
     for number in numbers:
         done = follow(hub, store_of(), repo, number, base=args.base, settings=MergeSettings.from_settings(raw, repo),
-                      now=now, role=args.role, required=required_jobs(raw), owner=owner_login(raw),
+                      now=now, role=args.role, required=required_checks(raw, repo), owner=owner_login(raw),
                       merge=args.pr is None)  # only the workflow's `--event` merges; a bare `follow <pr>` never does
         ticket = f"#{done.ticket}" if done.ticket else "-"
         said = f"#{done.pr} {done.outcome} ticket={ticket} {done.detail}".rstrip()
@@ -200,7 +200,7 @@ def _reconcile(args, store_of, repo_of, now: datetime) -> str:
     repo = args.repo or repo_of(".")
     raw = settings.load()
     done = reconcile(GhPullHub(), store_of(), repo, args.base, settings=MergeSettings.from_settings(raw, repo), now=now,
-                     role=args.role, required=required_jobs(raw), owner=owner_login(raw),
+                     role=args.role, required=required_checks(raw, repo), owner=owner_login(raw),
                      bring_events=os.environ.get("GITHUB_ACTIONS") != "true")
     lines = ["actions=on" if done.actions else "actions=off: the sweep runs here"]
     lines += [f"{code} {what}" for code, what in done.repairs]
@@ -219,7 +219,7 @@ def _line(args, store_of, repo_of) -> str:
 
     done = run_line(GhPullHub(), store_of(), repo, args.base, settings=MergeSettings.from_settings(raw, repo),
                     holder=f"{holder_of(repo, args.base)} (pid {os.getpid()})", on_wait=say,
-                    required=required_jobs(raw), owner=owner_login(raw))
+                    required=required_checks(raw, repo), owner=owner_login(raw))
     lines = [f"#{s.pr} {s.result} waited {s.waited_minutes:g} min updates {s.updates} {s.detail}".rstrip()
              for s in done.served]
     lines.append(f"line of {repo} into {args.base}: merged={done.merged} left={done.left} {done.reason}")
@@ -234,19 +234,10 @@ def parks_follower(store: Store, repo: str, now: datetime, role: str) -> Callabl
 
     def followed(number: int) -> str:
         done = follow(hub, store, repo, number, settings=MergeSettings.from_settings(raw, repo), now=now, role=role,
-                      required=required_jobs(raw), owner=owner_login(raw))
+                      required=required_checks(raw, repo), owner=owner_login(raw))
         return f"#{done.pr} {done.outcome} {done.detail}".rstrip()
 
     return followed
-
-
-def required_jobs(raw: dict) -> tuple[str, ...]:
-    """The required check names (the setting `github_required_jobs`, default `linux`, `windows`)."""
-
-    jobs = raw.get(REQUIRED_JOBS_SETTING, DEFAULT_REQUIRED_JOBS)
-    if not isinstance(jobs, list) or not jobs or not all(isinstance(job, str) and job for job in jobs):
-        raise settings.SettingsError("bad_setting", REQUIRED_JOBS_SETTING)
-    return tuple(jobs)
 
 
 def owner_login(raw: dict) -> str | None:

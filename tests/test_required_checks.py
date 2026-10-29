@@ -106,7 +106,7 @@ def test_follow_reads_the_setting_checks(hub, tmp_path, capsys):
     event = tmp_path / "event.json"
     event.write_text(json.dumps({"pull_request": {"number": pr}}), "utf-8")
     code, out, err = run(capsys, "--store", str(tmp_path / "events"), "follow", "--event", str(event), "--repo", REPO)
-    assert (code, err) == (0, f"#{pr} red ticket=#10 1 tests\n")
+    assert (code, out, err) == (0, f"#{pr} red ticket=#10 1 tests\n", "")
 
 
 class RunsGh:

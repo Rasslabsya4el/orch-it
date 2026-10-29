@@ -42,8 +42,7 @@ from orch_it.merge import lock, marks, record
 from orch_it.merge.follow import FollowReport, follow, follow_conflict
 from orch_it.merge.hub import Pull, PullHub
 from orch_it.merge.pr_open import refers_to
-from orch_it.merge.settings import MergeSettings
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
+from orch_it.merge.settings import MergeSettings, required_checks_now
 from orch_it.tickets.park import ROLE
 
 # what the follow says of a member that is still in the line: the line goes on serving it (a
@@ -281,12 +280,14 @@ class _Line:
 def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: MergeSettings,
              clock: Callable[[], datetime] = lambda: datetime.now(UTC), sleep: Callable[[float], None] = time.sleep,
              root: Path | None = None, holder: str | None = None, on_wait: Callable[[lock.Holder], None] | None = None,
-             role: str = ROLE, required: tuple[str, ...] = tuple(DEFAULT_REQUIRED_JOBS),
+             role: str = ROLE, required: tuple[str, ...] | None = None,
              owner: str | None = None) -> LineReport:
     """Run the repo's merge line once; see the module text. Another line holding the lock past
     `lock_wait_minutes`, or a stale lock, is `LockError` (and a `line` step ended `refused`); a run
     that breaks ends its step `failed` (`error`) and gives every held member its auto-merge back."""
 
+    if required is None:
+        required = required_checks_now(repo)
     run = f"line:{repo}@{clock().isoformat()}"
     try:
         with lock.hold(repo, holder or holder_of(repo, base), settings=settings, root=root, clock=clock, sleep=sleep,

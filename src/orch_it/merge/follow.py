@@ -70,9 +70,8 @@ from datetime import datetime, timedelta
 from orch_it.events.store import Store
 from orch_it.merge import marks, record, red_main
 from orch_it.merge.hub import FAILED, NO_RESULT, PENDING, Check, Pull, PullHub
-from orch_it.merge.settings import MergeSettings
+from orch_it.merge.settings import MergeSettings, required_checks_now
 from orch_it.skills.update import BRANCH_PREFIX, ISSUE_TITLE, done_text
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
 from orch_it.tickets import park
 from orch_it.tickets.hub import Issue
 from orch_it.tickets.model import READY_LABEL, parse
@@ -111,13 +110,16 @@ class FollowReport:
 
 
 def follow(hub: PullHub, store: Store, repo: str, number: int, *, base: str = "main", settings: MergeSettings,
-           now: datetime, role: str = ROLE, required: tuple[str, ...] = tuple(DEFAULT_REQUIRED_JOBS),
+           now: datetime, role: str = ROLE, required: tuple[str, ...] | None = None,
            owner: str | None = None, merge: bool = False) -> FollowReport:
     """Move the ticket of pull request `number` as its pull request stands now; see the module text.
     `owner`: the login whose comment is the owner's and the layer's (default: the repo's owner).
     `merge`: True only for a machine-free actor (the `follow` workflow's `--event`, the hourly `reconcile`), which lets
-    the follow merge a mark-only pull request; the merge line, the park reader and a bare `follow <pr>` leave it False."""
+    the follow merge a mark-only pull request; the merge line, the park reader and a bare `follow <pr>` leave it False.
+    `required`: the check names (default: the setting `required_checks` of `repo`)."""
 
+    if required is None:
+        required = required_checks_now(repo)
     one = _Follow.of(hub, store, repo, number, settings, now, role, owner, required, merge)
     try:
         if one.pull.state == "merged":
@@ -137,7 +139,7 @@ def follow_conflict(hub: PullHub, store: Store, repo: str, number: int, files: l
     """The conflict rule for a pull request the merge line could not bring up to date: out of the
     line, its ticket back to ready with the files, not counted."""
 
-    one = _Follow.of(hub, store, repo, number, settings, now, role, owner, tuple(DEFAULT_REQUIRED_JOBS))
+    one = _Follow.of(hub, store, repo, number, settings, now, role, owner, required_checks_now(repo))
     try:
         return one.conflict(files, other_pr)
     except _Raced as e:

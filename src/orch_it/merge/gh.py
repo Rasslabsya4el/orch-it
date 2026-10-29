@@ -11,7 +11,7 @@ It is the tickets' `GhHub` (issues, comments, runs, all through `gh api`) plus t
   Actions run and attempt from `details_url` and `repos/{r}/actions/runs/{id}`;
 - pull request comments: issue comments, submitted reviews and review comments, merged in time order;
 - Actions: rerun the failed jobs, cancel, the runs of `tests.yml` on a branch with the state of
-  the required jobs (setting `github_required_jobs`), the failed test ids from the `junit-*`
+  the required jobs (setting `required_checks`), the failed test ids from the `junit-*`
   artifacts of a run (downloaded with `gh run download`, read by `testruns.junit`);
 - the conflicting files of a pull request: exact, by `git merge-tree --write-tree` in a bare
   cache repo under the data folder (`merge-cache/<owner>__<name>.git`) that fetches the base and
@@ -53,9 +53,9 @@ from orch_it.testruns.github import (
     WORKFLOW_FILE,
     Gh,
     GithubError,
-    _required_jobs,
     json_values,
 )
+from orch_it.testruns.config import required_checks
 from orch_it.tickets.hub import Comment, GhHub, _moment, _text
 
 CACHE_FOLDER = "merge-cache"
@@ -312,7 +312,7 @@ class GhPullHub(GhHub):
         return sorted(failing) if readable else None
 
     def branch_runs(self, repo: str, branch: str) -> list[MainRun]:
-        required = _required_jobs(settings.load())
+        required = required_checks(settings.load(), repo)
         listed = self._pages(["api", f"repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs"
                               f"?branch={quote(branch, safe='')}&per_page=30"], "workflow_runs")
         runs = []
