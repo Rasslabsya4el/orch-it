@@ -144,6 +144,13 @@ def test_a_merged_and_a_closed_pull_request_carry_their_end_and_are_not_compared
     assert not gh.called("repos/owner-x/repo-y/compare/main...hhhhhhh?per_page=1")
 
 
+def test_a_pull_request_reads_open_while_merged_at_is_null_after_a_base_advance_then_merged():
+    answers = iter([pull_json(5), pull_json(5, state="closed", merged_at="2026-11-03T10:00:00Z")])
+    gh = Gh(([pull_url(5)], lambda args: next(answers)), ([compare_url()], {"behind_by": 0}))
+    hub = GhPullHub(gh)
+    assert [hub.pull(REPO, 5).state, hub.pull(REPO, 5).state] == ["open", "merged"]
+
+
 @pytest.mark.parametrize(("mergeable", "word"), [(True, "mergeable"), (False, "conflicting"), (None, "unknown")])
 def test_mergeable_is_true_false_or_not_computed_yet(mergeable, word):
     gh = Gh(([pull_url()], pull_json(mergeable=mergeable)), ([compare_url()], {"behind_by": 0}))

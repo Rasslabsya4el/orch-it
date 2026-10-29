@@ -100,6 +100,9 @@ class FakeGitHub(FakeHub):
         self.advances: list[str] = []  # every sha a base was moved forward to, in order
         self.batch_members: dict[str, list[int]] = {}  # batch branch -> the pull requests merged into it, in order
         self.trees: dict[str, list[str]] = {}  # a batch commit's sha -> the commits it holds
+        self.merge_lag_seconds = 0  # seconds GitHub takes to mark a pull request merged after a base advance
+        self.lagging: dict[int, tuple[datetime, str]] = {}  # pr -> (when it shows merged, the sha it merged at)
+        self.advance_refusal: str | None = None  # the message of a 422 that `advance_base` raises (protection)
         self._shas = 0
 
     # building the world
@@ -168,6 +171,7 @@ class FakeGitHub(FakeHub):
 
     def pull(self, repo, number):
         self._check(repo, number)
+        self._mark_due()
         found = self.pulls.get(number)
         if found is None:
             return None
@@ -263,13 +267,25 @@ class FakeGitHub(FakeHub):
         main[:] = self.branches[branch]
         self.advances.append(sha)
         for number in self.batch_members[branch]:
-            found = self.pulls[number]
-            found.state, found.merged_at, found.merge_sha = "merged", self.now, sha
-            self.commit_pulls[sha] = [*self.commit_pulls.get(sha, []), number]
-            self.close(number, merged=True)
-            for hook in list(self.on_merge):
-                hook(number)
+            self.lagging[number] = (self.now + timedelta(seconds=self.merge_lag_seconds), sha)
+        self._mark_due()
         return True
+
+    def _mark_due(self):
+        """The pull requests of an advanced base that GitHub has marked merged by now."""
+
+        for number, (due, sha) in sorted(self.lagging.items()):
+            if due <= self.now:
+                del self.lagging[number]
+                self._mark_merged(number, sha)
+
+    def _mark_merged(self, number, sha):
+        found = self.pulls[number]
+        found.state, found.merged_at, found.merge_sha = "merged", self.now, sha
+        self.commit_pulls[sha] = [*self.commit_pulls.get(sha, []), number]
+        self.close(number, merged=True)
+        for hook in list(self.on_merge):
+            hook(number)
 
     def end_batch(self, repo, branch):
         self.calls.append(("end_batch", branch))

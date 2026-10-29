@@ -136,6 +136,75 @@ def test_main_moving_during_the_pass_rebuilds_the_batch_on_the_new_main(tmp_path
     assert hub.branches["main"][-1] == hub.advances[-1] and moved[0] in hub.branches["main"]
 
 
+def close_on_first_batch(hub, number):
+    """A person closes pull request `number` the moment the first batch branch is made."""
+
+    start, closed = hub.start_batch, []
+
+    def started(repo, base, branch):
+        if not closed:
+            closed.append(hub.close_pull(repo, number))
+        return start(repo, base, branch)
+
+    hub.start_batch = started
+
+
+def turns_of(done):
+    counted = {}
+    for served in done.served:
+        counted.setdefault(served.pr, []).append(served.result)
+    return counted
+
+
+def test_a_member_gone_from_the_batch_is_served_once_when_the_batch_is_rebuilt(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    suite, place = make_suite(world, tmp_path)
+    close_on_first_batch(hub, prs[10])
+    place.during.append(lambda: hub.land())  # main moves under the first pass only (the second finds it quiet)
+    place.during.append(lambda: place.during.clear())
+    done = line(world, tmp_path, suite)
+    assert passes(store) == 2
+    assert turns_of(done) == {prs[10]: ["left"], prs[11]: ["merged"], prs[12]: ["merged"], prs[13]: ["merged"]}
+
+
+def test_a_member_gone_from_the_batch_is_served_once_when_main_keeps_moving_and_the_batch_starves(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    suite, place = make_suite(world, tmp_path)
+    close_on_first_batch(hub, prs[10])
+    place.during.append(lambda: hub.land())  # main moves under every pass
+    done = line(world, tmp_path, suite, max_updates=1)
+    assert passes(store) == 2
+    assert turns_of(done) == {prs[10]: ["left"], prs[11]: ["starved"], prs[12]: ["starved"], prs[13]: ["starved"]}
+    assert done.reason == "next_run"
+
+
+def test_a_landing_github_marks_merged_within_a_minute_ends_every_member_merged(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    hub.merge_lag_seconds = 20
+    suite, place = make_suite(world, tmp_path)
+    done = line(world, tmp_path, suite)
+    assert passes(store) == 1 and [s.result for s in done.served] == ["merged"] * 4
+    assert ci.merged == [prs[n] for n in (10, 11, 12, 13)] and done.reason == "empty"
+
+
+def test_a_landing_github_does_not_mark_merged_in_a_minute_is_reported_pending_and_not_served_again(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    hub.merge_lag_seconds = 3600
+    suite, place = make_suite(world, tmp_path)
+    done = line(world, tmp_path, suite)
+    assert passes(store) == 1 and done.merged == 0 and done.reason == "next_run"
+    assert [(s.result, s.detail) for s in done.served] == [("bound", "landed_pending")] * 4
+    assert [s.pr for s in done.served] == [prs[n] for n in (10, 11, 12, 13)]
+    hub.later(seconds=3600)
+    again = line(world, tmp_path, suite)
+    assert again.served == () and again.reason == "empty" and passes(store) == 1
+    assert all(hub.pull(REPO, pr).state == "merged" for pr in prs.values())
+
+
 def test_batch_size_one_is_the_line_as_it_was_and_runs_no_suite(tmp_path):
     world = line_world(tmp_path, tickets=(10, 11))
     hub, store, prs, ci = world

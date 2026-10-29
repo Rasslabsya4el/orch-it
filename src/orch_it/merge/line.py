@@ -59,6 +59,7 @@ from orch_it.tickets.park import ROLE
 # `raced` follow wrote nothing: the member waits a poll and is followed again)
 _STAYS = ("waiting", "green", "behind", "rerun", "stuck", "raced")
 LINE_ERROR_CODES = ("closing_keyword",)  # a merge the line will not make
+LAND_POLL_SECONDS, LAND_WAIT_SECONDS = 5, 60  # after a batch moved the base: GitHub marks the pull requests merged
 
 
 def poll_wait(hub: PullHub, settings: MergeSettings) -> float:
@@ -129,6 +130,7 @@ class _Batch:
     included: list[_Member]
     heads: dict[int, str]
     apart: list[_Member]
+    gone: set[int] = field(default_factory=set)  # members combine ended (closed, or in conflict with the base)
 
 
 @dataclass
@@ -216,6 +218,7 @@ class _Line:
             if self.clock() >= self.deadline:
                 return self.postpone(group, "bound")
             made = self.combine(group)
+            group = [m for m in group if m.pull.number not in made.gone]  # a rebuild serves only the stayers
             try:
                 if made.included:
                     result = self.suite(made.tip)
@@ -251,6 +254,7 @@ class _Line:
             if pull is None or pull.state != "open":
                 self.follow(number)
                 self.end_turn(self.turns, self.turn(member, "left", 0, "closed"))
+                made.gone.add(number)
                 continue
             tip = self.hub.add_to_batch(self.repo, branch, pull.head_sha)
             if tip is not None:
@@ -261,6 +265,7 @@ class _Line:
                 made.apart.append(member)
             else:
                 self.end_turn(self.turns, self.conflict(member, self.hub.conflict_files(self.repo, self.base, number)))
+                made.gone.add(number)
         return made
 
     def land(self, made: _Batch) -> bool:
@@ -273,10 +278,37 @@ class _Line:
                 return False
         if not self.hub.advance_base(self.repo, self.base, made.tip):
             return False
-        for member in made.included:
+        merged, pending = self.confirmed(made.included)
+        for member in merged:
             self.follow(member.pull.number)  # its ticket closes now, whether the workflow runs or not
             self.end_turn(self.turns, self.turn(member, "merged", 0))
+        self.postpone(pending, "bound", "landed_pending")
         return True
+
+    def confirmed(self, members: list[_Member]) -> tuple[list[_Member], list[_Member]]:
+        """The members GitHub says are merged, polled every `LAND_POLL_SECONDS` up to `LAND_WAIT_SECONDS` after the base
+        moved, and those still open after it (not followed: they wait for the next run); one closed unmerged ends
+        `left`."""
+
+        waiting, merged = list(members), []
+        until = self.clock() + timedelta(seconds=LAND_WAIT_SECONDS)
+        while waiting:
+            still = []
+            for member in waiting:
+                pull = self.hub.pull(self.repo, member.pull.number)
+                if pull is not None and pull.state == "open":
+                    still.append(member)
+                elif pull is not None and pull.state == "merged":
+                    merged.append(member)
+                else:
+                    self.follow(member.pull.number)
+                    self.end_turn(self.turns, self.turn(member, "left", 0, "closed"))
+            waiting = still
+            if waiting and self.clock() < until:
+                self.sleep(LAND_POLL_SECONDS)
+            elif waiting:
+                break
+        return merged, waiting
 
     def red(self, member: _Member, failing: list[str]) -> None:
         done = follow_red(self.hub, self.store, self.repo, member.pull.number, ", ".join(self.required), failing,
