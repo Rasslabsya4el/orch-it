@@ -1,14 +1,19 @@
 """The bridge's text names no provider or model (#412 unit 5): the check reads the names to refuse
 from the bridge's settings at run time, plus the fixed list of known families kept here. Every name
 in these tests is invented (`acme-llm`) or a family word. The tests pass a settings dict in; only the
-installation tests read a settings file, a tmp one named by ORCH_IT_SETTINGS."""
+installation tests read a settings file, a tmp one named by ORCH_IT_SETTINGS; the tree tests read the
+`settings.json` a work tree carries at its root."""
 
 import json
 import shutil
 from pathlib import Path
 
+import pytest
+
 from orch_it import cli
-from orch_it.research.names import bridge_texts, find_names, refused_names, refused_names_from_installation
+from orch_it.settings import SettingsError
+from orch_it.research.names import (bridge_texts, find_names, refused_names, refused_names_from_installation,
+                                    refused_names_of_tree)
 
 ROOT = Path(__file__).resolve().parents[1]
 KNOWN_FAMILIES = ("gpt", "openai", "codex", "gemini", "llama", "mistral", "deepseek", "qwen", "grok", "kimi")
@@ -20,8 +25,11 @@ SETTINGS = {"research": {
 }}
 
 
-def test_the_orch_it_tree_names_no_known_family():
-    assert find_names(bridge_texts(ROOT), refused_names(None, KNOWN_FAMILIES)) == []
+def test_the_orch_it_tree_names_no_known_family_and_no_name_its_own_settings_file_names():
+    """The required checks run this on a pull request's tree: the settings file the tree carries is read
+    (a pull request cannot set the installation's)."""
+
+    assert find_names(bridge_texts(ROOT), refused_names_of_tree(ROOT, KNOWN_FAMILIES)) == []
 
 
 def test_a_copy_with_gpt_back_in_the_research_start_description_is_red(tmp_path):
@@ -62,23 +70,19 @@ def test_a_word_that_only_contains_a_refused_name_is_no_hit_acmellmx_xacme_llmx_
 def test_neutral_words_and_names_under_three_characters_are_dropped():
     raw = {"research": {"provider": {"id": "provider", "name": "ab", "models": {}},
                         "models": {"small": "model/xy-9"}}}
-    assert refused_names(raw) == {"small", "xy-9"}
+    assert refused_names(raw) == {"xy-9"}
 
 
-def test_an_alias_is_a_name_only_from_five_characters():
-    raw = {"research": {"provider": {"id": "acme-llm"},
-                        "models": {"big": "acme-llm/acme-1", "small": "acme-llm/acme-2"}}}
-    names = refused_names(raw)
-    assert "small" in names and "big" not in names
+def test_only_the_provider_and_model_name_fields_are_refused_no_alias_no_generic_word_no_host_word():
+    names = refused_names(SETTINGS)
+    assert {"acme-llm", "acme-1"} <= names
+    assert "small" not in names and "example" not in names and "api" not in names
 
 
-def test_the_host_of_a_provider_option_url_gives_its_words_of_four_or_more_and_no_other_option_string():
-    raw = {"research": {"provider": {"id": "acme-llm",
-                                    "options": {"baseURL": "https://api.acme-llm.example/v1", "timeout": "5 seconds"}},
-                        "models": {"small": "acme-llm/acme-1"}}}
-    names = refused_names(raw)
-    assert {"acme-llm", "example"} <= names
-    assert "api" not in names and "seconds" not in names
+def test_an_alias_and_a_host_are_no_name_whatever_their_length():
+    raw = {"research": {"provider": {"id": "acme-llm", "options": {"baseURL": "https://api.generic-host.example/v1"}},
+                        "models": {"big": "acme-llm/acme-1", "medium-sized": "acme-llm/acme-2"}}}
+    assert refused_names(raw) == {"acme-llm", "acme-1", "acme-2"}
 
 
 def test_a_provider_model_entry_s_name_is_a_name():
@@ -98,6 +102,42 @@ def test_the_installation_settings_are_read_through_their_path(tmp_path, monkeyp
     path.write_text(json.dumps(SETTINGS), "utf-8")
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(path))
     assert refused_names_from_installation(KNOWN_FAMILIES) >= {"acme-llm", "gpt"}
+
+
+def _tree_with_settings(tmp_path, doc_line):
+    tree = tmp_path / "tree"
+    (tree / "docs" / "agents").mkdir(parents=True)
+    (tree / "docs" / "agents" / "note.md").write_text(doc_line, "utf-8")
+    (tree / "README.md").write_text("A readme with the alias small and the host example.\n", "utf-8")
+    (tree / "settings.json").write_text(json.dumps(SETTINGS), "utf-8")
+    return tree
+
+
+def test_a_tree_that_carries_a_settings_file_refuses_the_names_in_it_with_no_installation_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "no-such-settings.json"))
+    tree = _tree_with_settings(tmp_path, "The brief goes to acme-llm.\n")
+    hits = find_names(bridge_texts(tree), refused_names_of_tree(tree, KNOWN_FAMILIES))
+    assert hits == [("docs/agents/note.md", 1, "acme-llm")]
+
+
+def test_a_tree_with_no_settings_file_keeps_the_known_families_only(tmp_path):
+    (tmp_path / "README.md").write_text("acme-llm and gpt.\n", "utf-8")
+    assert refused_names_of_tree(tmp_path, KNOWN_FAMILIES) == refused_names(None, KNOWN_FAMILIES)
+    hits = find_names(bridge_texts(tmp_path), refused_names_of_tree(tmp_path, KNOWN_FAMILIES))
+    assert hits == [("README.md", 1, "gpt")]
+
+
+def test_a_malformed_settings_file_in_the_tree_raises(tmp_path):
+    (tmp_path / "settings.json").write_text("[1]", "utf-8")
+    with pytest.raises(SettingsError):
+        refused_names_of_tree(tmp_path)
+
+
+def test_the_names_check_command_reads_the_tree_settings_file_too(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "no-such-settings.json"))
+    tree = _tree_with_settings(tmp_path, "# Notes\n\nThe brief goes to acme-llm.\n")
+    assert cli.main(["research-check-names", "--work-tree", str(tree)]) == 1
+    assert capsys.readouterr().out == "docs/agents/note.md:3: acme-llm\n"
 
 
 def test_the_names_check_command_prints_each_hit_and_exits_1(tmp_path, monkeypatch, capsys):

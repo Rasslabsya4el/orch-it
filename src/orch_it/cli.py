@@ -513,11 +513,12 @@ def _research(args) -> tuple[str, int]:
 
 
 def _check_names(args) -> tuple[str, int]:
-    """The names check of the bridge's text, against the names the installation's settings name:
-    one line per hit, exit 1 on a hit, 0 clean."""
+    """The names check of the bridge's text, against the names the installation's settings and the work
+    tree's own `settings.json` name: one line per hit, exit 1 on a hit, 0 clean."""
 
-    hits = research_names.find_names(research_names.bridge_texts(Path(args.work_tree)),
-                                     research_names.refused_names_from_installation())
+    work_tree = Path(args.work_tree)
+    hits = research_names.find_names(research_names.bridge_texts(work_tree),
+                                     research_names.refused_names_from_installation(work_tree=work_tree))
     if not hits:
         return "no refused name in the bridge's text\n", 0
     return "".join(f"{path}:{line}: {name}\n" for path, line, name in hits), 1
