@@ -468,7 +468,7 @@ class GhPullHub(GhHub):
         """The objects under `key` of every page of an answer that wraps its list in an object."""
 
         items = []
-        pages = json_values(self.gh(args))
+        pages = json_values(self._read(args))
         if not pages:
             raise GithubError("gh_bad_output", f"{' '.join(args[:3])}: no answer")
         for page in pages:
