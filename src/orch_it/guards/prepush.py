@@ -209,26 +209,26 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
         return "", 0
     if not commits:
         return "", 0
-    # the closing check applies to every push, the private-data scan only to a public remote; a
-    # failure of one never skips the other, and a hit of either always refuses
+    # the closing check and the coding standard's kinds (#413: the setup's values, the pattern kinds)
+    # apply to every push; the kinds of private data (#395) only to a public remote; a failure of one
+    # never skips the other, and a hit of any always refuses
     closing = _closing_hits(work_tree, commits, store, repo)
-    hits, scanned, not_checked = [], False, ""
+    hits, scanned, not_checked, broken = [], False, "", None
     try:
-        if not _is_private(visibility or visibility_of, remote_url):
-            if patterns is None:
-                patterns = scanner.Patterns.of_machine(allowed_emails=_profile_emails(repo), work_tree=work_tree)
-            hits = scanner.scan_commits(work_tree, commits, patterns)
-            scanned = True
-            not_checked = patterns.not_checked_line()
-    except exceptions.ExceptionsError as exc:  # a list nobody can read: said, and the push goes on
-        _say(f"orch-it: the private-data scan did not run, {exc}\n")
-        _write_crash(store, exc, repo)
+        private = _is_private(visibility or visibility_of, remote_url)
+        if patterns is None:
+            patterns, broken = _machine_patterns(work_tree, raw_stdin, () if private else _profile_emails(repo))
+        if private:
+            patterns = patterns.without_old_kinds()
+        hits = scanner.scan_commits(work_tree, commits, patterns)
+        scanned = True
+        not_checked = patterns.not_checked_line()
     except Exception as exc:  # a guard that crashes lets the push through, and says so
         _write_crash(store, exc, repo)
     # a closing hit writes no guard.fired: the store's closed guard set names no code for it, and
     # a clean scan of a refused push is no pass
     fired = [_fired(hit) for hit in hits]
-    if scanned and not hits and not closing:
+    if scanned and not hits and not closing and broken is None:
         fired = [hook.Fired(GUARD, "pass", "clean", f"{len(commits)} commits scanned", None)]
     if fired:
         try:
@@ -237,13 +237,31 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
             pass
     if not_checked:  # a clean push never goes without what was not checked
         _say(not_checked + "\n")
-    if hits or closing:
+    if broken is not None:  # a list nobody can read refuses the push; the scan above ran without it
+        _say(f"orch-it: push refused, {exceptions.FILE_NAME}: {broken}\n")
+    if hits or closing or broken is not None:
         if hits:
             _say(_refusal(hits))
         if closing:
             _say(_closing_refusal(closing))
         return "", EXIT_REFUSED
     return "", 0
+
+
+def _machine_patterns(work_tree: Path, raw_stdin: str, emails) -> tuple[scanner.Patterns, Exception | None]:
+    """The patterns of this machine for a push, and the `ExceptionsError` of an exceptions list that cannot
+    be used (then the patterns hold no list, so the other kinds still run). The list and the workflow job
+    names are read from the tree of the first pushed commit when the work tree is not at it."""
+
+    rev = None
+    pushes = _pushes(raw_stdin)
+    if pushes and scanner.sha_of(work_tree) != pushes[0][0]:
+        rev = pushes[0][0]
+    try:
+        return scanner.Patterns.of_machine(allowed_emails=emails, work_tree=work_tree, rev=rev), None
+    except exceptions.ExceptionsError as exc:
+        return scanner.Patterns.of_machine(allowed_emails=emails, work_tree=work_tree, rev=rev,
+                                           exceptions=exceptions.Exceptions()), exc
 
 
 def _profile_emails(repo: str | None) -> tuple[str, ...]:

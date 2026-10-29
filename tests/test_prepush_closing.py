@@ -32,7 +32,7 @@ MESSAGE_37FA812 = (
     "login without admin keep raising; two tests for them; docstring says exactly this; the ticket URL and the\n"
     "duplicate test left the permissions test file.")
 # what the hook reads off the machine is not under test here: the closing check needs none of it
-PATTERNS = Patterns.machine_independent()
+PATTERNS = Patterns()
 REFUSAL_WAY = "write `Refs <URL>` or `Ticket: <URL>`"
 
 

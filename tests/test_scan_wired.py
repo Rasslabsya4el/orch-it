@@ -23,8 +23,8 @@ ACCOUNT = "acme-dev"
 REPO = "acme-dev/orch-tools"
 HOST = "build-box-7"
 USER = "jdoe"
-GIT_NAME = "Pat Example"
-GIT_EMAIL = "pat@example.test"
+GIT_NAME = "Quinn Sample"
+GIT_EMAIL = "quinn@sample.invalid"
 JOB = "check-alpha"
 RULE = "A value that differs per repo, account, machine or OS is a setting with its default, never a literal in code, tests, rules or tickets."
 ZEROS = "0" * 40
@@ -35,12 +35,12 @@ PLANTED = {
     "repo": ("b.md", "clone {repo} now\n", {"repo"}),
     "host": ("c.txt", "ssh {host} now\n", {"host"}),
     "home": ("d.txt", "cd {home}/notes\n", {"home"}),
-    "user": ("e.txt", "login as {user} please\n", {"user"}),
+    "user": ("e.txt", "export USER={user}\n", {"user"}),
     "projects_folder": ("f.txt", "cd {projects}/other\n", {"projects_folder"}),
     "git_name": ("g.txt", "by {git_name} today\n", {"git_name"}),
     "git_email": ("h.txt", "mail {git_email} now\n", {"git_email"}),
-    "bare_python": ("i.sh", "py" + "thon -m pytest -q\n", {"bare_python"}),
-    "one_os_call": ("j.py", "def stop(pid):\n    os.start" + "file(pid)\n", {"one_os_call"}),
+    "bare_python": ("i.sh", "python -m pytest -q\n", {"bare_python"}),
+    "one_os_call": ("j.py", "def stop(pid):\n    os.startfile(pid)\n", {"one_os_call"}),
     "check_name": ("k.py", "if name == '{job}':\n    pass\n", {"check_name_literal"}),
 }
 
@@ -147,7 +147,7 @@ def test_a_range_scan_finds_the_literals_of_the_added_lines(setup, capsys):
 
 def test_a_range_scan_judges_a_line_by_the_file_it_is_in(setup, capsys):
     """An OS test above the call makes it a branch on the OS; the context is the file, not the added lines."""
-    guarded = "import sys\nif sys.platform == 'win32':\n    os.start" + "file(1)\n"
+    guarded = "import sys\nif sys.platform == 'win32':\n    os.startfile(1)\n"
     base = setup.repo.commit({"ok.py": guarded})
     setup.repo.commit({"ok.py": guarded + "# more\n"})
     code, out, _ = scan(capsys, setup, "--range", f"{base}..HEAD")
@@ -234,12 +234,80 @@ def test_a_scan_on_github_finds_the_runners_home(setup, monkeypatch, capsys):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("HOME", runner_home)
     monkeypatch.setenv("GITHUB_REPOSITORY", "acme-ci/ci-repo")
+    monkeypatch.setenv("USER", "ci-runner-x")
+    monkeypatch.setenv("COMPUTERNAME", "ci-box-9")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/zz-other-home")))
-    setup.repo.commit({"a.txt": f"cd {runner_home}/work\n", "b.txt": "see acme-ci/ci-repo\n"})
+    setup.repo.commit({"a.txt": f"cd {runner_home}/work\n", "b.txt": "see acme-ci/ci-repo\n",
+                       "c.txt": "export USER=ci-runner-x\n", "d.txt": "ssh ci-box-9 now\n"})
     code, out, _ = scan(capsys, setup, "--tree", "--machine-independent")
     assert code == 1
     assert found(out)["a.txt"] == {"home"} and found(out)["b.txt"] >= {"repo"}
+    assert found(out)["c.txt"] == {"user"} and found(out)["d.txt"] == {"host"}
     assert RULE in out
+
+
+def test_a_second_setup_is_refused_by_its_own_values_and_not_by_the_first_ones(setup, tmp_path):
+    """Another user's home, host name and user, injected through `read_values`' arguments: the scan refuses
+    THAT setup's values, and a text holding the first setup's values passes."""
+    answers = {("git", "remote", "get-url", "origin"): "https://github.com/other-co/other-repo.git",
+               ("gh", "api", "user", "--jq", ".login"): "other-co",
+               ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"): "/zz-second/projects/x/.git",
+               ("git", "config", "user.name"): "Robin Other", ("git", "config", "user.email"): "robin@other.invalid"}
+    patterns = scanner.Patterns.of_machine(
+        work_tree=setup.repo.path, env={"USER": "robin"}, home="/zz-second/robin", host="other-box-3",
+        run=lambda cmd: answers[tuple(cmd)])
+    second = {"h.txt": "cd /zz-second/robin/notes\n", "i.txt": "ssh other-box-3\n", "j.txt": "export USER=robin\n",
+              "k.txt": "by Robin Other\n", "l.txt": "clone other-co/other-repo\n"}
+    first = setup.line("{home}/a {host} export USER={user} {git_name} {repo}\n")
+    setup.repo.commit(second | {"first.txt": first})
+    hits = scanner.scan_tree(setup.repo.path, patterns)
+    by_file = {}
+    for hit in hits:
+        by_file.setdefault(hit.file, set()).add(hit.kind)
+    assert {"home"} <= by_file["h.txt"] and {"host"} <= by_file["i.txt"] and {"user"} <= by_file["j.txt"]
+    assert {"git_name"} <= by_file["k.txt"] and {"repo"} <= by_file["l.txt"]
+    assert "first.txt" not in by_file
+
+
+def test_a_git_email_in_a_new_folder_file_is_refused_on_a_range_and_on_a_push(setup, tmp_path, capsys):
+    base = setup.repo.commit({"README.md": "clean\n"})
+    head = setup.repo.commit({"a/b/c.txt": f"mail {GIT_EMAIL}\n"})
+    code, out, _ = scan(capsys, setup, "--range", f"{base}..HEAD")
+    assert code == 1 and f"a/b/c.txt:1 git_email - {RULE}" in out
+    for visibility in ("public", "private"):  # the standard's kinds run on every push
+        result = prepush.run_pre_push(f"refs/heads/main {head} refs/heads/main {base}\n", Store.open(tmp_path / visibility),
+                                      remote_url="https://example.invalid/o/n.git", remote_name="origin",
+                                      work_tree=setup.repo.path, visibility=lambda url, v=visibility: v)
+        assert result == ("", 1), visibility
+        assert f"a/b/c.txt:1 git_email - {RULE}" in capsys.readouterr().err
+
+
+def push_of(setup, tmp_path, base, head):
+    return prepush.run_pre_push(f"refs/heads/main {head} refs/heads/main {base}\n", Store.open(tmp_path / "ps"),
+                                remote_url="https://example.invalid/o/n.git", remote_name="origin",
+                                work_tree=setup.repo.path, visibility=lambda url: "private")
+
+
+def test_a_push_with_an_exceptions_entry_with_no_reason_is_refused_and_the_other_kinds_still_run(setup, tmp_path, capsys):
+    base = setup.repo.commit({"README.md": "clean\n"})
+    head = setup.repo.commit({"guards-exceptions.toml": '[[exception]]\nfile = "n.txt"\npattern = "x"\n',
+                              "n.txt": f"by {GIT_NAME}\n"})
+    assert push_of(setup, tmp_path, base, head) == ("", 1)
+    err = capsys.readouterr().err
+    assert "guards-exceptions.toml" in err and "entry 1" in err and "reason" in err
+    assert f"n.txt:1 git_name - {RULE}" in err  # the scan ran without the list
+
+
+def test_a_push_reads_the_exceptions_list_of_the_pushed_commit_when_it_is_not_checked_out(setup, tmp_path, capsys):
+    entry = '[[exception]]\nfile = "n.txt"\npattern = "by"\nreason = "a record"\n'
+    base = setup.repo.commit({"README.md": "clean\n"})
+    head = setup.repo.commit({"guards-exceptions.toml": entry, "n.txt": f"by {GIT_NAME}\n"})
+    setup.repo.git("checkout", "-q", base)  # the work tree is at the base: its tree has no list
+    assert push_of(setup, tmp_path, base, head) == ("", 0)
+    broken = setup.repo.commit({"guards-exceptions.toml": '[[exception]]\nfile = "n.txt"\n'}, message="broken")
+    setup.repo.git("checkout", "-q", base)
+    assert push_of(setup, tmp_path, base, broken) == ("", 1)
+    assert "guards-exceptions.toml" in capsys.readouterr().err
 
 
 def test_machine_independent_keeps_its_email_allowance(setup, capsys):
