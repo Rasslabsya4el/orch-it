@@ -7,9 +7,11 @@ a folder copy starts no process. Each copy goes into the test's own tmp_path, so
 repository and no worker sees another worker's template.
 """
 
+import contextlib
 import hashlib
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 from scan_repos import NO_WINDOW, Repo
@@ -27,7 +29,15 @@ class Templates:
         if key not in self.built:
             folder = self.base / "templates" / hashlib.sha1(key.encode()).hexdigest()[:16]
             folder.mkdir(parents=True)
-            self.built[key] = (folder, build(folder))
+            try:
+                value = build(folder)
+            except BaseException:
+                # a half-made folder is set aside, not left under the key: the next copy of `key` builds again and
+                # raises the real error (paths inside the template are absolute, so it cannot be renamed on success)
+                with contextlib.suppress(OSError):
+                    folder.rename(folder.with_name(f"{folder.name}.failed-{uuid.uuid4().hex[:8]}"))
+                raise
+            self.built[key] = (folder, value)
         folder, value = self.built[key]
         shutil.copytree(folder / part, dest)
         return dest, value
@@ -44,6 +54,7 @@ def origin_base(folder: Path) -> dict:
     """`folder/origin`: a repository with its configuration and no commit; returns the environment its git
     commands run with (the one `Repo` gives its commands)."""
 
+    # the copies' `origin` remote points at this worker's shared template origin; tests must not push to it
     return Repo(folder / "origin").env
 
 
