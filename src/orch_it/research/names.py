@@ -1,17 +1,20 @@
-"""The names the research bridge's text must not carry (#412 unit 5): a provider or model name is
+"""The names the research bridge's text must not carry (#412 unit 5, 9): a provider or model name is
 refused when the bridge's settings name it at run time, or when it is one of the known families
 the caller passes in (the list lives in the test, not here).
 
-`refused_names(settings_raw, known)` reads the `research` object of a settings dict:
-- an alias of `models` of five characters or more, and the parts of each `models` value and of
-  each provider model id (`acme-llm/acme-1` gives `acme-llm` and `acme-1`);
+`refused_names(settings_raw, known)` reads the `research` object of a settings dict, and takes only
+the values of the provider and model NAME fields (never an alias, a host or another option):
+- the parts of each `models` value and of each provider model id (`acme-llm/acme-1` gives `acme-llm`
+  and `acme-1`);
 - `provider.id` and the parts of `provider.npm`, whole;
 - `provider.name`, whole, and each word of four characters or more;
-- the host of each URL in `provider.options` (`api.acme-llm.example` gives `acme-llm` and
-  `example`, each word of four characters or more); the other option strings name no host;
 - each `name` inside the dict of a `provider.models` entry, whole, and each model id of
   `provider.models`.
 Names under three characters and the neutral words `research`, `model` and `provider` are dropped.
+
+A pull request cannot set the installation's settings, so the required checks read the settings
+file the work tree carries at its root (`settings.json`, the installation's own format and name):
+`refused_names_of_tree(root, known)`. With no such file it is the known families alone.
 
 `find_names(files, refuse)` returns (path, line number, name) for each whole-word,
 case-insensitive hit; a line carrying the marker `_Avoid_` is skipped (a glossary's list of
@@ -27,18 +30,19 @@ their line numbers.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from collections.abc import Iterable
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from orch_it import settings as installation
 from orch_it.research.settings import ResearchSettings
+from orch_it.settings import SettingsError
 
 NEUTRAL = frozenset({"research", "model", "provider"})
 MIN_LENGTH = 3  # a whole name
-WORD_MIN_LENGTH = 4  # a word of a name, a host part
-ALIAS_MIN_LENGTH = 5  # an alias of research.models
+WORD_MIN_LENGTH = 4  # a word of a name
+TREE_SETTINGS = "settings.json"  # the settings file a work tree carries at its root
 MARKER = "_Avoid_"
 WHOLE_FILES = (".mcp.json", "src/orch_it/research/mcp.py", "GLOSSARY.md", "README.md",
                ".claude/agents/*.md", ".claude/skills/**/SKILL.md", "docs/**/*.md")
@@ -57,7 +61,6 @@ def refused_names(settings_raw: dict | None, known: Iterable[str] = ()) -> set[s
     names = {_clean(name) for name in known}
     if settings_raw is not None:
         research = ResearchSettings.from_settings(settings_raw)
-        names.update(_clean(alias) for alias in research.models if len(alias) >= ALIAS_MIN_LENGTH)
         for model in research.models.values():
             names.update(_parts(model))
         provider = research.provider or {}
@@ -67,9 +70,6 @@ def refused_names(settings_raw: dict | None, known: Iterable[str] = ()) -> set[s
         if isinstance(provider.get("name"), str):
             names.update(_parts(provider["name"]))
             names.update(_words(provider["name"]))
-        for text in _strings(provider.get("options")):
-            if "://" in text:
-                names.update(_words(urlsplit(text).hostname or "", r"\."))
         for model_id, entry in (provider.get("models") or {}).items():
             names.update(_parts(model_id))
             if isinstance(entry, dict) and isinstance(entry.get("name"), str):
@@ -91,11 +91,37 @@ def find_names(files: dict[str, str], refuse: set[str]) -> list[tuple[str, int, 
     return found
 
 
-def refused_names_from_installation(known: Iterable[str] = ()) -> set[str]:
-    """`refused_names` of the installation's settings file, read through its path (the run-time
-    entry point; the tests pass a dict instead)."""
+def refused_names_from_installation(known: Iterable[str] = (), work_tree: Path | None = None) -> set[str]:
+    """`refused_names` of the installation's settings file, read through its path, together with the
+    settings file of `work_tree` when one is given and carries it (the run-time entry point; the tests
+    pass a dict instead)."""
 
-    return refused_names(installation.load(), known)
+    names = refused_names(installation.load(), known)
+    if work_tree is not None:
+        names |= refused_names_of_tree(work_tree)
+    return names
+
+
+def tree_settings(root: Path) -> dict | None:
+    """The settings file a work tree carries at its root, parsed; None when it has none. A file that is
+    no JSON object raises `SettingsError`, as the installation's does."""
+
+    path = Path(root) / TREE_SETTINGS
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text("utf-8-sig"))
+    except (OSError, ValueError) as e:
+        raise SettingsError("settings_unreadable", f"{path}: {e}") from None
+    if not isinstance(raw, dict):
+        raise SettingsError("settings_unreadable", f"{path}: not an object")
+    return raw
+
+
+def refused_names_of_tree(root: Path, known: Iterable[str] = ()) -> set[str]:
+    """`refused_names` of the settings file the work tree carries: what the required checks use."""
+
+    return refused_names(tree_settings(root), known)
 
 
 def bridge_texts(root: Path) -> dict[str, str]:
@@ -133,19 +159,6 @@ def _words(value: str, separator: str = r"[^A-Za-z0-9]+") -> set[str]:
 
     words = (_clean(word) for word in re.split(separator, value))
     return {word for word in words if len(word) >= WORD_MIN_LENGTH and word not in NEUTRAL}
-
-
-def _strings(value) -> Iterable[str]:
-    """Every string inside a settings value, at any depth."""
-
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _strings(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _strings(item)
 
 
 def _docstring_text(path: Path) -> str:
