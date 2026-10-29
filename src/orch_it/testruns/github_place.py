@@ -116,6 +116,17 @@ def _is_machine_of_the_limit(job: dict) -> bool:
     return hosted and os_name is not None and os_name != "macos"
 
 
+def budget_poll(base: float, left: tuple[int, int] | None) -> float:
+    """A poller's wait before its next read (#414 decision 9, as the line's `poll_wait`): `base` while the account's
+    request budget, as GitHub reports it (`left`: remaining, limit; None when unread), is at or above the threshold;
+    longer under it, by `github_budget.poll_interval`. Shared by the github place and the test-place wait."""
+
+    if left is None:
+        return float(base)
+    remaining, limit = left
+    return github_budget.poll_interval(base, remaining, limit, github_budget.threshold())
+
+
 def _stored_oses(store: Store, repo: str) -> tuple[str, ...]:
     """The OSes of the github-role test runs the store holds for `repo`, in the order of the closed list."""
 
@@ -276,15 +287,9 @@ class GithubPlace:
         return True
 
     def poll_wait(self) -> float:
-        """The wait before the next read of a run's jobs (#414 decision 9, as the line's `poll_wait`): POLL_SECONDS
-        while the account's request budget, as GitHub reports it now, is at or above the threshold; longer under it.
-        No reading keeps the interval."""
+        """The wait before the next read of a run's jobs (#414 decision 9, as the line's `poll_wait`)."""
 
-        left = self.rate_limit()
-        if left is None:
-            return POLL_SECONDS
-        remaining, limit = left
-        return github_budget.poll_interval(POLL_SECONDS, remaining, limit, github_budget.threshold())
+        return budget_poll(POLL_SECONDS, self.rate_limit())
 
     def rate_limit(self) -> tuple[int, int] | None:
         """The core request budget of the token as GitHub reports it now: (remaining, limit); None when it cannot be
