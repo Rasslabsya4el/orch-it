@@ -38,6 +38,7 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import quote
 
 from orch_it import settings
@@ -45,8 +46,7 @@ from orch_it.events import schema
 from orch_it.merge import git as merge_git
 from orch_it.merge.git import GitDone, GitError
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
-from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, workflow_of
-from orch_it.merge.workflow_watch_run import last_run_id
+from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, workflow_of
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
     REPORT_FILE,
@@ -57,7 +57,6 @@ from orch_it.testruns.github import (
     json_values,
 )
 from orch_it.tickets.hub import Comment, GhHub, _moment, _text
-from orch_it.tickets.reader import TRIAGE_LABEL
 
 CACHE_FOLDER = "merge-cache"
 RUN_OUTCOMES = ("success", "failure", "cancelled", "timed_out", "skipped")  # a run's conclusion the watch keeps
@@ -68,6 +67,13 @@ BRANCH_RUN_EVENTS = ("push", "schedule", "workflow_dispatch")
 METHODS = ("merge", "squash", "rebase")
 _RUN_OF_JOB = re.compile(r"/actions/runs/(\d+)/job/")
 _PULL_URL = re.compile(r"/pull/(\d+)/?$")
+
+
+class _Workflow(NamedTuple):
+    """A workflow GitHub lists: its id, and its file path (its identity)."""
+
+    id: int
+    path: str
 _JUNIT_NAME = re.compile(r"junit-(.+)-(\d+)")
 _CREDENTIAL = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
 
@@ -351,49 +357,64 @@ class GhPullHub(GhHub):
 
     # --- workflow watch (#411) ----------------------------------------------------------------
 
-    def workflow_files(self, repo: str) -> dict[str, str]:
-        return {name: path for _, name, path in self._workflows(repo)}
+    def workflow_files(self, repo: str) -> list[str]:
+        return [workflow.path for workflow in self._workflows(repo)]
 
     def latest_workflow_runs(self, repo: str) -> list[WorkflowRun]:
+        branch = quote(self._default_branch(repo), safe="")
         found = []
-        for workflow_id, name, _ in self._workflows(repo):
-            runs = self._pages(["api", f"repos/{repo}/actions/workflows/{workflow_id}/runs?status=completed"
-                                "&per_page=1"], "workflow_runs")
+        for workflow in self._workflows(repo):
+            runs = self._pages(["api", f"repos/{repo}/actions/workflows/{workflow.id}/runs?status=completed"
+                                f"&branch={branch}&per_page=1"], "workflow_runs")
             if not runs:
-                continue  # a workflow with no completed run is left out
+                continue  # a workflow with no completed run on the default branch is left out
             run = runs[0]
             run_id = run.get("id")
             if type(run_id) is not int or not _text(run.get("updated_at")):
-                raise GithubError("gh_bad_output", f"{repo}: workflow `{name}` has a run with no id or end time")
+                raise GithubError("gh_bad_output",
+                                  f"{repo}: workflow `{workflow.path}` has a run with no id or end time")
             jobs = self._pages(["api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"], "jobs")
             conclusion = run.get("conclusion")
             found.append(WorkflowRun(
-                workflow=name, run_id=run_id, url=_text(run.get("html_url")), ended_at=run["updated_at"],
+                workflow=workflow.path, run_id=run_id, url=_text(run.get("html_url")), ended_at=run["updated_at"],
                 outcome=conclusion if conclusion in RUN_OUTCOMES else "other",
-                jobs_started=sum(1 for job in jobs if job.get("started_at") is not None)))
+                jobs_started=sum(1 for job in jobs
+                                 if job.get("started_at") is not None and job.get("conclusion") != "skipped")))
         return found
 
     def watch_issues(self, repo: str) -> list[WatchIssue]:
+        """The open issues (no pull requests) whose body holds a workflow watch mark, whatever labels they carry."""
+
         found = []
-        for issue in self.listed(repo, TRIAGE_LABEL):
-            workflow = workflow_of(issue.body)
+        listed = self._list(["api", "--paginate", f"repos/{repo}/issues?state=open&per_page=100"])
+        for issue in listed:
+            if "pull_request" in issue or type(issue.get("number")) is not int:
+                continue
+            body = _text(issue.get("body"))
+            workflow = workflow_of(body)
             if workflow is None:
                 continue
-            texts = [issue.body, *(c.body for c in self.comments(repo, issue.number))]
-            found.append(WatchIssue(issue.number, workflow, last_run_id(texts)))
+            texts = [body, *(c.body for c in self.comments(repo, issue.get("number")))]
+            found.append(WatchIssue(issue["number"], workflow, last_run_id(texts)))
         return found
 
-    def _workflows(self, repo: str) -> list[tuple[int, str, str]]:
-        """(id, name, file path) of every workflow GitHub lists; a workflow with no name is named by its path."""
+    def _default_branch(self, repo: str) -> str:
+        found = self._object(["api", f"repos/{repo}"])
+        branch = _text(found.get("default_branch")) if found else ""
+        if not branch:
+            raise GithubError("gh_bad_output", f"{repo}: a repo with no default branch")
+        return branch
+
+    def _workflows(self, repo: str) -> list[_Workflow]:
+        """The id and file path of every workflow GitHub lists; a workflow is named by its file, never its name."""
 
         found = []
         for workflow in self._pages(["api", "--paginate", f"repos/{repo}/actions/workflows?per_page=100"],
                                     "workflows"):
             path = _text(workflow.get("path"))
-            name = _text(workflow.get("name")) or path
-            if type(workflow.get("id")) is not int or not name:
-                raise GithubError("gh_bad_output", f"{repo}: a workflow with no id or name")
-            found.append((workflow["id"], name, path))
+            if type(workflow.get("id")) is not int or not path:
+                raise GithubError("gh_bad_output", f"{repo}: a workflow with no id or file path")
+            found.append(_Workflow(workflow["id"], path))
         return found
 
     def actions_enabled(self, repo: str) -> bool:

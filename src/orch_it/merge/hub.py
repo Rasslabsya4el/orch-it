@@ -125,11 +125,12 @@ class PullHub(Hub, Protocol):
     def latest_workflow_runs(self, repo: str) -> list[WorkflowRun]:
         """The latest completed run of each workflow GitHub lists; a workflow with none is left out."""
 
-    def workflow_files(self, repo: str) -> dict[str, str]:
-        """Every workflow GitHub lists: its name (its file path when it has none) to its file path."""
+    def workflow_files(self, repo: str) -> list[str]:
+        """The file path of every workflow GitHub lists, in the order it lists them."""
 
     def watch_issues(self, repo: str) -> list[WatchIssue]:
-        """The open `needs-triage` issues that are workflow watch tickets, with the run each last named."""
+        """The open issues (no pull requests) that are workflow watch tickets, whatever their labels, with the
+        run each last named."""
 
     def actions_enabled(self, repo: str) -> bool: ...
 
