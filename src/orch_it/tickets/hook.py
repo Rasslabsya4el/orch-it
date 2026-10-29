@@ -8,6 +8,10 @@ Refused, with every reason at once:
 - the shape rules' codes (`shape.violations`): the body a create writes, the body an edit
   writes, or, for an edit that only adds `ready-for-agent`, the body the ticket already holds;
   for an edit of the title alone, the title rules;
+- `literal_value` / `literal_pattern` (`shape.literal_violations`, #413 unit 6): on the same body,
+  a value of this machine's setup (account, repo, host, home, user, projects folder, git name or
+  e-mail) or a pattern kind (bare python, a one-OS call, a check name of the work tree's
+  workflows) written in it; the refusal ends with the `not checked` line when a kind had no value;
 - `park_by_hand`: a create whose body holds a `Parked:` line or that sets the `parked` label; an
   edit that adds or removes the `parked` label, or whose body adds, changes or removes the
   ticket's `Parked:` line (only `python -m orch_it tickets park` and `unpark` write them);
@@ -41,7 +45,8 @@ from pathlib import Path
 
 HOOK = "tickets"
 WRITE_TICKET = "write-ticket"
-HOOK_CODES = ("write_ticket_missing", "park_by_hand", "body_unreadable", "command_unreadable", "issue_unreadable")
+HOOK_CODES = ("write_ticket_missing", "park_by_hand", "body_unreadable", "command_unreadable", "issue_unreadable",
+              "literal_value", "literal_pattern")
 _QUICK = re.compile(r"issue", re.IGNORECASE)  # no `gh issue` call without the word: the rest is passed at once
 _ISSUE_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/([1-9][0-9]*)(?:[/?#]\S*)?",
                         re.IGNORECASE)
@@ -71,10 +76,11 @@ class Refusal:
         return bool(self.codes)
 
 
-def judge(payload: dict, *, hub, repo_of) -> Refusal | None:
+def judge(payload: dict, *, hub, repo_of, values=None) -> Refusal | None:
     """None when the tool call in `payload` writes no issue; else its `Refusal`, which is false
     (no codes) when the issue it writes is good. `repo_of(folder)` gives a work tree's GitHub
-    `owner/name`, or None."""
+    `owner/name`, or None. `values` is the setup's values for the literal check (None: this
+    machine's, read only when a body is judged)."""
 
     command = (payload.get("tool_input") or {}).get("command") if isinstance(payload, dict) else None
     if payload.get("tool_name") not in ("Bash", "PowerShell") or not isinstance(command, str):

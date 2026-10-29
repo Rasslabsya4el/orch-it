@@ -21,6 +21,15 @@ WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ticket-shape.y
 TRANSCRIPT = Path(__file__).parent / "fixtures" / "transcripts" / "write_ticket_called.jsonl"
 
 
+@pytest.fixture(autouse=True)
+def no_values_of_this_machine(monkeypatch):
+    """The bodies of these tests are judged as text: no value of this machine and no workflow of the
+    work tree is read (#413 unit 6)."""
+    from orch_it.guards.values import Values
+    monkeypatch.setattr("orch_it.guards.values.read_values", lambda **kwargs: Values())
+    monkeypatch.setattr("orch_it.guards.kinds.read_job_names", lambda folder: frozenset())
+
+
 def event(action, number, labels, label=None, repo=REPO):
     found = {"action": action, "repository": {"full_name": repo},
              "issue": {"number": number, "labels": [{"name": name} for name in labels]}}

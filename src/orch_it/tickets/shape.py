@@ -12,10 +12,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from orch_it.guards.kinds import find_in_ticket_text
+from orch_it.guards.values import Values, find_in
 from orch_it.tickets.model import HUMAN_FIELDS, Ticket, none_reason
 
 TITLE_MAX = 80
 WEIGHT_RANGE = range(1, 11)
+# the first sentence of CODING_STANDARDS.md, word for word: a finding cites it by that sentence
+LITERAL_RULE = ("A value that differs per repo, account, machine or OS is a setting with its default, never a literal "
+                "in code, tests, rules or tickets.")
+# the literal findings of a body (rule 3 of the check, #413 unit 6); not shape rules, so not in `RULES`
+LITERAL_RULES: dict[str, str] = {"literal_value": LITERAL_RULE, "literal_pattern": LITERAL_RULE}
 
 # code -> the rule as the skill states it
 RULES: dict[str, str] = {
@@ -48,11 +55,12 @@ class Violation:
     def rule(self) -> str:
         """The rule broken, with this violation's detail."""
 
-        return f"{RULES[self.code]} ({self.detail})" if self.detail else RULES[self.code]
+        text = (RULES | LITERAL_RULES)[self.code]
+        return f"{text} ({self.detail})" if self.detail else text
 
     @property
     def message(self) -> str:
-        said = f"{self.code}: {RULES[self.code]}"
+        said = f"{self.code}: {(RULES | LITERAL_RULES)[self.code]}"
         return f"{said} ({self.detail})" if self.detail else said
 
 
@@ -96,6 +104,18 @@ def violations(ticket: Ticket) -> list[Violation]:
         found.append(Violation("agent_block_missing"))
     else:
         found += _agent(ticket)
+    return found
+
+
+def literal_violations(text: str, *, values: Values, checks: frozenset[str] = frozenset()) -> list[Violation]:
+    """The literal findings of a body: each value of this setup in any spelling (`find_in`), then each pattern
+    kind of CODING_STANDARDS.md kinds 4 to 6 (`find_in_ticket_text`, with the GitHub check names `checks`).
+    One violation per finding; its detail is the kind, the line and the redacted or matched text."""
+
+    found = [Violation("literal_value", f"{hit.kind} at line {hit.line}: {hit.redacted}")
+             for hit in find_in(text, values)]
+    found += [Violation("literal_pattern", f"{hit.kind} at line {hit.line}: {hit.text}")
+              for hit in find_in_ticket_text(text, checks)]
     return found
 
 
