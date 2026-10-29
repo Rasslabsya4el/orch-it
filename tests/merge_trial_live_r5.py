@@ -1,17 +1,21 @@
 """Row 5 live: a merge turns the base red, the main check opens one red-on-main ticket, a rerun opens none, the fix's
-green run closes it. Unlike `row_5`, `main-check.yml` stays on and this row never calls `check_main` or turns a
-workflow off: the harness lands the pull requests (`_Run.land`), and after each run of `tests` on the base it waits,
-through `wait_workflow_run`, for the `main-check` run that follows it to end, then reads the tickets back from GitHub.
+green run closes it. Unlike `row_5`, the main-check workflow (`merge_trial.MAIN_CHECK_WORKFLOW`) stays on and this row
+never calls `check_main` or turns a workflow off: the harness lands the pull requests (`_Run.land`), and after each run
+of the test workflow (`merge_trial.WORKFLOW_FILE`) on the base it waits, through `wait_workflow_run`, for the main-check
+run that follows it to end, then reads the tickets back from GitHub.
 
-A `main-check` run is matched by its creation (`since`, the moment taken before the event that starts it) and its
-event `workflow_run`, not by its head sha: a run started by `workflow_run` takes the default branch's head when it
-starts, which the row does not know. A run that ends `skipped` is not a pass; a step whose run ends `failure` or
-`cancelled` fails too, and the row stops there with that run's id in `failed_step`.
+A main-check run is matched by its creation (the moment taken before the step's event), its event `workflow_run` and
+its head branch, which is the base (`branch=`), and not by its head sha: a run started by `workflow_run` carries the
+default branch's head, not the sha of the test run that triggered it. A pull request's own test run starts a skipped
+main-check run of its own branch inside the same window; that run is not the base's and does not count. A run that
+ends `skipped` is not a pass; a step whose run ends `failure` or `cancelled` fails too, and the row stops there with
+that run's id in `failed_step`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 
 import merge_trial
@@ -32,13 +36,16 @@ class _StepFailed(Exception):
 def row_5_live(trial: merge_trial.Trial, hub: PullHub, store: Store, clock: Callable[[], datetime],
                sleep: Callable[[float], None], plan: merge_trial.Plan | None = None) -> dict:
     """Row 5 live: a merge turns the base red, the main check opens one ticket, a rerun opens none, green closes it.
-    The same keys as `row_5`; `passed` also needs the three main-check runs to have ended `success`."""
+    The same keys as `row_5`; `passed` also needs the three main-check runs to have ended `success`.
 
-    facts = trial.preflight()
-    if facts.get("default_branch") != trial.base:
+    The base must be the repo's default branch, because the main check runs only on it. The CLI's preflight refuses
+    a default base unless `--allow-default-base` is given, so row 5 live needs `--allow-default-base`. The row reads
+    the default branch from that preflight (`trial.default_branch`) and does not read the repo again for it."""
+
+    if trial.default_branch != trial.base:
         raise merge_trial.TrialError(
             f"row 5 live needs the base {trial.base} to be the default branch of {trial.repo}, which the repo says is "
-            f"{facts.get('default_branch')!r}: `{merge_trial.MAIN_CHECK_WORKFLOW}` runs only on the default branch")
+            f"{trial.default_branch!r}: `{merge_trial.MAIN_CHECK_WORKFLOW}` runs only on the default branch")
     run = merge_trial._Run(trial, hub, store, clock, sleep, plan, "r5", live=True)
     out: dict = {"main_check_runs": [], "passed": False}
     try:
@@ -53,19 +60,18 @@ def _steps(run: merge_trial._Run, out: dict) -> None:
     trial, hub = run.trial, run.hub
     path = f"tests/test_trial_main_red_{run.tag}.py"
 
-    since = run.clock()
-    ticket, branch, opened = run.pull_request("culprit", {path: merge_trial.RED_ON_PUSH})
-    merged = run.land(opened.pr)
-    run.follow(opened.pr)
-    first = run.ended_run(merged.merge_sha)
-    out["red_run"] = {"run_id": first.run_id, "sha": first.sha[:12], "jobs": dict(first.jobs)}
-    ids = frozenset(hub.failing_ids(run.repo, first.run_id) or [])
-    if not ids:
-        raise merge_trial.TrialError(f"the push run {first.run_id} at {first.sha[:12]} is not red with a report: the "
-                                     f"trial test {path} must fail on a push (jobs {first.jobs}) - the base stays as "
-                                     "it is")
-    out["failing_ids"] = sorted(ids)
-    _main_check(run, out, "first", since)
+    with _main_check_step(run, out, "first"):
+        ticket, branch, opened = run.pull_request("culprit", {path: merge_trial.RED_ON_PUSH})
+        merged = run.land(opened.pr)
+        run.follow(opened.pr)
+        first = run.ended_run(merged.merge_sha)
+        out["red_run"] = {"run_id": first.run_id, "sha": first.sha[:12], "jobs": dict(first.jobs)}
+        ids = frozenset(hub.failing_ids(run.repo, first.run_id) or [])
+        if not ids:
+            raise merge_trial.TrialError(f"the push run {first.run_id} at {first.sha[:12]} is not red with a report: "
+                                         f"the trial test {path} must fail on a push (jobs {first.jobs}) - the base "
+                                         "stays as it is")
+        out["failing_ids"] = sorted(ids)
     ours = run.red_tickets_of(ids)
     for number in ours:
         trial.adopt(number)
@@ -79,11 +85,10 @@ def _steps(run: merge_trial._Run, out: dict) -> None:
     out["first_check"] = first_check
     run.say(f"first main check: red tickets {ours}")
 
-    since = run.clock()
-    run.say(f"rerun of the run {first.run_id}")
-    hub.rerun(run.repo, first.run_id)
-    again = run.ended_run(first.sha, attempt=first.attempt + 1)
-    _main_check(run, out, "second", since)
+    with _main_check_step(run, out, "second"):
+        run.say(f"rerun of the run {first.run_id}")
+        hub.rerun(run.repo, first.run_id)
+        again = run.ended_run(first.sha, attempt=first.attempt + 1)
     # the rerun must open none: what the list holds after the settle is what counts, not a wait for a ticket
     after = run.red_tickets_of(ids, settle=True)
     for number in after:
@@ -92,12 +97,11 @@ def _steps(run: merge_trial._Run, out: dict) -> None:
                            "opened": [number for number in after if number not in ours], "red_tickets": after}
     run.say(f"second main check: red tickets {after}")
 
-    since = run.clock()
-    fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: None})
-    fix_merge = run.land(fixed.pr)
-    run.follow(fixed.pr)
-    green = run.ended_run(fix_merge.merge_sha)
-    _main_check(run, out, "third", since)
+    with _main_check_step(run, out, "third"):
+        fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: None})
+        fix_merge = run.land(fixed.pr)
+        run.follow(fixed.pr)
+        green = run.ended_run(fix_merge.merge_sha)
     closed = [number for number in ours if not hub.issue(run.repo, number).open
               and hub.issue(run.repo, number).state_reason == "completed"]
     out["third_check"] = {"main_check_run": out["main_check_runs"][-1], "run_id": green.run_id, "closed": closed}
@@ -110,10 +114,22 @@ def _steps(run: merge_trial._Run, out: dict) -> None:
         and [record["conclusion"] for record in out["main_check_runs"]] == ["success"] * 3)
 
 
-def _main_check(run: merge_trial._Run, out: dict, step: str, since: datetime) -> None:
-    """Wait for the `main-check` run that `since` and `workflow_run` pick out to end; `success` or _StepFailed."""
+@contextmanager
+def _main_check_step(run: merge_trial._Run, out: dict, step: str) -> Iterator[None]:
+    """One step of the row: `since` is taken before the block, and when the block ends without an error the
+    main-check run that follows the step's event is waited for and recorded (`_main_check`). An error in the block
+    ends the step before any wait."""
 
-    found = live.wait_workflow_run(run, merge_trial.MAIN_CHECK_WORKFLOW, since, event="workflow_run")
+    since = run.clock()
+    yield
+    _main_check(run, out, step, since)
+
+
+def _main_check(run: merge_trial._Run, out: dict, step: str, since: datetime) -> None:
+    """Wait for the main-check run that `since`, `workflow_run` and the base's branch pick out to end; `success` or
+    _StepFailed."""
+
+    found = live.wait_workflow_run(run, merge_trial.MAIN_CHECK_WORKFLOW, since, event="workflow_run", branch=run.base)
     out["main_check_runs"].append({"step": step, "run_id": found.run_id, "conclusion": found.conclusion})
     if found.conclusion != "success":
         raise _StepFailed({"step": step, "run_id": found.run_id, "conclusion": found.conclusion})

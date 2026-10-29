@@ -128,6 +128,7 @@ class Trial(Protocol):
     base: str
     git: Callable[[list[str]], str]  # `git <args>` in the work tree (for `open_pr`)
     lock_root: Path | None  # the merge line's lock folder (None: the default one)
+    default_branch: str | None  # the repo's default branch as its preflight read it (None before a preflight)
 
     def preflight(self) -> dict: ...
 
@@ -763,6 +764,7 @@ class RealTrial:
         self.identity = identity
         self.allow_default_base = allow_default_base
         self.dispatch_base_runs = dispatch_base_runs
+        self.default_branch: str | None = None  # what the last preflight read from the repo
         self.tickets: list[int] = []  # every ticket the trial made or adopted
         self.branches: set[str] = set()  # every branch it made
         self._workflows_off: set[str] = set()
@@ -781,6 +783,7 @@ class RealTrial:
         if not info.get("allow_auto_merge"):
             raise TrialError(f"{self.repo} does not allow auto-merge (settings > General): `pr open` needs it")
         default = info.get("default_branch")
+        self.default_branch = default
         if default == self.base and not self.allow_default_base:
             raise TrialError(f"{self.base} is the default branch of {self.repo} and row 5 puts a red test on the "
                              "base: use a throwaway repo or a trial branch, or give --allow-default-base")
@@ -1010,7 +1013,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--wait-minutes", type=float, default=45, help="the bound of every other wait (45)")
     p.add_argument("--live", action="store_true",
                    help="rows 4, 5 and 6 run on the repo's own workflows (the live forms, "
-                        "tests/merge_trial_live_r*.py): the trial only waits and reads; the repo is a throwaway one")
+                        "tests/merge_trial_live_r*.py): the trial only waits and reads; the repo is a throwaway one; "
+                        "row 5 live needs --allow-default-base, its base being the default branch where the main "
+                        "check runs")
     args = p.parse_args(argv)
     if not schema.is_repo(args.repo):
         p.error(f"--repo {args.repo!r} is no OWNER/NAME")

@@ -1,7 +1,8 @@
-"""Row 5 live (`tests/merge_trial_live_r5.py`) on fakes only: no network, no real sleep. The fake trial lists the
-runs of `main-check.yml` the way GitHub would after each `tests` run on the base (a push, a rerun): each one is
-completed with the conclusion the case scripts and does what the workflow does (`check_main`), or what the case
-scripts for it."""
+"""Row 5 live (`tests/merge_trial_live_r5.py`) on fakes only: no network, no real sleep. The fake trial lists the runs
+of the main-check workflow the way GitHub would after each run of the test workflow on the base (a push, a rerun):
+each one is completed with the conclusion the case scripts and does what the workflow does (`check_main`), or what
+the case scripts for it. With `pr_noise`, each base run is listed under a skipped run of a pull request's own branch,
+the way a pull request's own test run starts one inside the same window."""
 
 import importlib
 
@@ -13,18 +14,22 @@ from test_merge_trial import FakeTrial, RedByFiles, World
 from orch_it.merge.main_check import check_main
 
 MAIN = merge_trial.MAIN_CHECK_WORKFLOW
+DEFAULT_BRANCH = "main"
+PR_BRANCH = "trial-pr-noise"
 
 
 class LiveTrial(FakeTrial):
-    """The fake trial with what the live row asks of the adapter: the default branch it reads, and the runs GitHub
-    lists for a workflow file."""
+    """The fake trial with what the live row asks of the adapter: the default branch its preflight read (the row
+    takes it from `default_branch`, never from another preflight) and the runs GitHub lists for a workflow file."""
 
-    def __init__(self, hub, lock_root, listings, default="main"):
+    def __init__(self, hub, lock_root, listings, default=DEFAULT_BRANCH):
         super().__init__(hub, lock_root)
-        self.listings, self.default = listings, default
+        self.listings, self.default_branch = listings, default
+        self.preflight_calls = 0
 
     def preflight(self):
-        return {"default_branch": self.default, "base_is_default": self.default == self.base}
+        self.preflight_calls += 1
+        return {"default_branch": self.default_branch, "base_is_default": self.default_branch == self.base}
 
     def workflow_runs(self, file):
         return list(self.listings.get(file, []))
@@ -34,15 +39,16 @@ class LiveTrial(FakeTrial):
 
 
 class LiveWorld(World):
-    """Row 5's world with `main-check.yml` on. After each push of the base and each rerun of its `tests` run, a
+    """Row 5's world with the main-check workflow on. After each push of the base and each rerun of its test run, a
     main-check run is listed, completed, with the (conclusion, act) the script gives it, in order (the last one
     repeats nothing: after the script, every run is ("success", "check")). `act`: `check` runs the check,
-    `duplicate` runs it and opens a second red ticket of the same tests, `none` does nothing."""
+    `duplicate` runs it and opens a second red ticket of the same tests, `none` does nothing. With `pr_noise`, a
+    skipped run of the pull request branch `PR_BRANCH` is listed above each run of the base."""
 
-    def __init__(self, tmp_path, script=(), default="main"):
+    def __init__(self, tmp_path, script=(), default=DEFAULT_BRANCH, pr_noise=False):
         super().__init__(tmp_path)
         self.listings: dict[str, list[dict]] = {}
-        self.script, self.counter = list(script), 0
+        self.script, self.counter, self.pr_noise = list(script), 0, pr_noise
         self.trial = LiveTrial(self.hub, tmp_path / "locks", self.listings, default)
         self.ci.red = RedByFiles(self.hub, self.trial)
         self.hub.on_merge.append(self._push_main_check)
@@ -63,14 +69,18 @@ class LiveWorld(World):
         self.counter += 1
         run_id = f"main-check-{self.counter}"
         if conclusion == "success" and act in ("check", "duplicate"):
-            check_main(self.hub, self.store, REPO, "main")
+            check_main(self.hub, self.store, REPO, DEFAULT_BRANCH)
         if conclusion == "success" and act == "duplicate":
             first = self.hub.issue(REPO, self.hub.issues_with_label(REPO, "priority")[0])
             self.hub.create_issue(REPO, first.title + " (again)", first.body, ["ready-for-agent", "priority"])
         stamp = self.hub.now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.listings.setdefault(MAIN, []).insert(0, {
-            "id": run_id, "created_at": stamp, "status": "completed", "conclusion": conclusion,
-            "event": "workflow_run", "head_sha": sha})
+        runs = self.listings.setdefault(MAIN, [])
+        runs.insert(0, {"id": run_id, "created_at": stamp, "status": "completed", "conclusion": conclusion,
+                        "event": "workflow_run", "head_sha": sha, "head_branch": DEFAULT_BRANCH})
+        if self.pr_noise:  # listed above the base's run, the way a pull request's own test run starts one
+            runs.insert(0, {"id": f"pr-check-{self.counter}", "created_at": stamp, "status": "completed",
+                            "conclusion": "skipped", "event": "workflow_run", "head_sha": sha,
+                            "head_branch": PR_BRANCH})
 
 
 @pytest.fixture
@@ -92,6 +102,35 @@ def test_the_happy_path_with_three_successful_main_check_runs_passes_and_leaves_
     assert world.trial.workflow_log == []  # never disabled, never enabled: the main-check workflow stays on
     [number] = first["red_tickets"]
     assert not world.hub.issues[(REPO, number)].open
+
+
+def test_the_row_takes_the_default_branch_from_the_report_and_does_not_read_the_repo_again(row5, tmp_path):
+    # the CLI's preflight already read the default branch into the report: the row asks the repo nothing for it
+    world = LiveWorld(tmp_path)
+    out = world.run(row5)
+
+    assert out["passed"] is True
+    assert world.trial.preflight_calls == 0
+
+
+def test_a_skipped_run_of_a_pull_request_branch_is_not_the_bases_and_the_base_run_is_taken(row5, tmp_path):
+    # each step's window holds the base's run and a skipped run of the pull request branch: only the base's counts
+    world = LiveWorld(tmp_path, pr_noise=True)
+    out = world.run(row5)
+
+    assert out["passed"] is True, out
+    assert [r["run_id"] for r in out["main_check_runs"]] == ["main-check-1", "main-check-2", "main-check-3"]
+    assert [r["conclusion"] for r in out["main_check_runs"]] == ["success", "success", "success"]
+
+
+def test_only_a_skipped_base_run_fails_the_step_even_with_a_pull_request_run_listed_above_it(row5, tmp_path):
+    world = LiveWorld(tmp_path, script=[("skipped", "none")], pr_noise=True)
+    out = world.run(row5)
+
+    assert out["passed"] is False
+    assert out["failed_step"] == {"step": "first", "run_id": "main-check-1", "conclusion": "skipped"}
+    assert out["main_check_runs"] == [{"step": "first", "run_id": "main-check-1", "conclusion": "skipped"}]
+    assert "second_check" not in out and "third_check" not in out
 
 
 def test_a_main_check_run_that_ends_skipped_is_not_a_pass_and_the_step_fails(row5, tmp_path):
