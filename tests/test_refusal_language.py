@@ -23,8 +23,9 @@ from test_hook_decide import FakeWorld
 from ticket_fixtures import fixture
 
 from orch_it import language, settings
+from orch_it.cli import main
 from orch_it.guards import hook, install, prepush, scanner
-from orch_it.guards.exceptions import ExceptionsError, FILE_NAME
+from orch_it.guards.exceptions import ExceptionsError, FILE_NAME, load_exceptions
 from orch_it.guards.paths import Finding
 from orch_it.guards.values import Values
 from orch_it.merge import workflow_watch as watch
@@ -69,6 +70,11 @@ DE = {
     "ticket_no_ticket": "die Bearbeitung nennt kein Ticket, das der Hook lesen kann",
     "ticket_not_read": "#{number} konnte für die Prüfung der Bearbeitung nicht von GitHub gelesen werden",
     "ticket_parked_line": "die Zeile `Parked:` wird nur von `tickets park` und `unpark` geschrieben und entfernt; lass sie, wie sie ist",
+    "coding_rule": "CODING_STANDARDS.md: ein Wert, der sich je Repo, Konto, Rechner oder OS unterscheidet, ist eine Einstellung mit ihrem Standardwert, nie ein Literal in Code, Tests, Regeln oder Tickets.",
+    "not_checked_line": "nicht geprüft: {items}",
+    "not_checked_item": "{kind} ({reason})",
+    "not_checked_not_set": "nicht gesetzt",
+    "not_checked_too_short": "zu kurz zum Prüfen",
     "watch_title": "Workflow {shown} nicht grün",
     "watch_what": "Workflow `{shown}` nicht grün beendet: der letzte Lauf {run_id} endete ohne grünes Ergebnis.",
     "watch_comment": "Workflow `{workflow}` ist wieder nicht grün beendet worden: Lauf {run_id} endete als {how} bei {url}, beendet {ended_at}.",
@@ -77,7 +83,18 @@ DE = {
     "watch_how_cancelled": "abgebrochen",
     "watch_how_timed_out": "Zeitüberschreitung",
     "watch_how_no_job": "kein Job gestartet",
+    "exc_not_toml": "{file}: nicht als TOML lesbar",
+    "exc_not_tables": "{file}: die Einträge sind [[exception]]-Tabellen",
+    "exc_entry": "[[exception]]-Eintrag {number} (Datei {file})",
+    "exc_no_file": "{name}: keine file: ein Glob oder ein Repo-Pfad (oder eine Liste davon) ist nötig",
+    "exc_no_pattern": "{name}: kein pattern: ein regulärer Ausdruck über die Zeile ist nötig",
+    "exc_kinds": "{name}: kinds: eine nicht leere Liste von {kinds} ist nötig",
+    "exc_no_reason": "{name}: reason leer oder fehlend: jeder Eintrag sagt, warum er erlaubt ist",
+    "exc_bad_pattern": "{name}: das Muster lässt sich nicht kompilieren",
 }
+
+# English words no ru or de sentence of a refusal may hold (the TOML key names are data, not listed)
+ENGLISH_WORDS = ("refused", "required", "missing", "readable", "compile", "allowed", "each", "entry", "entries", "says")
 
 
 def set_language(tmp_path, monkeypatch, setting: str, extra: dict) -> None:
@@ -142,6 +159,11 @@ def hit() -> scanner.Hit:
     return scanner.Hit(kind="email", where="content", commit="ab" * 20, file="notes.md", line=3)
 
 
+def rule_hit() -> scanner.Hit:
+    """A hit of a kind the coding standard judges (`email` is not one: it is a kind of #395, cited by no rule)."""
+    return scanner.Hit(kind="account", where="content", commit="ab" * 20, file="notes.md", line=3)
+
+
 def test_the_push_refusal_takes_its_words_from_the_table(tmp_path, monkeypatch):
     texts = in_each_language(tmp_path, monkeypatch, lambda: prepush._refusal([hit()]))
     english = ("orch-it: push refused, the commits hold private data and the remote is public"
@@ -151,6 +173,83 @@ def test_the_push_refusal_takes_its_words_from_the_table(tmp_path, monkeypatch):
                f" `{sys.executable} -m orch_it guards scan --range <remote>..<local>` lists the same\n")
     check(texts, english, sentences=["the commits hold private data", "take the values out of the commits"],
           german=[DE["push_refused_private"], DE["push_take_out"].format(python=sys.executable)])
+
+
+def test_the_push_refusal_cites_the_rule_in_the_table_words(tmp_path, monkeypatch):
+    texts = in_each_language(tmp_path, monkeypatch, lambda: prepush._refusal([rule_hit()]))
+    english = ("orch-it: push refused, the commits hold private data and the remote is public"
+               " (or its visibility could not be read):\n"
+               f"  {'ab' * 6} content notes.md:3 account - {scanner.RULE}\n"
+               "take the values out of the commits (amend or rebase) and push again;"
+               f" `{sys.executable} -m orch_it guards scan --range <remote>..<local>` lists the same\n")
+    check(texts, english, sentences=["the commits hold private data", "take the values out of the commits", scanner.RULE],
+          german=[DE["push_refused_private"], DE["push_take_out"].format(python=sys.executable), DE["coding_rule"]])
+
+
+def test_the_push_names_what_it_did_not_check_in_the_table_words(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(hook, "_write_events", lambda *args, **kwargs: None)
+    monkeypatch.setattr(prepush, "_new_commits", lambda *args: ["c" * 40])
+    monkeypatch.setattr(prepush, "_closing_hits", lambda *args: [])
+    monkeypatch.setattr(scanner, "scan_commits", lambda *args: [])
+
+    def make():
+        patterns = scanner.Patterns(values=Values(not_checked=(("git_email", "not set"),)))
+        prepush.run_pre_push(f"refs/heads/main {'a' * 40} refs/heads/main {'0' * 40}\n", None,
+                             remote_url="https://example.invalid/o/n.git", remote_name="origin",
+                             work_tree=tmp_path, visibility=lambda url: "public", patterns=patterns)
+        return capsys.readouterr().err
+
+    texts = in_each_language(tmp_path, monkeypatch, make)
+    check(texts, "not checked: git_email (not set)\n", sentences=["not checked: ", "(not set)"],
+          german=[DE["not_checked_line"].format(items="git_email (" + DE["not_checked_not_set"] + ")")])
+
+
+def test_guards_scan_takes_the_rule_and_the_not_checked_line_from_the_table(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(scanner, "scan_tree", lambda *args: [rule_hit()])
+    monkeypatch.setattr(scanner.Patterns, "of_machine",
+                        lambda **kwargs: scanner.Patterns(values=Values(not_checked=(("git_email", "not set"),))))
+
+    def make():
+        main(["guards", "scan", "--work-tree", str(tmp_path), "--tree"])
+        return capsys.readouterr().out
+
+    texts = in_each_language(tmp_path, monkeypatch, make)
+    english = (f"{'ab' * 6} content notes.md:3 account - {scanner.RULE}\n"
+               "hits=1 commits=1\n"
+               "not checked: git_email (not set)\n")
+    check(texts, english, sentences=[scanner.RULE, "not checked: ", "(not set)"],
+          german=[DE["coding_rule"], DE["not_checked_line"].format(items="git_email (" + DE["not_checked_not_set"] + ")")])
+
+
+def count_rule_reads(monkeypatch) -> list[str]:
+    """Each read of the table's `coding_rule` (the language it is read in), in the order made."""
+    reads: list[str] = []
+    original = language._lookup
+
+    def spy(lang, key, fields):
+        if key == "coding_rule":
+            reads.append(lang)
+        return original(lang, key, fields)
+
+    monkeypatch.setattr(language, "_lookup", spy)
+    return reads
+
+
+def test_a_push_refusal_with_many_hits_reads_the_rule_sentence_once(monkeypatch, tmp_path):
+    reads = count_rule_reads(monkeypatch)
+    refusal = prepush._refusal([rule_hit()] * (prepush.SHOWN_HITS + 10))
+    assert len(reads) == 1, reads
+    assert refusal.count(scanner.RULE) == prepush.SHOWN_HITS
+
+
+def test_guards_scan_with_many_hits_reads_the_rule_sentence_once(tmp_path, monkeypatch, capsys):
+    reads = count_rule_reads(monkeypatch)
+    monkeypatch.setattr(scanner, "scan_tree", lambda *args: [rule_hit()] * 500)
+    monkeypatch.setattr(scanner.Patterns, "of_machine", lambda **kwargs: scanner.Patterns(values=Values()))
+    main(["guards", "scan", "--work-tree", str(tmp_path), "--tree"])
+    out = capsys.readouterr().out
+    assert len(reads) == 1, reads
+    assert out.count(f" - {scanner.RULE}\n") == 500
 
 
 def test_the_push_refusal_says_how_many_hits_it_does_not_show_in_the_table_words(tmp_path, monkeypatch):
@@ -187,6 +286,59 @@ def test_a_push_with_a_list_nobody_can_read_says_so_in_the_table_words(tmp_path,
     texts = in_each_language(tmp_path, monkeypatch, make)
     check(texts, f"orch-it: push refused, {FILE_NAME}: bad entry 3\n", exact=False,
           sentences=["push refused, "], german=[DE["push_unreadable"].format(file=FILE_NAME, reason="bad entry 3")])
+
+
+def malformed_list(tmp_path, body: str) -> ExceptionsError:
+    """The `ExceptionsError` the loader raises for an exceptions list of `body`, read in the setting in force."""
+
+    path = tmp_path / FILE_NAME
+    path.write_text(body, "utf-8")
+    with pytest.raises(ExceptionsError) as err:
+        load_exceptions(path)
+    return err.value
+
+
+# (the list, its stable code, the English words of the sentence the English setting gives)
+MALFORMED_LISTS = {
+    "no_reason": ('[[exception]]\nfile = "tools/other.py"\npattern = "probe"\nkinds = ["one_os_call"]\nreason = "   "\n',
+                  "no_reason"),
+    "not_toml": ('[[exception]\nfile = "tools/other.py"\n', "not_toml"),
+}
+
+
+@pytest.mark.parametrize("case", list(MALFORMED_LISTS), ids=list(MALFORMED_LISTS))
+def test_a_push_with_a_malformed_exceptions_list_says_so_in_the_table_words(tmp_path, monkeypatch, capsys, case):
+    body, code = MALFORMED_LISTS[case]
+
+    def make():
+        broken = malformed_list(tmp_path, body)
+        assert broken.code == code
+        monkeypatch.setattr(prepush, "_new_commits", lambda *args: ["c" * 40])
+        monkeypatch.setattr(prepush, "_closing_hits", lambda *args: [])
+        monkeypatch.setattr(prepush, "_profile_emails", lambda repo: ())
+        monkeypatch.setattr(prepush, "_machine_patterns",
+                            lambda *args: (SimpleNamespace(not_checked_line=lambda: ""), broken))
+        monkeypatch.setattr(scanner, "scan_commits", lambda *args: [])
+        prepush.run_pre_push(f"refs/heads/main {'a' * 40} refs/heads/main {'0' * 40}\n", None,
+                             remote_url="https://example.invalid/o/n.git", remote_name="origin",
+                             work_tree=tmp_path, visibility=lambda url: "public")
+        return capsys.readouterr().err
+
+    texts = in_each_language(tmp_path, monkeypatch, make)
+    path = str(tmp_path / FILE_NAME)
+    if case == "no_reason":
+        english = (f"orch-it: push refused, {FILE_NAME}: [[exception]] entry 1 (file 'tools/other.py'):"
+                   " empty or missing reason: each entry says why it is allowed\n")
+        german = [DE["push_unreadable"].format(file=FILE_NAME, reason=DE["exc_no_reason"].format(
+            name=DE["exc_entry"].format(number=1, file="'tools/other.py'")))]
+        check(texts, english, sentences=["empty or missing reason", "each entry says why"], german=german)
+    else:
+        check(texts, "not readable as TOML: ", exact=False, sentences=["not readable as TOML"],
+              german=[DE["exc_not_toml"].format(file=path)])
+    for setting in ("ru", "de"):  # the sentence names no English word; the folder of the test is not the sentence's
+        text = texts[setting].replace(str(tmp_path), "")
+        for word in ENGLISH_WORDS:
+            assert not re.search(rf"\b{word}\b", text, re.IGNORECASE), (setting, word, text)
 
 
 def test_a_deny_says_the_way_in_the_table_words(tmp_path, monkeypatch):

@@ -1,6 +1,6 @@
 # The guards judge the object, own a process by its tree, and fail open with an event
 
-Status: amended by D4 amd 1 (Rasslabsya4el/orchestration-layer#413); the decision text below is kept as it was.
+Status: amended by D4 amd 1 and D4 amd 2 (Rasslabsya4el/orchestration-layer#413); the decision text below is kept as it was.
 
 The three kept guards — worktree delete, foreign process stop, private data in a public repo —
 decide on the object a command would act on (the real path on disk with links followed and the
@@ -47,3 +47,10 @@ the crash visible and countable.
 Amendment (Rasslabsya4el/orchestration-layer#413): a guard's events are written under the repo it runs in, the GitHub
 origin, else the setting `repo`. With neither, the verdict still stands and stderr names the event not written; no repo
 is guessed, because a default repo is an account value this repo refuses.
+
+## D4 amd 2: a named bad setting is refused, not failed open
+
+Amendment (Rasslabsya4el/orchestration-layer#413, brain decision on item 3): a named bad setting is refused, not failed
+open. A `human_language` with no table or no language code makes the tickets hook refuse the `gh issue create` or body
+edit it judges, with a reason naming the setting and the missing table, because there is a way through (set the
+language or add the table). Any other unexpected error still fails open.

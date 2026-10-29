@@ -454,8 +454,9 @@ def _guards_scan(args) -> tuple[str, int]:
         # the whole history (`--all`) is never rewritten, so its e-mails are not checked
         if args.rev_range is not None and _require_noreply(args, work_tree):
             unnamed = identity.noreply_failures(work_tree, shas)
+    rule = scanner.coding_rule()  # read once for the report, not once per hit
     lines = [f"{hit.commit[:12]} {hit.where} {_one_line(hit.file)}:"
-             f"{'-' if hit.line is None else hit.line} {hit.kind}{scanner.cited(hit.kind)}\n" for hit in hits]
+             f"{'-' if hit.line is None else hit.line} {hit.kind}{scanner.cited(hit.kind, rule)}\n" for hit in hits]
     lines += [f"{sha[:12]} {role} -:- not_noreply\n" for sha, role in unnamed]
     text = "".join(lines) + f"hits={len(hits) + len(unnamed)} commits={commits}\n"
     if patterns.not_checked_line():

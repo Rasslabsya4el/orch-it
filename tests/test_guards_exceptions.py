@@ -59,6 +59,13 @@ def test_empty_reason_fails_naming_the_entry(tmp_path):
     assert "tools/other.py" in str(err.value)
 
 
+def test_each_refusal_carries_a_stable_code_beside_its_sentence(tmp_path):
+    with pytest.raises(ExceptionsError) as err:
+        load_exceptions(write(tmp_path, '[[exception]]\nfile = "tools/lone.py"\npattern = "probe"\nkinds = ["one_os_call"]\n'))
+    assert err.value.code == "no_reason"
+    assert "empty or missing reason" in str(err.value)
+
+
 def test_missing_reason_fails_naming_the_entry(tmp_path):
     body = '[[exception]]\nfile = "tools/lone.py"\npattern = "probe"\nkinds = ["one_os_call"]\n'
     with pytest.raises(ExceptionsError, match="reason") as err:

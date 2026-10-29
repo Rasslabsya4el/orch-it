@@ -27,6 +27,8 @@ import subprocess
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from orch_it import language
+
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 COMMAND_SECONDS = 20
 
@@ -36,6 +38,14 @@ _MIN_LENGTH = 3
 
 NOT_SET = "not set"
 TOO_SHORT = "too short to scan"
+# the table key of each reason `not_checked` stores (the reasons stay these English words in the data); a reason
+# with no key is written as it is
+_REASON_KEYS = {NOT_SET: "not_checked_not_set", TOO_SHORT: "not_checked_too_short"}
+
+
+def _reason_text(reason: str) -> str:
+    key = _REASON_KEYS.get(reason)
+    return language.text_or_refusal(key) if key is not None else reason
 
 _SEP = r"[\\/]+"  # `/`, `\`, and the doubled `\\` of a string literal
 # `github.com` may carry an SSH host alias (`github.com-work`) before the `:` or `/`
@@ -74,7 +84,10 @@ class Values:
 
         if not self.not_checked:
             return ""
-        return "not checked: " + ", ".join(f"{kind} ({reason})" for kind, reason in self.not_checked)
+        items = ", ".join(
+            language.text_or_refusal("not_checked_item", kind=kind, reason=_reason_text(reason))
+            for kind, reason in self.not_checked)
+        return language.text_or_refusal("not_checked_line", items=items)
 
 
 @dataclass(frozen=True)
