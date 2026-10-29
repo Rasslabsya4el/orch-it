@@ -116,6 +116,17 @@ def _is_machine_of_the_limit(job: dict) -> bool:
     return hosted and os_name is not None and os_name != "macos"
 
 
+def budget_poll(base: float, left: tuple[int, int] | None) -> float:
+    """A poller's wait before its next read (#414 decision 9, as the line's `poll_wait`): `base` while the account's
+    request budget, as GitHub reports it (`left`: remaining, limit; None when unread), is at or above the threshold;
+    longer under it, by `github_budget.poll_interval`. Shared by the github place and the test-place wait."""
+
+    if left is None:
+        return float(base)
+    remaining, limit = left
+    return github_budget.poll_interval(base, remaining, limit, github_budget.threshold())
+
+
 def _stored_oses(store: Store, repo: str) -> tuple[str, ...]:
     """The OSes of the github-role test runs the store holds for `repo`, in the order of the closed list."""
 
@@ -268,11 +279,34 @@ class GithubPlace:
     def _pause(self, deadline: float) -> bool:
         """One poll interval slept, never past the deadline; False when the deadline has passed."""
 
+        interval = self.poll_wait()  # the budget is read first: the deadline is counted after that call
         left = deadline - self.clock()
         if left <= 0:
             return False
-        self.sleep(min(POLL_SECONDS, left))
+        self.sleep(min(interval, left))
         return True
+
+    def poll_wait(self) -> float:
+        """The wait before the next read of a run's jobs (#414 decision 9, as the line's `poll_wait`)."""
+
+        return budget_poll(POLL_SECONDS, self.rate_limit())
+
+    def rate_limit(self) -> tuple[int, int] | None:
+        """The core request budget of the token as GitHub reports it now: (remaining, limit); None when it cannot be
+        read. Not stored: its call names no repo."""
+
+        try:
+            found = self._object(self.gh(["api", "rate_limit"]))
+        except GithubError:
+            return None
+        resources = found.get("resources")
+        core = resources.get("core") if isinstance(resources, dict) else None
+        if not isinstance(core, dict):
+            return None
+        remaining, limit = core.get("remaining"), core.get("limit")
+        if type(remaining) is not int or type(limit) is not int or limit <= 0:
+            return None
+        return remaining, limit
 
     def _ours(self, ref: str, sha: str) -> int | None:
         """The id of the run the dispatch made, the one on our own branch; None while none is listed."""

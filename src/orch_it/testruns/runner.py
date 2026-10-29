@@ -25,7 +25,7 @@ from orch_it.events.store import Store
 from orch_it.testruns import environment, outcome, place_rule
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.github import run_gh
-from orch_it.testruns.github_place import GithubPlace
+from orch_it.testruns.github_place import GithubPlace, budget_poll
 from orch_it.testruns.machine import MachinePlace
 from orch_it.testruns.places import OwnPlace, PlaceEnd, PlaceRefused, PlaceVanished, Request
 
@@ -134,13 +134,14 @@ def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, .
 def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSettings,
               ids_file: Path | None = None, place: str | None = None, need_os: str = "any",
               role: str = "script", ticket: int | None = None, places: dict | None = None,
-              wait_minutes: float | None = None, sleep=time.sleep, now=None) -> RunDone:
+              wait_minutes: float | None = None, sleep=time.sleep, now=None, clock=time.monotonic) -> RunDone:
     """One run of the repo's test command at the place the rule picks (or `place`, forced).
     `places` maps a place id to its adapter (default: `default_places`). A place lost or refusing
     mid-run is left out and the rule picks again, until a place finishes the run or none is
     left. No place left writes a `wait` on `test_place`: while a place it can free is busy it
-    lasts up to `wait_minutes` (default: the bound), re-deciding every `WAIT_POLL_SECONDS`, else
-    it ends at once; a wait that finds no place ends the run `refused`."""
+    lasts up to `wait_minutes` (default: the bound) on `clock`, re-deciding every poll interval
+    (`WAIT_POLL_SECONDS`, longer under the GitHub request budget's threshold, the last one clamped to
+    the time left), else it ends at once; a wait that finds no place ends the run `refused`."""
 
     work_tree = Path(work_tree)
     if not work_tree.is_dir():
@@ -163,8 +164,8 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
             decision = run.decide(excluded)
             if decision.chosen is None:  # no place left: a wait on test_place, polled only while
                 # a place it can free is busy, else ended at once
-                polls = _polls(settings, wait_minutes) if run.may_free(decision, excluded) else 0
-                decision = run.wait(writer, excluded, polls, sleep)
+                seconds = _wait_seconds(settings, wait_minutes) if run.may_free(decision, excluded) else 0.0
+                decision = run.wait(writer, excluded, seconds, sleep, clock)
             if decision.chosen is None:
                 # after a lost or refused attempt, that attempt ends the run; else one refusal
                 return last if last is not None else run.refused(writer, decision)
@@ -174,15 +175,14 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
             excluded[last.place] = last.reason
 
 
-def _polls(settings: TestSettings, wait_minutes: float | None) -> int:
-    """How many `WAIT_POLL_SECONDS` polls a wait of `wait_minutes` (default: the bound) makes: a
-    count, so a clock standing still or stepping back never stretches it."""
+def _wait_seconds(settings: TestSettings, wait_minutes: float | None) -> float:
+    """The length of a wait of `wait_minutes` (default: the bound), in seconds: the bound on the clock, so a poll
+    interval that grows under the GitHub budget never stretches it."""
 
     minutes = settings.bound_minutes if wait_minutes is None else wait_minutes
     if not (isinstance(minutes, (int, float)) and math.isfinite(minutes)):
         minutes = settings.bound_minutes
-    minutes = min(max(minutes, 0.0), place_rule.MAX_MINUTES)
-    return math.ceil(minutes * 60 / WAIT_POLL_SECONDS)
+    return min(max(minutes, 0.0), place_rule.MAX_MINUTES) * 60.0
 
 
 class _Run:
@@ -225,16 +225,18 @@ class _Run:
         return any(o.dropped == place_rule.BUSY and o.place not in excluded and capacity[o.place] > 0
                    for o in decision.offered)
 
-    def wait(self, writer, excluded: dict[str, str], polls: int, sleep) -> place_rule.Decision:
+    def wait(self, writer, excluded: dict[str, str], seconds: float, sleep, clock) -> place_rule.Decision:
         envelope = self.envelope("wait")
         writer.write(envelope | {"kind": "step.started",
                                  "detail": {"reason": "test_place", "on": f"test_run:{self.selection}"}})
         try:
+            deadline = clock() + seconds
             decision = self.decide(excluded)
-            for _ in range(polls):
-                if decision.chosen is not None:
+            while decision.chosen is None:
+                left = deadline - clock()
+                if left <= 0:  # the bound on the clock: the wait ends, and its last poll never runs past it
                     break
-                sleep(WAIT_POLL_SECONDS)
+                sleep(min(self.poll_wait(), left))
                 decision = self.decide(excluded)
         except BaseException:  # stopped by a person or a failing store: the wait is not left open
             writer.write(envelope | {"kind": "step.ended", "detail": {"outcome": "stopped", "reason": None}})
@@ -242,6 +244,15 @@ class _Run:
         writer.write(envelope | {"kind": "step.ended", "detail": {
             "outcome": "passed" if decision.chosen else "no_result", "reason": None}})
         return decision
+
+    def poll_wait(self) -> float:
+        """The wait before the next re-decision of a wait on test_place (#414 decision 9, as the line's `poll_wait`):
+        `WAIT_POLL_SECONDS`, longer while the GitHub request budget is under its threshold. No github place or no
+        reading keeps the interval."""
+
+        github = self.places.get("github")
+        left = github.rate_limit() if hasattr(github, "rate_limit") else None
+        return budget_poll(WAIT_POLL_SECONDS, left)
 
     def _started(self, writer, envelope, decision, run_os) -> None:
         writer.write(envelope | {"kind": "step.started", "detail": {

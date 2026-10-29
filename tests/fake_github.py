@@ -391,6 +391,7 @@ class FakeActions:
         self.run_status = "in_progress"  # a dispatched run's own status: GitHub leaves it so long after its jobs end
         self.run_updated = 1100  # seconds after the dispatch the run's own record was last updated
         self.enabled = True
+        self.core = (5000, 5000)  # the core quota `api rate_limit` reports: (remaining, limit), a test sets it
         self.known_shas = None  # None: every sha exists on GitHub
         self.refs: dict[str, str] = {}
         self.deleted: list[str] = []
@@ -456,6 +457,9 @@ class FakeActions:
         self.calls.append(list(args))
         if args[0] == "run":
             return self._download(args)
+        if args[1:] == ["rate_limit"]:
+            remaining, limit = self.core
+            return json.dumps({"resources": {"core": {"remaining": remaining, "limit": limit}}})
         method = args[args.index("-X") + 1] if "-X" in args else "GET"
         endpoint = next(a for a in args[1:] if a.startswith(("repos/", "user/")))
         fields = {a.partition("=")[0]: a.partition("=")[2] for a in args[1:] if "=" in a and a != endpoint}
