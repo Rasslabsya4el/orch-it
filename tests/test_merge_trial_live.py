@@ -131,16 +131,18 @@ def test_red_tickets_of_returns_once_the_ticket_appears_after_two_empty_reads():
     assert clock.slept == [run.settings.poll_seconds, run.settings.poll_seconds]
 
 
-def test_red_tickets_of_times_out_with_trial_timeout_after_the_bound_when_no_ticket_appears():
+def test_red_tickets_of_returns_the_list_as_read_when_the_bound_passes_and_no_ticket_came():
+    # the spec: a wait ends when the ticket appears "or the bound passes"; past the bound the caller gets the
+    # list as read (row 5's first check then records `red_tickets: []` and fails with its numbers)
     clock = Clock()
     hub = Hub(label_reads=[[]])
     plan = merge_trial.Plan(list_minutes=3)
     run = make_run(None, hub, clock, plan)
     start = clock.now
 
-    with pytest.raises(merge_trial.TrialTimeout):
-        run.red_tickets_of(RED_IDS)
+    assert run.red_tickets_of(RED_IDS) == []
     assert clock.now - start >= timedelta(minutes=3)
+    assert hub.reads >= 2
 
 
 def test_red_tickets_of_the_settle_form_reads_once_after_a_fixed_settle_and_returns_what_it_reads():
@@ -216,14 +218,17 @@ def test_without_live_the_row_comes_from_row_functions_as_today(tmp_path, monkey
 
 
 def test_a_live_row_whose_module_is_missing_is_a_trial_error_naming_it(tmp_path, monkeypatch):
+    # a module name that never exists, so the case stays green when the real live modules are added
     monkeypatch.setattr(merge_trial, "LIVE_ROW_FUNCTIONS", {})
-    with pytest.raises(merge_trial.TrialError, match="merge_trial_live_r5"):
+    monkeypatch.setitem(merge_trial.LIVE_ROW_MODULES, 5, "merge_trial_live_never_there")
+    with pytest.raises(merge_trial.TrialError, match="merge_trial_live_never_there"):
         merge_trial.live_row_function(5)
 
 
 def test_main_with_live_records_a_missing_live_row_as_its_error_and_the_run_goes_on(tmp_path, monkeypatch):
     clock, trial = Clock(), MainTrial()
     monkeypatch.setattr(merge_trial, "LIVE_ROW_FUNCTIONS", {})
+    monkeypatch.setitem(merge_trial.LIVE_ROW_MODULES, 5, "merge_trial_live_never_there")
     out = tmp_path / "out.json"
     code = merge_trial.main(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "5",
                              "--live", "--store", str(tmp_path / "store"), "--out", str(out)],
@@ -231,7 +236,7 @@ def test_main_with_live_records_a_missing_live_row_as_its_error_and_the_run_goes
 
     report = json.loads(out.read_text("utf-8"))
     assert code == 1 and report["rows"]["5"]["passed"] is False
-    assert "merge_trial_live_r5" in report["rows"]["5"]["error"]
+    assert "merge_trial_live_never_there" in report["rows"]["5"]["error"]
 
 
 # --- the shared steps of the live rows --------------------------------------------------------------------------
