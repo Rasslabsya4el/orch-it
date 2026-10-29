@@ -537,3 +537,15 @@ def test_check_text_that_cannot_run_is_an_error_with_exit_2(monkeypatch, capsys)
     code = cli.main(["guards", "check-text", "--leaves-machine"])
     assert code == 2
     assert "check_unreachable" in capsys.readouterr().err
+
+
+# #415 unit 7: a reference to one GitHub object is no hit; a bare account name beside it still is
+LINK_OWNER = "acct" + "-x"  # the account of VALUES (MACHINE's `api user`)
+LINK_REPO = "proj" + "-y"
+
+
+def test_an_allowed_link_passes_the_text_hook_and_a_bare_account_beside_it_is_refused():
+    link = f"https://github.com/{LINK_OWNER}/{LINK_REPO}/pull/415"
+    assert judge(call("Agent", {"prompt": f"Refs {link}"})) == []
+    hits = judge(call("SendMessage", {"message": f"Refs {link}\nthe owner {LINK_OWNER} wrote it"}))
+    assert [(hit.kind, hit.line) for hit in hits] == [("account", 2)]

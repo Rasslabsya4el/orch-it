@@ -16,6 +16,18 @@ wiring, #413 unit 5) print it and must never print a clean result without it whe
 
 A finding carries the kind, the line and the first and last character of the text matched, never the
 value (and `Values` hides its values from `repr`).
+
+Reference forms (#415 unit 7). No doc under `docs/` describes `guards check-text` yet, so this is where its
+unjudged locations are listed. The check's callers (`guards check-text`, the text hook, the push scan and the
+ticket shape check) all come through `find_in`, which blanks the span of a reference to one GitHub object
+before it looks for a value. Allowed, so no finding:
+- `https://github.com/<owner>/<repo>/issues/<digits>`, `/pull/<digits>`, `/commit/<7-40 hex>`; what follows the
+  number or the hash (`#issuecomment-...`, `/files`) is ordinary text and is judged as before;
+- the short forms `<owner>/<repo>#<digits>` and `<owner>/<repo>@<7-40 hex>`, when not part of a longer path.
+Still judged, a finding for each value in it: the repo root `https://github.com/<owner>/<repo>`, a clone URL
+(`...<repo>.git`, `git@github.com:<owner>/<repo>`), `/tree/...` and `/blob/...` links, `raw.githubusercontent.com/...`,
+an issue with no number or a template (`/issues/{n}`), and a bare account name in prose, also beside an allowed
+link (on its own line or its own span).
 """
 
 from __future__ import annotations
@@ -223,14 +235,35 @@ def _path_pattern(value: str) -> re.Pattern | None:
     return re.compile(rf"(?<![A-Za-z0-9_]){body}(?![A-Za-z0-9_-])", re.IGNORECASE if drive else 0)
 
 
+# a reference to one GitHub object (#415 unit 7): the same object from every setup, so its span is no place to
+# look for a value; what follows the number or the hash is ordinary text, a link that is not one of these is not
+_OWNER = r"[A-Za-z0-9](?:[A-Za-z0-9-]*)"
+_REPO = r"[A-Za-z0-9_.-]+"
+_HASH = r"[0-9a-fA-F]{7,40}(?![0-9a-fA-F])"
+# accepted gap: a relative path `dir/<value>#3` is a short reference too; `owner/repo#N` cannot tell them apart
+_REFERENCE = re.compile(
+    rf"https://github\.com/{_OWNER}/{_REPO}/(?:issues|pull)/[0-9]+"
+    rf"|https://github\.com/{_OWNER}/{_REPO}/commit/{_HASH}"
+    rf"|(?<![A-Za-z0-9_./\\:@#-]){_OWNER}/{_REPO}(?:#[0-9]+|@{_HASH})")
+
+
+def _without_references(text: str) -> str:
+    """`text` with the span of each reference to a GitHub object blanked to spaces, the lines kept."""
+
+    return _REFERENCE.sub(lambda match: " " * len(match.group()), text)
+
+
 def find_in(text: str, values: Values) -> list[Finding]:
     """Every value of `values` found in `text`, in order of line. Words match in any case, bounded
-    by non-alphanumerics; paths in every slash spelling, in any case when they start with a drive."""
+    by non-alphanumerics; paths in every slash spelling, in any case when they start with a drive.
+    The span of a reference to one GitHub object is blanked first (`_REFERENCE`): an issue, pull request or
+    commit link, `owner/repo#N` and `owner/repo@sha`; a repo root, a clone URL, a tree or blob link or an issue
+    without a number is still judged."""
 
     patterns = [(kind, pattern) for kind in KINDS for value in getattr(values, kind) or ()
                 if (pattern := _pattern(kind, value)) is not None]
     findings = []
-    for number, line in enumerate(text.split("\n"), 1):
+    for number, line in enumerate(_without_references(text).split("\n"), 1):
         for kind, pattern in patterns:
             for match in pattern.finditer(line):
                 matched = (match.group("v") if "v" in pattern.groupindex else match.group()).strip()

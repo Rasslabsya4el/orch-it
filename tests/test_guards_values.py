@@ -220,3 +220,77 @@ def test_no_value_of_the_real_machine_stands_in_this_file():
     unscanned = {"user"}  # the cases above write the name `user` in its identity contexts
     scanned = Values(**{kind: (getattr(real, kind) if kind not in unscanned else None) for kind in KINDS})
     assert find_in(Path(__file__).read_text("utf-8"), scanned) == []
+
+
+# --- references to one GitHub object (#415 unit 7): an allowed place for a value in a text ----------------------
+# The owner and the repo are built from parts; the same invented account and repo `machine()` reads.
+
+OWNER = "acct" + "-x"
+REPO = "proj" + "-y"
+SLUG = OWNER + "/" + REPO
+SHA_SHORT = "0a1b2c3"  # seven hex characters, the shortest commit reference
+SHA_FULL = "0a1b2c3d" * 5  # forty hex characters, the longest
+URL = "https://github.com/" + SLUG
+
+ALLOWED_FORMS = [
+    f"{URL}/issues/415",
+    f"{URL}/pull/415",
+    f"{URL}/commit/{SHA_SHORT}",
+    f"{SLUG}#415",
+    f"{SLUG}@{SHA_FULL}",
+]
+
+
+@pytest.mark.parametrize("form", ALLOWED_FORMS)
+def test_a_reference_to_one_github_object_is_no_hit(form):
+    assert find_in(f"Refs {form}", machine()) == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    (f"Refs {URL}/pull/415/files {SLUG}", ["account", "repo"]),        # a repo value after `/files`
+    (f"Refs {URL}/issues/415#issuecomment-1 {OWNER}", ["account"]),    # an account value after the fragment
+    (f"Refs {SLUG}#415 {SLUG}", ["account", "repo"]),                  # a repo value after the short form
+])
+def test_what_follows_a_reference_is_ordinary_text(text, expected):
+    # the reference itself is no hit; the setup value after it still is, so a span blanked over the tail fails here
+    assert sorted(f.kind for f in find_in(text, machine())) == sorted(expected)
+
+
+def test_a_relative_two_segment_path_with_a_hash_is_the_accepted_gap_of_the_short_form():
+    # documented gap (values.py `_REFERENCE`): `dir/<value>#3` matches `owner/repo#N`, so the value is no hit
+    assert find_in(f"see dir/{OWNER}#3 for it", machine()) == []
+    assert kinds_in(f"see dir/{OWNER} for it", machine()) == {"account"}
+
+
+@pytest.mark.parametrize("form", [
+    URL,                                                   # the repo root
+    URL + ".git",                                          # clone, https
+    f"git@github.com:{SLUG}",                              # clone, ssh
+    f"{URL}/tree/main/src",                                # tree
+    f"{URL}/blob/main/README.md",                          # blob
+    f"https://raw.githubusercontent.com/{SLUG}/main/README.md",  # raw
+    f"{URL}/issues/{{n}}",                                 # issue with a template
+    f"{URL}/issues/",                                      # issue with no number
+])
+def test_a_link_that_is_not_a_reference_to_one_object_is_still_refused(form):
+    assert {"account", "repo"} <= kinds_in(f"Refs {form}", machine())
+
+
+@pytest.mark.parametrize("commit", ["abcdef", "a" * 41])
+def test_a_commit_reference_is_seven_to_forty_hex_characters(commit):
+    assert {"account", "repo"} <= kinds_in(f"Refs {URL}/commit/{commit}", machine())
+
+
+def test_a_bare_account_name_in_prose_is_a_hit():
+    assert kinds_in(f"the owner is {OWNER} here", machine()) == {"account"}
+
+
+def test_a_bare_account_next_to_an_allowed_link_is_still_a_hit_on_its_own_span():
+    own_line = f"Refs {URL}/issues/415\nthe owner {OWNER} wrote it"
+    assert [(f.kind, f.line) for f in find_in(own_line, machine())] == [("account", 2)]
+    same_line = f"Refs {URL}/pull/415 by {OWNER}"
+    assert [(f.kind, f.line) for f in find_in(same_line, machine())] == [("account", 1)]
+
+
+def test_a_path_that_only_looks_like_a_short_reference_keeps_its_value():
+    assert "home" in kinds_in(f"cd {HOME_POSIX}/{REPO}#3", machine(home=HOME_POSIX))

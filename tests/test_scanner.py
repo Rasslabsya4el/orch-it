@@ -1013,3 +1013,12 @@ def test_a_range_with_two_hundred_commits_is_scanned_in_bounded_time(repo):
     assert time.monotonic() - started < 60
     assert [(h.kind, h.line) for h in hits] == [("github_token", 2)] * 4
     assert len(scanner.commits_of_range(repo.path, "HEAD")) == 200
+
+
+# #415 unit 7: the push scan judges a file with the same allowed references as the text hook
+def test_an_allowed_reference_is_no_push_finding_and_a_bare_account_beside_it_is():
+    account = "acme" + "-dev"  # the account of the invented setup (scan_setup.INVENTED)
+    link = f"https://github.com/{account}/orch-tools/issues/415"
+    patterns = with_values()
+    assert patterns.find_in_file("src/notes.py", f"Refs {link}\n") == []
+    assert patterns.find_in_file("src/notes.py", f"Refs {link}\nthe owner {account} wrote it\n") == [("account", 2)]
