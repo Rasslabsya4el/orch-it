@@ -115,3 +115,14 @@ def test_repo_of_names_the_repo_a_call_is_about():
     assert github_budget.repo_of(["api", "graphql", "-f", "owner=acme-dev", "-f", "name=orch-tools"]) == \
         "acme-dev/orch-tools"
     assert github_budget.repo_of(["api", "user"]) is None  # names no repo: not stored (the envelope needs one)
+
+
+@pytest.mark.parametrize("args", [
+    ["pr", "create", "--repo", "acme-dev/orch-tools", "--base", "main", "--head", "orch-9"],  # merge/gh.py:152
+    ["pr", "merge", "7", "--repo=acme-dev/orch-tools", "--squash"],  # merge/gh.py:206
+    ["pr", "merge", "7", "-R", "acme-dev/orch-tools", "--disable-auto"],  # the short flag
+    ["run", "download", "12", "--repo", "acme-dev/orch-tools", "-n", "junit-linux"],  # merge/gh.py:508
+    ["run", "download", "12", "-R", "acme-dev/orch-tools", "-n", "junit-linux", "-D", "/tmp/x"],  # testruns/github.py:472
+])
+def test_repo_of_reads_the_repo_flag_in_each_form(args):
+    assert github_budget.repo_of(args) == "acme-dev/orch-tools"

@@ -36,6 +36,8 @@ DEFAULT_THRESHOLD = 0.2  # a share of the limit: a poller slows under it
 MAX_POLL_SECONDS = 3600  # the longest a poller waits, however far under the threshold
 ACTIONS_WINDOW = timedelta(hours=1)  # an Actions reading older than this says nothing about the budget now
 _PATH_REPO = re.compile(r"repos/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:[/?]|$)")
+_OWNER_REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+_REPO_FLAGS = ("--repo", "-R")
 
 
 def threshold(raw: dict | None = None) -> float:
@@ -67,9 +69,19 @@ def poll_interval(base_seconds: float, remaining: int | None, limit: int | None,
 
 
 def repo_of(args: list[str]) -> str | None:
-    """The `owner/name` a `gh` call names: its `repos/<owner>/<name>` path, or the `owner=` and `name=` fields of a
-    GraphQL call. None when it names no repo."""
+    """The `owner/name` a `gh` call names: its `--repo X`, `--repo=X` or `-R X` flag (`pr create`, `pr merge`,
+    `run download`), else its `repos/<owner>/<name>` path, or the `owner=` and `name=` fields of a GraphQL call.
+    None when it names no repo."""
 
+    for i, arg in enumerate(args):
+        if arg in _REPO_FLAGS and i + 1 < len(args):
+            candidate = args[i + 1]
+        elif arg.startswith("--repo="):
+            candidate = arg[len("--repo="):]
+        else:
+            continue
+        if _OWNER_REPO.fullmatch(candidate):
+            return candidate
     for arg in args:
         found = _PATH_REPO.search(arg)
         if found:
