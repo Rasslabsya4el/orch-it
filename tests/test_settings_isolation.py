@@ -33,3 +33,8 @@ def test_a_test_that_sets_the_variable_itself_keeps_its_own_file(tmp_path, monke
     own = tmp_path / "own.json"
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(own))
     assert settings.settings_path() == own
+
+
+def test_the_per_user_data_folder_of_a_test_is_a_folder_of_its_own(tmp_path):
+    folder = settings.data_folder()
+    assert folder.is_relative_to(tmp_path.parent)  # not the real per-user folder: store, locks, caches land here
