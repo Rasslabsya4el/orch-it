@@ -95,6 +95,9 @@ jobs:
           pytest -q --timeout "$bound" --junitxml=junit-serial.xml -m "${select}serial"
           serial=$?
           set -e
+          if [ "$parallel" != 0 ] || [ "$serial" != 0 ]; then
+            echo "pytest: a test over its bound of $bound seconds ($kind run) fails by name; on Windows pytest-timeout ends the worker, shown above as worker crashed while running <test>"
+          fi
           python .github/scripts/merge_junit.py junit.xml junit.xml junit-serial.xml
           if [ "$serial" = 5 ]; then serial=0; fi
           exit $(( parallel != 0 ? parallel : serial ))
@@ -136,6 +139,9 @@ jobs:
           pytest -q --timeout "$bound" --junitxml=junit-serial.xml -m "${select}serial"
           serial=$?
           set -e
+          if [ "$parallel" != 0 ] || [ "$serial" != 0 ]; then
+            echo "pytest: a test over its bound of $bound seconds ($kind run) fails by name; on Windows pytest-timeout ends the worker, shown above as worker crashed while running <test>"
+          fi
           python .github/scripts/merge_junit.py junit.xml junit.xml junit-serial.xml
           if [ "$serial" = 5 ]; then serial=0; fi
           exit $(( parallel != 0 ? parallel : serial ))

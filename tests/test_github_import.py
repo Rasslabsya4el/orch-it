@@ -913,17 +913,24 @@ SUMMARY_LINE = re.compile(r"((?:\d+ [a-z]+(?:, )?)+) in \d+(?:\.\d+)?s")
 
 
 def summary_count(log: str) -> int | None:
-    """The tests a pytest log says it ran: the sum of the counts in its last summary line
-    (`==== 312 passed, 1 skipped, 1 deselected in 82.07s ====`), deselected ones left out."""
+    """The tests a pytest log says it ran: the sum of the counts in every summary line of the log
+    (`==== 312 passed, 1 skipped, 1 deselected in 82.07s ====`), deselected ones left out. A job that runs
+    pytest in two phases (the parallel one, then the `serial` one) prints one summary line per phase,
+    and the report holds the tests of both."""
 
-    last = None
+    total, seen = 0, False
     for line in log.splitlines():
         found = SUMMARY_LINE.search(line)
         if found:
-            last = found.group(1)
-    if last is None:
-        return None
-    return sum(int(n) for n, word in re.findall(r"(\d+) ([a-z]+)", last) if word in COUNTED_IN_SUMMARY)
+            seen = True
+            total += sum(int(n) for n, word in re.findall(r"(\d+) ([a-z]+)", found.group(1)) if word in COUNTED_IN_SUMMARY)
+    return total if seen else None
+
+
+def test_the_summary_count_sums_the_summary_lines_of_both_phases_of_a_job():
+    log = "linux\tpytest\t3156 passed, 3 skipped in 95.25s (0:01:35)\nlinux\tpytest\t3159 deselected in 0.40s\n"
+    assert summary_count(log) == 3159
+    assert summary_count("1 failed, 3 passed in 5.00s\n1 passed in 1.00s\nno tests ran in 0.10s\n") == 5
 
 
 def test_the_summary_count_sums_what_ran_and_leaves_deselected_out():
@@ -932,10 +939,6 @@ def test_the_summary_count_sums_what_ran_and_leaves_deselected_out():
     assert summary_count("linux\tpytest\t2026-10-25T20:50:01.1Z 1 failed, 2 passed, 1 error, 3 warnings"
                          " in 3.00s (0:00:03)") == 4
     assert summary_count("no summary here") is None
-
-
-def test_the_summary_count_takes_the_last_summary_line():
-    assert summary_count("1 passed in 1.00s\n2 passed in 2.00s\n") == 2
 
 
 # the margin the live test leaves for skew between the runner's clock and GitHub's
@@ -1014,7 +1017,7 @@ def test_completed_before_keeps_the_runs_completed_before_the_moment_since_the_f
 
 
 @pytest.mark.live
-def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as_mapped(tmp_path, capsys):
+def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as_mapped(tmp_path, capsys, record_property):
     """Runs the real `gh` against the repo (nightly only, where GH_TOKEN is set), on the newest N
     completed runs (setting `github_live_newest_runs`, default 20; N + LIVE_SLACK are listed) so that its `gh` calls are the
     same number whatever the history holds: each required
@@ -1088,11 +1091,13 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     changed = {i: (before.get(i, 0), after.get(i, 0)) for i in judged_ids
                if before.get(i, 0) != after.get(i, 0)}
     assert not changed, f"a second import wrote rows of judged runs (run id: before, after): {changed}"
+    line = (f"live import test: duration {time.monotonic() - started_at:.0f} s;"
+            f" runs judged {len(judged)}; setting {newest}; slack {LIVE_SLACK};"
+            f" completed tests runs since {since}: {completed_since};"
+            f" gh API calls: {len(calls)}")
+    record_property("live_import_line", line)  # a parallel worker's terminal output is lost; the JUnit report keeps the line
     with capsys.disabled():
-        print(f"\nlive import test: duration {time.monotonic() - started_at:.0f} s;"
-              f" runs judged {len(judged)}; setting {newest}; slack {LIVE_SLACK};"
-              f" completed tests runs since {since}: {completed_since};"
-              f" gh API calls: {len(calls)}")
+        print("\n" + line)
 
 
 def runs_list_calls(gh):
