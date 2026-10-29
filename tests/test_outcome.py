@@ -190,6 +190,6 @@ def test_every_end_judge_gives_is_a_valid_test_run_end(tmp_path):
     for end in ends:
         schema.validate({
             "id": "x", "kind": "step.ended", "at": "2026-10-25T10:00:00Z",
-            "repo": "Rasslabsya4el/orch-it", "ticket": None, "role": "script", "session": None,
+            "repo": "acme-x/widgets-y", "ticket": None, "role": "script", "session": None,
             "parent_session": None, "turn": None, "step": "test_run", "run": "r", "machine": "m",
             "os": "o", "layer_version": "0", "note": None, "detail": end.ended_detail()})

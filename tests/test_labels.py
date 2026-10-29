@@ -14,7 +14,7 @@ from orch_it.labels import LabelError, label_set, sync
 from orch_it.testruns import github
 from orch_it.testruns.github import GithubError
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 READ_URL = f"repos/{REPO}/labels?per_page=100"
 NAMES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "parked",
          "priority", "brain-handoff"]

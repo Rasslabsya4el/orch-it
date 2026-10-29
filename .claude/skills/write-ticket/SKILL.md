@@ -5,21 +5,21 @@ description: Use when opening a GitHub issue or rewriting an issue's title or bo
 
 # Write a ticket
 
-A ticket has two readers. The human decides from five plain lines written in Russian; the agent works from the spec below them, written in English. One shape function (`orch_it.tickets.violations`) judges every ticket: the session hook refuses `gh issue create` and `gh issue edit` with any violation (and a create in a session that never called this skill), and the workflow `ticket-shape` takes `ready-for-agent` off a ready ticket that breaks a rule, with a comment listing every one. Each rule below carries the code both print.
+A ticket has two readers. The human decides from five plain lines written in the language set by the setting `human_language` (the shape check reads it; if it refuses the block for its language, its message names the language to use); the agent works from the spec below them, written in English. One shape function (`orch_it.tickets.violations`) judges every ticket: the session hook refuses `gh issue create` and `gh issue edit` with any violation (and a create in a session that never called this skill), and the workflow `ticket-shape` takes `ready-for-agent` off a ready ticket that breaks a rule, with a comment listing every one. Each rule below carries the code both print.
 
 ## Template
 
-A filled example: copy its form, not its words.
+A filled example: copy its form, not its words. Its human block is in English; yours is in the language of `human_language`.
 
 ```
 Title: Cart shows the shipping cost before payment
 
 ## For the human
-- **What:** стоимость доставки показывается в корзине, а не только после ввода карты.
-- **Goal:** покупатель видит итоговую цену заказа до оплаты, а не в её конце.
-- **Plan:** корзина спрашивает тот же расчёт доставки, что и страница оплаты, как только введён почтовый индекс.
-- **Result:** цена доставки в корзине равна цене на оплате на трёх индексах: двух названных и одном вне названных (другая зона); показывает тест расчёта доставки.
-- **Undo:** two-way door (один откат); touches каждый заказ, сделанный через корзину.
+- **What:** the cart shows the shipping cost, not only the page after the card is entered.
+- **Goal:** the buyer sees the final price of the order before paying, not at the end of it.
+- **Plan:** the cart asks the same shipping calculation as the payment page, once the postcode is entered.
+- **Result:** the cart shipping cost equals the payment cost on three postcodes: two named and one outside the named ones (another zone); the shipping calculation test shows it.
+- **Undo:** two-way door (one revert); touches every order made through the cart.
 
 ## For the agent
 Facts: the payment page prices shipping with `shipping_quote(postcode)` (checkout/payment.py:88); the cart page has no call to it (checkout/cart.py:31).
@@ -65,7 +65,7 @@ Human block:
 - `human_block_not_first`: nothing stands above it but blank lines, HTML comments and the park line.
 - `human_field_missing`: each of the five fields is there and not empty.
 - `human_field_order`: they keep the order What, Goal, Plan, Result, Undo, each once.
-- `human_field_not_russian`: their text is Russian; a domain term in backticks and the fixed Undo words (`two-way door`, `touches`) stay as written.
+- `human_field_wrong_language`: their text is in the language of the setting `human_language`; a domain term in backticks and the fixed Undo words (`two-way door`, `touches`) stay as written.
 - `human_field_path`: no file path and no file:line in them; those belong to the agent block.
 
 Agent block:
@@ -97,7 +97,9 @@ The label set is `src/orch_it/labels/labels.json`; `python -m orch_it labels syn
 A ticket that waits on one event is parked, never left waiting by a word in its title or body:
 
 ```
-python -m orch_it tickets park <n> <kind> <ref> --until <YYYY-MM-DD>
+<python> -m orch_it tickets park <n> <kind> <ref> --until <YYYY-MM-DD>
 ```
+
+`<python>` is the interpreter orch_it is installed in: the first word of the repo's test command, or the one `hooks/orch-it` finds.
 
 `kind` is one of `pr_ended` (a pull request `#N` merging; closed unmerged sends it to the brain), `ticket_closed` (a ticket `#N` or `owner/repo#N` closed completed; not planned sends it to the brain; never its own parent), `date` (a day), `run_ended` (a GitHub Actions run id or a store run id ending green), `owner_answer` (the owner commenting on the ticket named) or `layer_version` (the repo running orch-it `X.Y.Z`). `until` is the last day it may wait. Park and unpark only through these commands: what they write and refuse is in `docs/events.md` (Commands), and the hook refuses a `Parked:` line or a `parked` label written by hand. `python -m orch_it tickets unpark <n>` takes both off. The reader `python -m orch_it tickets parks` returns a ticket whose event came, and sends to the brain (`needs-triage`, a comment) one whose event came the other way, whose `until` passed, that a person commented on, or whose park cannot be read.

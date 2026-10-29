@@ -17,7 +17,7 @@ store = Store.open(root)
 with store.writer() as writer:
     for n in range(count):
         writer.write({
-            "kind": "value.measured", "repo": "Rasslabsya4el/orch-it", "ticket": None,
+            "kind": "value.measured", "repo": "acme-x/widgets-y", "ticket": None,
             "role": "script", "session": None, "parent_session": None, "turn": None,
             "step": None, "run": f"writer-{number}", "note": None,
             "detail": {"name": "n", "value": n, "unit": "count", "source": "test",

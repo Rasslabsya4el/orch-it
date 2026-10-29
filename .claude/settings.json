@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m orch_it hook pre-tool-use"
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/hooks/orch-it -m orch_it hook pre-tool-use"
           }
         ]
       },
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m orch_it.tickets.hook",
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/hooks/orch-it -m orch_it.tickets.hook",
             "timeout": 90
           }
         ]
@@ -34,26 +34,26 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          {"type": "command", "command": "python -m orch_it hook brain", "timeout": 60}
+          {"type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/hooks/orch-it -m orch_it hook brain", "timeout": 60}
         ]
       }
     ],
     "SubagentStop": [
       {
         "hooks": [
-          {"type": "command", "command": "python -m orch_it hook subagent-stop", "timeout": 60}
+          {"type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/hooks/orch-it -m orch_it hook subagent-stop", "timeout": 60}
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          {"type": "command", "command": "python -m orch_it skills shadowed", "timeout": 60}
+          {"type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/hooks/orch-it -m orch_it skills shadowed", "timeout": 60}
         ]
       },
       {
         "hooks": [
-          {"type": "command", "command": "python -m orch_it hook brain", "timeout": 60}
+          {"type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/hooks/orch-it -m orch_it hook brain", "timeout": 60}
         ]
       }
     ]

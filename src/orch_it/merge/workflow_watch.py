@@ -1,9 +1,10 @@
-"""The workflow watch's decision (https://github.com/Rasslabsya4el/orchestration-layer/issues/411 rule 3, unit 2):
+"""The workflow watch's decision (layer ticket 411, rule 3, unit 2):
 what a non-green workflow run opens, comments on or closes. `decide` reads the latest ended run of each workflow and
 the open watch issues, and returns actions; it does no I/O. A run is non-green when it ended `failure`, `cancelled`
-or `timed_out`, or when it started no job at all (a run that failed at start), unless GitHub skipped it by its `if:`.
-A run GitHub skipped is neither green nor non-green: it is passed over, and the watch reads the latest run that is
-not skipped. A run is green only when it ended `success` with a job started; any other run gets no action. The
+or `timed_out`, or when it started no job at all (a run that failed at start), unless GitHub skipped it by its `if:` or replaced it.
+A run GitHub skipped, or cancelled before any job of it started because a newer run took its place in the
+concurrency queue (a replaced run), is neither green nor non-green: it is passed over, and the watch reads the
+latest run that is neither. A run is green only when it ended `success` with a job started; any other run gets no action. The
 caller passes the workflows it leaves to other checks in `skip`.
 
 A workflow is identified by its file path (`.github/workflows/x.yml`), never by its display name: two files can
@@ -20,13 +21,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import quote, unquote
 
+from orch_it import language
 from orch_it.tickets import parse, violations
 from orch_it.tickets.reader import TRIAGE_LABEL
 
 LABELS = (TRIAGE_LABEL,)
 NON_GREEN = frozenset({"failure", "cancelled", "timed_out"})
-HOW = {"failure": "failure", "cancelled": "cancelled", "timed_out": "timed out"}
-NO_JOB = "no job started"
+HOW_KEY = {"failure": "watch_how_failure", "cancelled": "watch_how_cancelled", "timed_out": "watch_how_timed_out"}
 NAME_MAX = 49  # `Workflow ` + name + ` did not end green` stays within the title limit of 80
 _MARK = re.compile(r"<!-- orch-it workflow-watch workflow=(\S+) -->")
 RUN_MARK = "<!-- orch-it workflow-watch run={run_id} -->"
@@ -84,9 +85,12 @@ Action = Open | Comment | Close
 
 def skipped(run: WorkflowRun) -> bool:
     """A run GitHub skipped by its `if:`: its conclusion is `skipped`, or no job of it started and every job of
-    it was skipped with no non-green conclusion. Neither green nor non-green; the watch looks past it."""
+    it was skipped with no non-green conclusion. A run replaced: GitHub cancelled it before any job of it started
+    (a newer run took its place in the concurrency queue), so its conclusion is `cancelled` with no job started.
+    Neither green nor non-green; the watch looks past it."""
 
-    return run.outcome == "skipped" or (run.outcome not in NON_GREEN and run.jobs_started == 0 and run.jobs_skipped > 0)
+    return (run.outcome == "skipped" or (run.outcome not in NON_GREEN and run.jobs_started == 0 and run.jobs_skipped > 0)
+            or (run.outcome == "cancelled" and run.jobs_started == 0))
 
 
 def non_green(run: WorkflowRun) -> bool:
@@ -97,10 +101,12 @@ def green(run: WorkflowRun) -> bool:
     return run.outcome == "success" and run.jobs_started > 0
 
 
-def how_ended(run: WorkflowRun) -> str:
-    """How a non-green run ended, in the words the watch ticket names."""
+def how_ended(run: WorkflowRun, *, record: bool = False) -> str:
+    """How a non-green run ended, in the words of the language table (a comment a person reads); `record`:
+    in English whatever the setting (the agent block of the watch ticket)."""
 
-    return NO_JOB if run.jobs_started == 0 else HOW[run.outcome]
+    say = language.english if record else language.text
+    return say("watch_how_no_job") if run.jobs_started == 0 else say(HOW_KEY[run.outcome])
 
 
 def display_name(workflow: str) -> str:
@@ -153,15 +159,18 @@ def _checked(title: str, body: str) -> tuple[str, str]:
 def build(run: WorkflowRun) -> tuple[str, str]:
     """(title, body) of the watch ticket for the non-green latest `run` of its workflow."""
 
-    name, shown, how = run.workflow, display_name(run.workflow), how_ended(run)
-    title = f"Workflow {shown} did not end green"
+    name, shown, how = run.workflow, display_name(run.workflow), how_ended(run, record=True)
+    title = language.text("watch_title", shown=shown)
+    human = "\n".join(f"- **{field}:** {text}" for field, text in {
+        "What": language.text("watch_what", shown=shown, run_id=run.run_id),
+        "Goal": language.text("watch_goal", shown=shown),
+        "Plan": language.text("watch_plan", shown=shown),
+        "Result": language.text("watch_result", shown=shown),
+        "Undo": language.text("watch_undo", shown=shown),
+    }.items())
     body = f"""{mark(name)}
 ## For the human
-- **What:** workflow `{shown}` не завершился зелёным: последний прогон {run.run_id} закончился без зелёного результата.
-- **Goal:** последний прогон `{shown}` снова зелёный, и тикет закрывается сам на первом таком прогоне.
-- **Plan:** разобрать, почему прогон не зелёный, и починить причину; что именно чинить, решает этот тикет.
-- **Result:** последний прогон `{shown}` зелёный.
-- **Undo:** two-way door (один откат); touches только запуск `{shown}`.
+{human}
 
 ## For the agent
 Facts: the workflow `{name}` ended its latest run {run.run_id} at {run.url} as {how}; it ended {run.ended_at}.
@@ -179,13 +188,13 @@ Weight: 2
 
 
 def _comment(run: WorkflowRun) -> str:
-    return (f"Workflow `{run.workflow}` did not end green again: run {run.run_id} ended as {how_ended(run)} "
-            f"at {run.url}, ended {run.ended_at}.")
+    return language.text("watch_comment", workflow=run.workflow, run_id=run.run_id, how=how_ended(run),
+                         url=run.url, ended_at=run.ended_at)
 
 
 def _close(run: WorkflowRun) -> str:
-    return (f"Workflow `{run.workflow}` ends green: run {run.run_id} at {run.url}, ended {run.ended_at}. "
-            "Closing this watch.")
+    return language.text("watch_close", workflow=run.workflow, run_id=run.run_id, url=run.url,
+                         ended_at=run.ended_at)
 
 
 def latest_per_workflow(runs: list[WorkflowRun]) -> list[WorkflowRun]:

@@ -14,7 +14,7 @@ from orch_it import settings
 from orch_it.cli import main
 from orch_it.events.store import Store
 
-REPO = "Rasslabsya4el/orch-it"
+REPO = "acme-x/widgets-y"
 DAY = "2026-10-25"
 
 
@@ -41,6 +41,7 @@ def turn(clock, usd, *, ticket=None, role="worker", model="claude-opus-5-5", hel
 def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
     monkeypatch.delenv("ORCH_IT_STORE", raising=False)
+    (tmp_path / "settings.json").write_text(json.dumps({"repo": REPO}), "utf-8")  # the repo a command takes without --repo
 
 
 @pytest.fixture
@@ -150,19 +151,23 @@ def test_two_readings_and_the_turns_between_them_give_the_dollars_per_percent(st
 
 
 def test_measure_limit_writes_a_value_measured_event_with_every_envelope_field_given(store, capsys):
-    assert run(capsys, store, "measure-limit", "26.5", "--role", "brain", "--repo", "Rasslabsya4el/other",
+    assert run(capsys, store, "measure-limit", "26.5", "--role", "brain", "--repo", "acme-x/other",
                "--note", "card")[0] == 0
     [(raw,)] = store.query("SELECT json_object('kind', kind, 'repo', repo, 'ticket', ticket, 'role', role,"
                            " 'session', session, 'parent_session', parent_session, 'turn', turn,"
                            " 'step', step, 'run', run, 'note', note, 'detail', json(detail)) FROM events").rows
     assert json.loads(raw) == {
-        "kind": "value.measured", "repo": "Rasslabsya4el/other", "ticket": None, "role": "brain",
+        "kind": "value.measured", "repo": "acme-x/other", "ticket": None, "role": "brain",
         "session": None, "parent_session": None, "turn": None, "step": None, "run": None,
         "note": "card",
         "detail": {"name": "weekly_limit_pct", "value": 26.5, "unit": "%", "source": "usage_card"}}
 
 
-def test_measure_limit_defaults_to_the_owner_of_orch_it(store, capsys):
+def test_measure_limit_takes_the_repo_setting_when_no_repo_is_given(store, capsys, tmp_path, monkeypatch):
+    plain = tmp_path / "plain"  # a work tree with no GitHub origin: the origin comes before the setting
+    plain.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=plain, check=True, capture_output=True)
+    monkeypatch.chdir(plain)
     assert run(capsys, store, "measure-limit", "3")[0] == 0
     assert store.query("SELECT repo, role, note FROM events").rows == [(REPO, "owner", None)]
 
@@ -206,7 +211,7 @@ def test_session_cost_options_filter_the_rows(store, capsys):
 def test_set_limit_rate_refuses_a_rate_that_is_not_positive(store, capsys):
     code, _, err = run(capsys, store, "set-limit-rate", "0", "--plan", "max-20x", "--measured", "2026-10-24")
     assert code == 2 and err.startswith("error: bad_setting")
-    assert settings.load() == {}
+    assert settings.load() == {"repo": REPO}  # the refusal wrote nothing: only the fixture's setting is there
 
 
 def test_a_settings_file_that_is_not_json_is_an_error_with_its_code(store, capsys, tmp_path):

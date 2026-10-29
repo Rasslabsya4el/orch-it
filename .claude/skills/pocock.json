@@ -1,12 +1,12 @@
 {
   "_about": "His skills copied byte for byte from `upstream` at `commit` (#397 decision 1): per copy its upstream path and the git blob hash of every file; `not_copied` his skills left out and why; `gone` the names his upstream dropped and what became of them. Written with the copies by `orch_it.skills.copies.write`; a skill folder this file does not name is ours.",
   "upstream": "https://github.com/mattpocock/skills",
-  "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+  "commit": "a496f5513d4a4cf889bc48e189e579f4b0bdf6aa",
   "skills": {
     "code-review": {
       "path": "skills/engineering/code-review",
       "files": {
-        "SKILL.md": "373a4f26e6cfa3617778397945bb069d9cb184bc",
+        "SKILL.md": "83183e0ad36fd0eef25d37c7e483284b7e34c1f0",
         "agents/openai.yaml": "9076774ba327f49068db9273feceda03bfe940fa"
       }
     },
@@ -14,7 +14,7 @@
       "path": "skills/engineering/codebase-design",
       "files": {
         "DEEPENING.md": "cd94075cfd754d147555c5d747a16431ed4c7dd8",
-        "DESIGN-IT-TWICE.md": "d0990138c35c800bd821289a73115e52680c1620",
+        "DESIGN-IT-TWICE.md": "aebdc9f8c05b40d7832de38e2fd8380e1e5507ac",
         "SKILL.md": "3f63c8146dd2604b419c929e9876b90c30d410e9",
         "agents/openai.yaml": "3180715edb37f6e96bec42f92f00169faa8886ef"
       }
@@ -46,7 +46,7 @@
     "grilling": {
       "path": "skills/productivity/grilling",
       "files": {
-        "SKILL.md": "df69d9936880cd3314c28858c6c52f48db23b856",
+        "SKILL.md": "d2f09a18e6a6c65c55f1271ba08dfeaf06f0bed3",
         "agents/openai.yaml": "ddbdb96139c0c1dfe6bca698f39d0465674b8a39"
       }
     },
@@ -67,7 +67,7 @@
     "implement-spec": {
       "path": "skills/engineering/implement-spec",
       "files": {
-        "SKILL.md": "183923797ab58f1b3ef09e03bc1f1f203c309f37",
+        "SKILL.md": "73d36c23958bd04423ba3ded1c90ff0d0b858b72",
         "agents/openai.yaml": "f5e91af21e38eb1a167ea5aa93dfc7da3c4637b4"
       }
     },
@@ -75,7 +75,7 @@
       "path": "skills/engineering/improve-codebase-architecture",
       "files": {
         "HTML-REPORT.md": "e39e8255b8797cf8257d014fb6658fb533f3a399",
-        "SKILL.md": "44cc7d3136c44534d68ac523fa6cd37e759d2846",
+        "SKILL.md": "f1eabb568464f03ae79a3346fc1918fdde6d8285",
         "agents/openai.yaml": "706fdca096da5937fe57875a9154017d50668c42"
       }
     },
@@ -99,7 +99,7 @@
     "research": {
       "path": "skills/engineering/research",
       "files": {
-        "SKILL.md": "fecee97e9457ba039678d2fcf1b1bc9fca78307d",
+        "SKILL.md": "ffc9eb89849cc4cf74962ce93d786ffd17c6a5dc",
         "agents/openai.yaml": "e18b96ca0ccc1003889d5d6991386207c2454bc2"
       }
     },
@@ -113,11 +113,11 @@
     "setup-matt-pocock-skills": {
       "path": "skills/engineering/setup-matt-pocock-skills",
       "files": {
-        "SKILL.md": "293c25b75590119794af03b037ba4288054a32b3",
+        "SKILL.md": "2df0b07981718fa5d9a51526dfbcaee87e3a543d",
         "agents/openai.yaml": "65a0da8128c98051183235e490767a8065310868",
         "domain.md": "4032de016c1e91119d33d477633e2b8f265f4195",
-        "issue-tracker-github.md": "a63510f74038300d8da354553f9d31d1bd954d94",
-        "issue-tracker-gitlab.md": "81499dca459e8097d560b641f8ba7c2e1c7c9da4",
+        "issue-tracker-github.md": "dc806f5655ae34c1701170f98208e5fb5dba7045",
+        "issue-tracker-gitlab.md": "1aeb5d04fadd9b7240e3f70dff20a758a1c729ea",
         "issue-tracker-local.md": "0209a19af92c9c485cf3acc3d9e253171517ea17",
         "triage-labels.md": "5276464244857a3cc29890ff4a978a197b21f3fc"
       }
@@ -157,7 +157,7 @@
     "wayfinder": {
       "path": "skills/engineering/wayfinder",
       "files": {
-        "SKILL.md": "e28cf3018906d6d60fc5b25390b4eeea035dd290",
+        "SKILL.md": "975d6bf9c0a49d18a651f3335e0b4dcf8650fe31",
         "agents/openai.yaml": "b37544751e0570f9df8de6c02aef238de8c3e1e0"
       }
     },
@@ -192,7 +192,7 @@
       "path": "skills/in-progress/chief-of-staff",
       "why": "hidden (#390 6.1, 6.2, 6.4, 6.5: a second coordinator with its own decision wiki beside the brain and ORCH)",
       "files": {
-        "SKILL.md": "6dbdd4da9296e7dd3ef7cd8c7fd498be6e834620",
+        "SKILL.md": "8ea0f468c8c05fb14f0e4d0cfa282c78b92a3319",
         "agents/openai.yaml": "080598b44ad9c843dc3457b6e0e32368aaeec84d"
       }
     },

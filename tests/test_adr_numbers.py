@@ -1,4 +1,4 @@
-"""Every ADR has a number of its own (Rasslabsya4el/orchestration-layer#397): several sessions write
+"""Every ADR has a number of its own (the layer's repo#397): several sessions write
 ADRs at once, each taking the next number it sees, so two files of one number reach `main` unless a
 test refuses them. An ADR is a file of `docs/adr/` whose name starts with a number; other files (a
 README) are left alone."""
