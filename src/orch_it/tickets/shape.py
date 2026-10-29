@@ -74,7 +74,7 @@ _CODE_SPAN = re.compile(r"`[^`\n]*`")
 _URL = re.compile(r"https?://\S+")
 _EXTENSIONS = ("py|pyi|md|js|mjs|cjs|ts|tsx|jsx|json|jsonl|yml|yaml|toml|sql|txt|sh|ps1|bat|cmd|cfg|ini"
                "|html|css|xml|csv|go|rs|java|kt|rb|php|cs|c|h|cpp|hpp|swift|lock|log|env")
-_SEGMENT = r"[A-Za-z0-9_.-]"  # ASCII only: a word of another script (in Cyrillic or Greek) is no path
+_SEGMENT = r"[A-Za-z0-9_.-]"  # ASCII only: a word of another script of a non-ASCII language is no path
 _PATH = re.compile(
     # a file with a known extension, maybe in folders, maybe with `:line`: `docs/events.md:62`
     rf"(?<![\w.])(?:[A-Za-z]:[\\/]|\.{{0,2}}[\\/])?(?:{_SEGMENT}+[\\/])*[A-Za-z0-9_-]{_SEGMENT}*"
@@ -158,13 +158,15 @@ def _paths(text: str) -> list[str]:
 
 
 def _in_human_language(text: str) -> bool:
-    """Written in the setting `human_language` when it holds a letter of that language's script
-    (the table's `human_field_letters`) and at least as many of them as letters of any other script,
-    leaving out code spans, links and the Undo field's fixed words (the table's `undo_words`): a
-    domain term in backticks or a product name stays as written."""
+    """Written in the script of the setting `human_language`: a test of script, not of language. The text
+    holds a letter of that language's script (the table's `human_field_letters`) and at least as many of
+    them as letters of any other script; a text in another language of the same script (German for
+    English) cannot be told apart and passes, only text mostly in another script is refused. Code spans,
+    links and the Undo field's fixed words (the table's `undo_words`) are left out: a domain term in
+    backticks or a product name stays as written."""
 
     letters = re.compile(language.text("human_field_letters"))
-    undo_words = re.compile(rf"(?:{language.text('undo_words')})", re.IGNORECASE)
+    undo_words = re.compile(language.text("undo_words"), re.IGNORECASE)
     prose = undo_words.sub(" ", _URL.sub(" ", _CODE_SPAN.sub(" ", text)))
     own = len(letters.findall(prose))
     other = sum(1 for ch in prose if ch.isalpha() and not letters.fullmatch(ch))

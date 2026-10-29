@@ -129,3 +129,12 @@ def test_one_word_of_the_wrong_script_does_not_refuse_a_block_of_the_right_one(t
     configure(tmp_path, human_language="ru")
     mixed = RUSSIAN.replace("стоимость доставки показывается", "стоимость доставки показывается (shipping)")
     assert codes(mixed) == []
+
+
+def test_an_undo_word_inside_a_longer_word_is_still_text(tmp_path):
+    configure(tmp_path, human_language="ru")
+    fixed = RUSSIAN.replace("- **Undo:** two-way door (один откат); touches каждый заказ, сделанный через корзину.",
+                            "- **Undo:** да touches")
+    longer = fixed.replace("да touches", "да retouches")  # 2 Cyrillic letters against 9 Latin ones
+    assert fixed != RUSSIAN and codes(fixed) == []
+    assert codes(longer) == [CODE]

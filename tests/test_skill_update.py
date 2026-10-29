@@ -15,7 +15,7 @@ import pytest
 from orch_it.skills import copies, update
 from orch_it.skills.copies import Manifest, SkillsError
 
-pytestmark = pytest.mark.usefixtures("russian_tickets")  # Russian ticket bodies (#413 unit 10a)
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

@@ -22,7 +22,7 @@ def isolated_settings(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
-def russian_tickets(isolated_settings):
+def ticket_language_ru(isolated_settings):
     """The human block of a ticket is Russian (#413 unit 10a): the setting `human_language` is `ru`. For a test
     module whose ticket bodies (fixtures, texts the code writes) are Russian: `pytestmark = usefixtures(...)`."""
     Path(os.environ["ORCH_IT_SETTINGS"]).write_text(json.dumps({"human_language": "ru"}), "utf-8")

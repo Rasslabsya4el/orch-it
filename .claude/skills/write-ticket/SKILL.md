@@ -5,7 +5,7 @@ description: Use when opening a GitHub issue or rewriting an issue's title or bo
 
 # Write a ticket
 
-A ticket has two readers. The human decides from five plain lines written in the language set by the setting `human_language` (the shape check reads it); the agent works from the spec below them, written in English. One shape function (`orch_it.tickets.violations`) judges every ticket: the session hook refuses `gh issue create` and `gh issue edit` with any violation (and a create in a session that never called this skill), and the workflow `ticket-shape` takes `ready-for-agent` off a ready ticket that breaks a rule, with a comment listing every one. Each rule below carries the code both print.
+A ticket has two readers. The human decides from five plain lines written in the language set by the setting `human_language` (the shape check reads it; if it refuses the block for its language, its message names the language to use); the agent works from the spec below them, written in English. One shape function (`orch_it.tickets.violations`) judges every ticket: the session hook refuses `gh issue create` and `gh issue edit` with any violation (and a create in a session that never called this skill), and the workflow `ticket-shape` takes `ready-for-agent` off a ready ticket that breaks a rule, with a comment listing every one. Each rule below carries the code both print.
 
 ## Template
 

@@ -9,7 +9,7 @@ import pytest
 from orch_it import tickets
 from ticket_fixtures import EXPECTED, FIXTURES, fixture
 
-pytestmark = pytest.mark.usefixtures("russian_tickets")  # Russian ticket bodies (#413 unit 10a)
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
 
 
 def codes_of(title, body) -> list[str]:
