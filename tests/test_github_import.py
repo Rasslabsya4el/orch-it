@@ -751,14 +751,14 @@ def test_a_push_run_is_superseded_by_a_newer_push_run_of_the_same_branch(store, 
 
 
 def test_a_cancelled_job_that_ran_to_the_bound_is_no_result_cut(store, gh):
-    gh.add_run(100, linux={"conclusion": "cancelled", "cases": RED, "completed": 60 + 15 * 60})
+    gh.add_run(100, linux={"conclusion": "cancelled", "cases": RED, "completed": 60 + github.DEFAULT_JOB_TIMEOUT_MINUTES * 60})
     run_import(store, gh)
     ended = ended_of(store, "linux")
     assert (ended["outcome"], ended["reason"]) == ("no_result", "cut")
 
 
 def test_a_cancelled_job_that_stopped_short_of_the_bound_is_stopped(store, gh):
-    gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "completed": 60 + 15 * 60 - 1})
+    gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "completed": 60 + github.DEFAULT_JOB_TIMEOUT_MINUTES * 60 - 1})
     run_import(store, gh)
     assert ended_of(store, "linux")["outcome"] == "stopped"
 
@@ -922,6 +922,9 @@ def summary_count(log: str) -> int | None:
 
     total, seen = 0, False
     for line in log.splitlines():
+        columns = line.split("\t", 2)
+        if len(columns) == 3 and columns[1] != github.TEST_STEP:
+            continue  # only the test step's lines: a pull request body printed by another step says "143 passed in 2.03s" too
         found = SUMMARY_LINE.search(line)
         if found:
             seen = True
@@ -933,6 +936,12 @@ def test_the_summary_count_sums_the_summary_lines_of_both_phases_of_a_job():
     log = "linux\tpytest\t3156 passed, 3 skipped in 95.25s (0:01:35)\nlinux\tpytest\t3159 deselected in 0.40s\n"
     assert summary_count(log) == 3159
     assert summary_count("1 failed, 3 passed in 5.00s\n1 passed in 1.00s\nno tests ran in 0.10s\n") == 5
+
+
+def test_the_summary_count_reads_only_the_pytest_step_of_a_log():
+    log = ("linux\tclosing words\t2026-10-29T17:49:41Z Tests: tests/test_x.py: 143 passed in 2.03s on the branch\n"
+           "linux\tpytest\t2026-10-29T17:51:47Z 3271 passed, 3 skipped in 117.11s (0:01:57)\n")
+    assert summary_count(log) == 3274
 
 
 def test_the_summary_count_sums_what_ran_and_leaves_deselected_out():

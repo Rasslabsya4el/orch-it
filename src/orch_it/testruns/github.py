@@ -9,7 +9,7 @@ like any other report; the job's GitHub conclusion decides the outcome:
 - `success`: passed, always (the report only gives the rows and the counts);
 - `failure`: failed `red` when the report holds a red case, else no_result `summary_missing`;
 - `cancelled`: no_result `cut` when the job ran for at least the setting
-  `github_job_timeout_minutes` (default 15; GitHub may call a job that hit the workflow's
+  `github_job_timeout_minutes` (default 9, the workflow's per-change bound; GitHub may call a job that hit the workflow's
   `timeout-minutes` cancelled), else stopped `superseded` when a newer run superseded its run,
   else stopped with no reason. A newer run supersedes a run when it was created after it (and
   before `now`), has the same event and another head commit, and, for pull request runs, the
@@ -59,7 +59,7 @@ WORKFLOW_FILE = "tests.yml"
 REQUIRED_JOBS_SETTING = "github_required_jobs"
 DEFAULT_REQUIRED_JOBS = ["linux", "windows"]
 JOB_TIMEOUT_SETTING = "github_job_timeout_minutes"
-DEFAULT_JOB_TIMEOUT_MINUTES = 15
+DEFAULT_JOB_TIMEOUT_MINUTES = 9
 NEWEST_RUNS_SETTING = "github_live_newest_runs"  # how many of the newest runs the live import test judges
 DEFAULT_NEWEST_RUNS = 20
 MAX_PER_PAGE = 100  # GitHub's largest page: an unpaginated list of more runs would silently return 100
