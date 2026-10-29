@@ -11,6 +11,7 @@ from orch_it.testruns import remote
 
 CONTENDERS = 8
 ROUNDS = 50
+TRIES = 300  # takes and releases per contender in the churn test
 STALE_SECONDS = 3600.0
 WAIT_SECONDS = 60  # a barrier or queue read that waits this long means a broken harness, not a slow one
 
@@ -35,7 +36,7 @@ def test_a_create_refused_once_during_a_racing_removal_is_busy_and_the_lock_is_t
     assert os.path.exists(path)
 
 
-def test_a_create_refused_on_every_try_ends_as_a_held_lock_does_not_as_a_permission_error(tmp_path, monkeypatch):
+def test_a_create_refused_on_every_try_ends_as_busy_not_as_a_permission_error(tmp_path, monkeypatch):
     path = str(tmp_path / ("slot" + remote.LOCK_SUFFIX))
 
     def always_refused(name, flags, *args, **kwargs):
@@ -93,8 +94,6 @@ def test_contenders_for_one_slot_lock_leave_one_holder_and_seven_busy_per_round(
     assert busy == {CONTENDERS - 1}
     assert released == ROUNDS
 
-
-TRIES = 300
 
 
 def _churn(path: str, tries: int, results) -> None:
