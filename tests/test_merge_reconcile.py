@@ -10,7 +10,7 @@ from fake_github import FAILED, PASSED, REPO, FakeGitHub
 from follow_world import NOW, world
 
 from orch_it.events.store import Store
-from orch_it.merge import reconcile as reconcile_module
+from orch_it.merge import marks, reconcile as reconcile_module
 from orch_it.merge.follow import FollowReport
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
@@ -192,7 +192,8 @@ def test_a_sweep_that_follows_a_skills_pull_request_closed_by_its_follow_repairs
 
     hub = FakeGitHub(NOW)
     store = Store.open(tmp_path / "events")
-    pr = hub.open_pull(body="His upstream moved.", branch="skills-upstream/0123456789ab-abcdef12", auto_merge="squash")
+    pr = hub.open_pull(body="His upstream moved.", branch="skills-upstream/0123456789ab-abcdef12")
+    hub.comment(REPO, pr, marks.ready_comment(None, hub.head(pr), hub.now))  # in the merge line
 
     def closed_skills(hub_, store_, repo, number, **kwargs):
         return FollowReport(number, 20, "closed_skills", "0123456789ab")

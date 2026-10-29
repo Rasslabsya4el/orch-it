@@ -41,19 +41,19 @@ def line_steps(store):
     return store.query("SELECT outcome FROM events WHERE kind = 'step.ended' AND step = 'line'").rows
 
 
-def test_a_title_with_a_closing_keyword_refuses_that_pull_request_with_auto_merge_still_on(tmp_path):
+def test_a_title_with_a_closing_keyword_refuses_that_pull_request_and_leaves_it_with_a_left_mark(tmp_path):
     hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
     pr = prs[10]
     hub.pulls[pr].title = f"fixes {URL}"
     green_now(hub, pr)
-    assert hub.pull(REPO, pr).auto_merge == "merge"  # as `pr open` left it
+    assert marks.ready_since(hub.comments(REPO, pr)) is not None  # as `pr open` left it
     done = line(hub, store, ci, tmp_path)  # no exception: the line goes on
     [turn] = done.served
     assert turn.result == "refused" and turn.pr == pr
     text = turn.detail
     assert "fixes" in text and URL in text and "title at line 1" in text and "Refs <URL>" in text
-    assert merge_calls(hub) == [] and ci.merged == [] and ci.by_github == []
-    assert hub.pull(REPO, pr).state == "open" and hub.pull(REPO, pr).auto_merge is None
+    assert merge_calls(hub) == [] and ci.merged == []
+    assert hub.pull(REPO, pr).state == "open" and marks.ready_since(hub.comments(REPO, pr)) is None
     assert ticket_open(hub, 10)
     assert marks.left_reason(hub.pull_comments(REPO, pr)) == "closing_keyword"
     assert line_steps(store) == [("passed",)]  # the run itself is not failed
@@ -73,7 +73,6 @@ def test_a_body_that_resolves_the_ticket_is_refused_and_names_the_line(tmp_path)
 def test_a_body_edited_after_pr_open_to_resolve_the_ticket_is_refused_at_the_merge(tmp_path):
     hub, store, prs, ci = line_world(tmp_path, tickets=(10,))
     pr = prs[10]
-    hub.pulls[pr].auto_merge = None  # this case is the line's own look; GitHub's auto-merge is another door
     edited = []
 
     def edit_the_body_while_the_checks_run():  # a person edits the body after `pr open`, before the checks end
@@ -120,7 +119,7 @@ def test_a_refused_pull_request_is_kept_out_of_the_next_run_until_a_new_ready_ma
     assert [s.result for s in line(hub, store, ci, tmp_path).served] == ["refused"]
     again = line(hub, store, ci, tmp_path)
     assert again.served == () and again.reason == "empty"
-    assert hub.pull(REPO, pr).auto_merge is None and ticket_open(hub, 10)
+    assert marks.ready_since(hub.comments(REPO, pr)) is None and ticket_open(hub, 10)
 
 
 def test_the_lines_own_refs_body_passes_and_merges(tmp_path):
