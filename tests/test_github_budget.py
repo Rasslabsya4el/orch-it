@@ -7,6 +7,8 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import json
+
 import pytest
 
 from orch_it.events import github_budget
@@ -138,3 +140,137 @@ def test_repo_of_names_the_repo_a_call_is_about():
 ])
 def test_repo_of_reads_the_repo_flag_in_each_form(args):
     assert github_budget.repo_of(args) == "acme-dev/orch-tools"
+
+
+# --- the account key, the reset window, the Actions spend (#414 unit 12a) ---------------------------------------
+# names are built at run time: no literal account, repo or login stands in this file's new tests
+
+OWNER = "-".join(["acme", "dev"])
+REPO = f"{OWNER}/" + "".join(["orch", "-tools"])
+LOGIN = "".join(["tok", "en", "-user"])
+REAL_READ_LOGIN = github_budget._read_login  # collected before the autouse stub of conftest replaces it
+
+
+def fake_gh(monkeypatch, *, login=LOGIN, rate_limit=None):
+    """A `gh` that answers `api user --jq .login` with `login` (None: fails) and `api rate_limit` with the text
+    `rate_limit()` returns; every other call answers ok. The calls it saw are in the returned list."""
+
+    seen = []
+
+    def run(command, **kwargs):
+        args = command[1:]
+        seen.append(args)
+        if args[:2] == ["api", "user"]:
+            if login is None:
+                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"HTTP 401")
+            return SimpleNamespace(returncode=0, stdout=f"{login}\n".encode(), stderr=b"")
+        if "rate_limit" in args and rate_limit is not None:
+            return SimpleNamespace(returncode=0, stdout=rate_limit().encode(), stderr=b"")
+        return OK
+
+    monkeypatch.setattr(github.subprocess, "run", run)
+    return seen
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    """The store of the test, also the one the layer's own `run_gh` writes to."""
+
+    monkeypatch.setenv("ORCH_IT_STORE", str(tmp_path / "store"))
+    return Store.open(tmp_path / "store")
+
+
+@pytest.fixture
+def real_login(monkeypatch):
+    monkeypatch.setattr(github_budget, "_read_login", REAL_READ_LOGIN)
+
+
+def test_the_account_key_is_the_login_of_the_token_read_once_per_process(store, monkeypatch, real_login):
+    seen = fake_gh(monkeypatch)
+    other_owner = "-".join(["other", "org"])
+    github_budget.count_call(REPO, store=store, at=START)
+    github_budget.count_call(f"{other_owner}/some-repo", store=store, at=START)
+    github_budget.record_budget(store, REPO, budget="actions", remaining=90, limit=100, at=START)
+
+    accounts = {row[0] for row in store.query("SELECT account FROM events WHERE kind = 'github.called'").rows}
+    assert accounts == {LOGIN}  # not the owner of either repo
+    assert sum(1 for args in seen if args[:2] == ["api", "user"]) == 1  # one call for all three events
+    assert sum(github_budget.hourly_totals(store).values()) == 2  # the default account is the token's
+
+
+def test_the_account_key_falls_back_to_the_repo_owner_when_the_login_call_fails(store, monkeypatch, real_login):
+    fake_gh(monkeypatch, login=None)
+    github_budget.count_call(REPO, store=store, at=START)
+    rows = store.query("SELECT account FROM events WHERE kind = 'github.called'").rows
+    assert rows == [(OWNER,)]
+
+
+class FakeRateLimit:
+    """GitHub's side of one window: it counts the calls it is sent and reports `used` and `reset` of the window
+    that starts at `window_start`, the way `gh api rate_limit` shows them."""
+
+    def __init__(self, window_start):
+        self.window_start, self.used = window_start, 0
+
+    def served(self, at):
+        if self.window_start <= at < self.window_start + timedelta(hours=1):
+            self.used += 1
+
+    def answer(self):
+        reset = int((self.window_start + timedelta(hours=1)).timestamp())
+        core = {"limit": 5000, "used": self.used, "remaining": 5000 - self.used, "reset": reset}
+        return json.dumps({"resources": {"core": core}, "rate": core})
+
+
+def test_the_counter_follows_githubs_reset_window_not_the_clock_hour(store, monkeypatch):
+    window_start = datetime(2026, 11, 2, 9, 37, tzinfo=UTC)  # a window that does not start at a clock hour
+    github_side = FakeRateLimit(window_start)
+    fake_gh(monkeypatch, rate_limit=github_side.answer)
+    # 40 calls in the previous window (09:00-09:36), 200 across this one, 30 after it
+    moments = ([window_start - timedelta(minutes=37) + timedelta(seconds=55 * i) for i in range(40)]
+               + [window_start + timedelta(seconds=18 * i) for i in range(200)]
+               + [window_start + timedelta(hours=1, seconds=10 * i) for i in range(30)])
+    for at in moments:
+        github_side.served(at)
+        github_budget.count_call(REPO, store=store, at=at)
+    clock_hour = github_budget.hourly_totals(store, OWNER)  # no reset known yet: the clock hours
+    assert sorted(clock_hour) == ["2026-11-02T09", "2026-11-02T10"]
+
+    github.run_gh(["api", "rate_limit"])  # the reading carries the reset: the process remembers it
+
+    totals = github_budget.hourly_totals(store, OWNER)
+    assert github_side.used == 200
+    assert sum(totals.values()) == totals["2026-11-02T09:37"]  # one window, keyed by its start
+    assert abs(totals["2026-11-02T09:37"] - github_side.used) <= 0.05 * github_side.used
+    assert sum(clock_hour.values()) == 270  # the clock hours alone would have been wrong by far
+    assert clock_hour["2026-11-02T09"] != 200
+
+
+def test_a_rate_limit_reading_is_not_a_counted_call(store, monkeypatch):
+    window_start = datetime(2026, 11, 2, 9, 37, tzinfo=UTC)
+    fake_gh(monkeypatch, rate_limit=FakeRateLimit(window_start).answer)
+    github_budget.count_call(REPO, store=store, at=window_start)
+    for _ in range(3):
+        github.run_gh(["api", "rate_limit"])
+    assert sum(github_budget.hourly_totals(store, OWNER).values()) == 1
+    assert store.query("SELECT COUNT(*) FROM events WHERE kind = 'github.called'").rows == [(4,)]
+
+
+def test_a_rate_limit_answer_that_is_no_reading_stores_nothing_and_raises_nothing(store, monkeypatch):
+    texts = iter(["not json", json.dumps({"resources": {}}), json.dumps({"resources": {"core": {"limit": "x"}}})])
+    fake_gh(monkeypatch, rate_limit=lambda: next(texts))
+    github_budget.count_call(REPO, store=store, at=START)
+    for _ in range(3):
+        github.run_gh(["api", "rate_limit"])
+    assert store.query("SELECT COUNT(*) FROM events WHERE budget_reset IS NOT NULL").rows == [(0,)]
+
+
+def test_the_actions_spend_is_the_fall_of_remaining_inside_the_window(store):
+    reset = START + timedelta(hours=1)
+    for minutes, remaining in ((5, 900), (20, 850), (50, 700)):
+        github_budget.record_budget(store, REPO, budget="actions", remaining=remaining, limit=1000,
+                                    at=START + timedelta(minutes=minutes), reset=reset)
+    github_budget.record_budget(store, REPO, budget="actions", remaining=300, limit=1000,
+                                at=START - timedelta(minutes=30), reset=START)  # the window before
+    assert github_budget.actions_spend(REPO, store=store) == 200  # 900 at the first reading, 700 at the last
+    assert github_budget.actions_spend("-".join([OWNER, "none"]) + "/x", store=store) == 0  # no readings

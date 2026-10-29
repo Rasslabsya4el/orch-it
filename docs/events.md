@@ -176,7 +176,7 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `setting.read` | `key`, `value`, `source` (`setting_source`) | where a setting came from |
 | `value.measured` | `name`, `value`, `unit`, `source` | every machine number: latencies, RAM, CPU, rates |
 | `view.read` | `view`, `item` | the read marks on a feed |
-| `github.called` | `budget` (`github_budget`), `account`, `budget_remaining`, `budget_limit` | one GitHub call of the layer, counted per account per hour (`account`), or a budget reading (`actions`: the Actions token's remaining per repo); a call naming no repo is not stored |
+| `github.called` | `budget` (`github_budget`), `account`, `budget_remaining`, `budget_limit`, `budget_reset` | one GitHub call of the layer, counted per account per hour (`account`), or a budget reading (`actions`: the Actions token's remaining per repo); a reading carries the `budget_reset` of its window and is no counted call; a call naming no repo is not stored |
 | `step.progressed` | none | progress of a long step, with its run and counters |
 | `machine.resumed` | `gap_minutes`, `cause` (`resume_cause`) | a machine woke after a gap; steps that crossed it read the gap |
 

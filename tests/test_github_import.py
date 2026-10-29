@@ -111,7 +111,8 @@ class FakeGh:
                 billed=True, sha=None, **per_job):
         """`per_job`: job name -> dict of `conclusion`, `cases` (the JUnit report; None: no
         artifact), `listed` (the artifact is listed), `expired`, `started` (False: never
-        started; a number: seconds after creation), `completed` (seconds after creation), `attempt`, `artifact_name`, `billed_ms`."""
+        started; a number: seconds after creation), `completed` (seconds after creation), `attempt`, `artifact_name`, `billed_ms`, `rate_limit` (the text of
+        the artifact's `actions-rate-limit.json`)."""
 
         base = BASE + timedelta(seconds=created)
         self.runs.append({
@@ -145,6 +146,8 @@ class FakeGh:
                     {"name": artifact, "expired": spec["expired"]})
                 with zipfile.ZipFile(self.zips / f"{run_id}-{artifact}.zip", "w") as z:
                     z.writestr("junit.xml", junit_xml(spec["cases"]))
+                    if spec.get("rate_limit") is not None:  # the workflow step's file (#414 unit 12a)
+                        z.writestr("actions-rate-limit.json", spec["rate_limit"])
         if billable and billed:
             self.timing[run_id] = {"billable": {"UBUNTU": {"total_ms": 0, "job_runs": billable}}}
 
@@ -1238,3 +1241,53 @@ def test_json_values_is_public_and_reads_pages_printed_one_after_the_other():
     assert github.json_values('[1] [2]\n{"a": 3}') == [[1], [2], {"a": 3}]
     assert github.json_values("") == []
     assert not hasattr(github, "_json_values")
+
+
+# --- the Actions budget reading stored with a run (#414 unit 12a) ------------------------------------------------
+
+def rate_limit_text(remaining, reset_at, limit=1000):
+    core = {"limit": limit, "used": limit - remaining, "remaining": remaining, "reset": int(reset_at.timestamp())}
+    return json.dumps({"resources": {"core": core, "search": {"limit": 30, "remaining": 30, "reset": 0}}})
+
+
+def readings(store):
+    return store.query(
+        "SELECT repo, budget_remaining, budget_limit, budget_reset, at FROM events WHERE kind = 'github.called'"
+        " AND budget = 'actions' ORDER BY at").rows
+
+
+def test_a_run_with_the_rate_limit_file_stores_one_reading_and_one_without_stores_none(store, gh):
+    reset = BASE + timedelta(minutes=50)
+    both = rate_limit_text(940, reset)
+    gh.add_run(100, **{LINUX_CHECK: {"rate_limit": both}, WINDOWS_CHECK: {"rate_limit": both}})  # a file in each job
+    gh.add_run(101, created=60)  # no file
+    report = run_import(store, gh)
+    assert report.runs_failed == 0
+    found = readings(store)
+    assert len(found) == 1  # one reading per run, not one per job
+    repo, remaining, limit, stored_reset, at = found[0]
+    assert (repo, remaining, limit) == (REPO, 940, 1000)
+    assert stored_reset.startswith(reset.strftime("%Y-%m-%dT%H:%M:%S"))
+    assert run_import(store, gh).written == 0 and len(readings(store)) == 1  # a second import adds none
+
+
+@pytest.mark.parametrize("text", ["not json {", "[]", json.dumps({"resources": {"core": {"limit": 1000}}}),
+                                  json.dumps({"resources": {"core": {"limit": 0, "remaining": 5}}}), ""])
+def test_an_unparsable_rate_limit_file_gives_no_reading_and_no_error(store, gh, text):
+    gh.add_run(100, **{LINUX_CHECK: {"rate_limit": text}})
+    report = run_import(store, gh)
+    assert report.runs_failed == 0 and report.written > 0 and readings(store) == []
+    assert ended_of(store, LINUX_CHECK)["outcome"] == "passed"  # the run itself is judged as before
+
+
+def test_the_reading_is_what_would_cross_asks_and_the_spend_follows_the_readings(store, gh):
+    from orch_it.events import github_budget
+
+    reset = BASE + timedelta(minutes=50)
+    gh.add_run(100, **{LINUX_CHECK: {"rate_limit": rate_limit_text(400, reset)}})
+    gh.add_run(101, created=120, **{LINUX_CHECK: {"rate_limit": rate_limit_text(150, reset)}})
+    run_import(store, gh)
+    assert len(readings(store)) == 2
+    now = BASE + timedelta(minutes=20)
+    assert github_budget.would_cross(REPO, 10, store=store, now=now, raw={}) is True  # 150 - 10 < 200 (20% of 1000)
+    assert github_budget.actions_spend(REPO, store=store) == 250  # 400 at the first reading, 150 at the last
