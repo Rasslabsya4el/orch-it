@@ -10,6 +10,14 @@ A red pull request has no event that the follow workflow reacts to: a check run 
 handled by the reconcile workflow: once the red pull request's required checks ended, the harness dispatches it, and its
 sweep follows every pull request on GitHub. The red end waits for that run, requires `success`, then judges the ticket.
 
+The comment end waits, before it posts the owner's comment, for the follow runs of its pull request's own marks to settle
+(`_settled_follow_runs`, about 1 min on GitHub). A pull request whose required checks are green within that minute merges
+on its own auto-merge before its comment's follow run ends, and then the end can no longer be judged open. So the comment
+pull request carries an unmarked test, `tests/test_trial_slow_<tag>.py`, that sleeps `SLOW_SECONDS` (1 min 50 s, under the
+change run's per-test bound of 2 min: `per_change_timeout_seconds` in pyproject.toml, read by `tests.yml`). Its `tests` run
+stays busy past the follow run, so the pull request is still open when the comment's end is judged. The judge is unchanged;
+the finally block closes every pull request the row opened.
+
 Every end is a record of `pr`, `ticket`, `handled_by` (`follow` or `reconcile`), `run_conclusion` (the conclusion of
 the run that handled it), `run_id` (its run id, None when none started), `since` (the moment the end's wait began, ISO
 8601), the ticket's state, `store`, `error` (None when the end holds) and `passed`.
@@ -25,6 +33,10 @@ from merge_trial_live import dispatch_workflow, wait_workflow_run
 from orch_it.testruns.github import GithubError
 
 NOT_READ = "not read (live)"
+# the comment pull request's slow test: its change run outlasts the comment's settle wait and follow run, and stays under
+# the change run's per-test bound (`per_change_timeout_seconds` = 120 s, pyproject.toml:34; tests.yml runs it with -n)
+SLOW_SECONDS = 110
+SLOW_TEST = f"import time\n\n\ndef test_slow():\n    time.sleep({SLOW_SECONDS})\n"
 
 
 def row_4_live(trial: merge_trial.Trial, hub: merge_trial.PullHub, store: merge_trial.Store,
@@ -45,7 +57,8 @@ def row_4_live(trial: merge_trial.Trial, hub: merge_trial.PullHub, store: merge_
         opened.append(closed[2].pr)
         out["closed_unmerged"] = _follow_end(run, closed, "closed_unmerged", judge["closed_unmerged"],
                                              event="pull_request", moved=lambda: _close_unmerged(run, closed[2].pr))
-        said = run.pull_request("comment", {f"trial/{run.tag}/comment.txt": "comment\n"})
+        said = run.pull_request("comment", {f"trial/{run.tag}/comment.txt": "comment\n",
+                                            f"tests/test_trial_slow_{run.tag}.py": SLOW_TEST})
         opened.append(said[2].pr)
         out["comment"] = _follow_end(run, said, "comment", judge["comment"], event="issue_comment",
                                      moved=lambda: _comment(run, said[2].pr), settle=True)
