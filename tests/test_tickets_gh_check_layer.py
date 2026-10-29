@@ -1,15 +1,14 @@
 """The shape check on GitHub and the tickets the layer's own code opens (orchestration-layer#424 unit 8): the
 skills issue (`skills report`), the red-on-main ticket, its no-result ticket and the workflow-watch ticket are
 written by code on the machine of the writer, in the writer's `human_language`, with its commands in them. The
-workflow `ticket-shape` judges them with what a runner has: no settings file (the default language) and the
-workflows of the checkout. They must keep `ready-for-agent`; a ticket a person wrote must not."""
+workflow `ticket-shape` judges them in the checkout, whose `settings.json` is the one the writers read (#453 unit 2),
+so the language rule judges them with the writer's language and the literal rules skip them. They must keep
+`ready-for-agent`; a ticket a person wrote must not."""
 
 import os
-from pathlib import Path
 
 import pytest
 from fake_hub import REPO, FakeHub
-from language_tree import git_tree, write_language
 
 from orch_it.merge import red_main
 from orch_it.merge import workflow_watch as watch
@@ -19,8 +18,12 @@ from orch_it.skills.copies import Manifest
 from orch_it.tickets import gh_check
 from orch_it.tickets.model import CODE_WRITTEN_MARK
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # the writer and the runner share one settings.json
+
 OWNER = REPO.split("/")[0]
 WORKFLOW = "name: tests\non: push\njobs:\n  linux:\n    name: tests\n    runs-on: ubuntu-latest\n    steps: []\n"
+NL = chr(10)
+LITERAL = "Facts: taskkill ends the old run before the new one starts."  # one literal finding (#413 unit 6)
 
 
 def red():
@@ -46,24 +49,18 @@ OPENERS = {"skills": skills, "red_main": red, "no_result": no_result, "workflow_
 
 
 @pytest.fixture
-def runner(tmp_path, monkeypatch):
-    """The machine the workflow runs on: no settings file, a checkout whose workflow has a check named `tests`.
-    Returns the environment for `check_event`."""
+def runner(tmp_path):
+    """The checkout the workflow runs in: its work tree is the cwd (`ticket_language_ru`), and a workflow with a
+    check named `tests`. Returns the environment for `check_event`."""
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
     (tmp_path / ".github" / "workflows" / "tests.yml").write_text(WORKFLOW, "utf-8")
-    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "no-settings-here.json"))
     return {**os.environ, "GITHUB_WORKSPACE": str(tmp_path)}
 
 
-def written_by_a_ru_owner(build, tmp_path, monkeypatch):
-    """The body as the owner's machine writes it: `human_language` ru, in the settings.json of the owner's work tree."""
-    runner = Path.cwd()
-    owner = git_tree(tmp_path / "owner")
-    write_language(owner, "ru")
-    monkeypatch.chdir(owner)
-    built = build()
-    monkeypatch.chdir(runner)  # the runner after it: no language file in its work tree
-    return built
+def with_a_literal(title, body):
+    """The body with one literal finding in its agent block: the literal rules are what a code-written mark exempts."""
+    heading = "## For the agent" + NL
+    return title, body.replace(heading, heading + LITERAL + NL, 1)
 
 
 def event(author=OWNER, kind="User", action="labeled", sender=None):
@@ -83,46 +80,42 @@ def judged(title, body, runner, **who):
 
 @pytest.mark.parametrize("opener", OPENERS)
 @pytest.mark.parametrize("who", [{"author": OWNER, "kind": "User"}, {"author": "github-actions[bot]", "kind": "Bot"}])
-def test_a_ticket_the_layers_code_wrote_keeps_its_label_under_the_runners_settings(opener, who, runner, tmp_path,
-                                                                                   monkeypatch):
-    title, body = written_by_a_ru_owner(OPENERS[opener], tmp_path, monkeypatch)
+def test_a_ticket_the_layers_code_wrote_keeps_its_label_in_the_shared_language(opener, who, runner):
+    title, body = OPENERS[opener]()
     result, hub = judged(title, body, runner, **who)
     assert (result.line, hub.issues[(REPO, 1)].labels) == ("#1 kept", ("ready-for-agent",))
     assert (REPO, 1) not in hub.notes
 
 
 @pytest.mark.parametrize("opener", OPENERS)
-def test_every_opener_writes_the_mark(opener, tmp_path, monkeypatch):
-    assert CODE_WRITTEN_MARK in written_by_a_ru_owner(OPENERS[opener], tmp_path, monkeypatch)[1]
+def test_every_opener_writes_the_mark(opener):
+    assert CODE_WRITTEN_MARK in OPENERS[opener]()[1]
 
 
 @pytest.mark.parametrize("opener", OPENERS)
-def test_the_same_body_by_a_person_or_without_the_mark_is_judged_in_full(opener, runner, tmp_path, monkeypatch):
-    title, body = written_by_a_ru_owner(OPENERS[opener], tmp_path, monkeypatch)
+def test_the_same_body_by_a_person_or_without_the_mark_is_judged_in_full(opener, runner):
+    title, body = with_a_literal(*OPENERS[opener]())
     stranger, _ = judged(title, body, runner, author="someone-else", kind="User")
     unmarked, _ = judged(title, body.replace(CODE_WRITTEN_MARK, ""), runner)
     assert stranger.outcome == unmarked.outcome == "removed"
-    assert "human_field_wrong_language" in stranger.codes and "human_field_wrong_language" in unmarked.codes
+    assert stranger.codes == unmarked.codes == ["literal_pattern"]
 
 
-def test_a_marked_ticket_that_breaks_a_structural_rule_still_loses_the_label(runner, tmp_path, monkeypatch):
-    title, body = written_by_a_ru_owner(skills, tmp_path, monkeypatch)
+def test_a_marked_ticket_that_breaks_a_structural_rule_still_loses_the_label(runner):
+    title, body = skills()
     result, hub = judged(title, body.replace("Weight: 2", ""), runner)
     assert (result.outcome, result.codes) == ("removed", ["weight_missing"])
     assert hub.issues[(REPO, 1)].labels == ()
 
 
-NL = chr(10)
-
-
-def _marked_skills(tmp_path, monkeypatch):
-    title, body = written_by_a_ru_owner(skills, tmp_path, monkeypatch)
+def _marked_skills():
+    title, body = with_a_literal(*skills())
     assert body.startswith(CODE_WRITTEN_MARK + NL)
     return title, body
 
 
-def test_the_mark_counts_on_line_one_or_under_another_comment_line_not_deeper(runner, tmp_path, monkeypatch):
-    title, body = _marked_skills(tmp_path, monkeypatch)
+def test_the_mark_counts_on_line_one_or_under_another_comment_line_not_deeper(runner):
+    title, body = _marked_skills()
     bare = body.replace(CODE_WRITTEN_MARK + NL, "", 1)
     under = "<!-- Parked: waiting -->" + NL + CODE_WRITTEN_MARK + NL + bare
     after_human = bare + NL + CODE_WRITTEN_MARK + NL
@@ -140,8 +133,8 @@ def _edited(title, body, runner, sender, **who):
     return gh_check.check_event(event(action="edited", sender=sender, **who), hub, env=runner)
 
 
-def test_an_edit_of_a_marked_ticket_is_exempt_only_when_a_bot_or_the_owner_made_it(runner, tmp_path, monkeypatch):
-    title, body = _marked_skills(tmp_path, monkeypatch)
+def test_an_edit_of_a_marked_ticket_is_exempt_only_when_a_bot_or_the_owner_made_it(runner):
+    title, body = _marked_skills()
     sent = {
         "stranger": {"login": "someone-else", "type": "User"},
         "owner": {"login": OWNER.upper(), "type": "User"},
@@ -153,8 +146,8 @@ def test_an_edit_of_a_marked_ticket_is_exempt_only_when_a_bot_or_the_owner_made_
     assert outcomes == {"stranger": "removed", "owner": "kept", "bot": "kept", "none": "removed", "junk": "removed"}
 
 
-def test_a_non_edit_action_ignores_the_sender(runner, tmp_path, monkeypatch):
-    title, body = _marked_skills(tmp_path, monkeypatch)
+def test_a_non_edit_action_ignores_the_sender(runner):
+    title, body = _marked_skills()
     hub = FakeHub()
     hub.add(1, body, ["ready-for-agent"], title=title)
     labeled = event(sender={"login": "someone-else", "type": "User"})
