@@ -4,3 +4,39 @@
 human_field_language_rule = "текст каждого поля для человека написан по-русски"
 # Класс символов с буквами письма этого языка; проверка считает их.
 human_field_letters = "[Ѐ-ӿ]"
+
+# notices to the owner (unit 10b)
+# the red-on-main ticket (merge/red_main.py build): the title and the human block; {tests} is one of the three forms below
+red_main_title = "main красный: {count} {tests}"
+red_main_tests_one = "тест падает"
+red_main_tests_few = "теста падают"
+red_main_tests_many = "тестов падают"
+red_main_by_pr = "пулл-реквеста #{pr}"
+red_main_by_commit = "коммита без пулл-реквеста"
+red_main_what = "main красный: {count} {tests} после слияния {by}."
+red_main_goal = "main снова зелёный, и пулл-реквесты, красные только на этих тестах, идут дальше сами."
+red_main_plan = "починить или откатить то, что сломало эти тесты; что выбрать, решает этот тикет."
+red_main_result = "полный прогон тестов на main зелёный; тикет закрывается сам на первом зелёном прогоне."
+red_main_undo = "two-way door (один откат); touches каждый пулл-реквест, который ждёт этот тикет."
+# the ticket to the brain when main's tests gave no result twice (merge/red_main.py build_no_result)
+no_result_title = "тесты на main дважды не дали результата"
+no_result_what = "тесты на main дважды подряд не дали результата: прогон обрезан, отменён или без отчёта."
+no_result_goal = "снова видно, зелёный main или красный, и пулл-реквесты, красные только на нём, понятны."
+no_result_plan = "мозг смотрит, почему прогон не дал ответа (место, лимит, отчёт), и решает, что чинить."
+no_result_result = "следующий прогон тестов на main даёт результат на обеих системах."
+no_result_undo = "two-way door (один откат); touches только проверку main."
+# the workflow watch ticket (merge/workflow_watch.py build); the title stays short: the name takes up to 49 characters
+watch_title = "Workflow {shown} не зелёный"
+watch_what = "workflow `{shown}` не завершился зелёным: последний прогон {run_id} закончился без зелёного результата."
+watch_goal = "последний прогон `{shown}` снова зелёный, и тикет закрывается сам на первом таком прогоне."
+watch_plan = "разобрать, почему прогон не зелёный, и починить причину; что именно чинить, решает этот тикет."
+watch_result = "последний прогон `{shown}` зелёный."
+watch_undo = "two-way door (один откат); touches только запуск `{shown}`."
+# the skills update issue (skills/update.py issue); the Undo field keeps its fixed English words
+skills_what = "апстрим навыков Покока перешёл с `{old}` на `{new}`: изменилось навыков: {changed}, из них скопировано в репо: {copies}."
+skills_goal = "копии навыков в репо совпадают с новой версией его апстрима, и ни одна роль не теряет вызываемый навык молча."
+skills_plan = "ORCH под `gh` владельца запускает `python -m orch_it skills update`; тот открывает один пулл-реквест с новыми копиями, а тесты репо проверяют копии и ссылки на навыки."
+skills_result = "пулл-реквест зелёный на обеих ОС, у 100 % копий хэши совпадают с манифестом новой версии, и каждый навык в нём отнесён к своему классу."
+skills_undo = "two-way door (один откат пулл-реквеста возвращает прежние копии); touches все роли, которые вызывают эти навыки."
+skills_plan_brain = "ORCH не открывает пулл-реквест по этому тикету: мозг решает по каждому классу из таблицы ниже, а `python -m orch_it skills update` печатает `waits_for_brain` и ничего не переносит."
+skills_result_brain = "мозг записал своё решение по каждому классу в этом тикете, и ни одна копия не перенесена без него."

@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import quote, unquote
 
+from orch_it import language
 from orch_it.tickets import parse, violations
 from orch_it.tickets.reader import TRIAGE_LABEL
 
@@ -154,14 +155,17 @@ def build(run: WorkflowRun) -> tuple[str, str]:
     """(title, body) of the watch ticket for the non-green latest `run` of its workflow."""
 
     name, shown, how = run.workflow, display_name(run.workflow), how_ended(run)
-    title = f"Workflow {shown} did not end green"
+    title = language.text("watch_title", shown=shown)
+    human = "\n".join(f"- **{field}:** {text}" for field, text in {
+        "What": language.text("watch_what", shown=shown, run_id=run.run_id),
+        "Goal": language.text("watch_goal", shown=shown),
+        "Plan": language.text("watch_plan", shown=shown),
+        "Result": language.text("watch_result", shown=shown),
+        "Undo": language.text("watch_undo", shown=shown),
+    }.items())
     body = f"""{mark(name)}
 ## For the human
-- **What:** workflow `{shown}` не завершился зелёным: последний прогон {run.run_id} закончился без зелёного результата.
-- **Goal:** последний прогон `{shown}` снова зелёный, и тикет закрывается сам на первом таком прогоне.
-- **Plan:** разобрать, почему прогон не зелёный, и починить причину; что именно чинить, решает этот тикет.
-- **Result:** последний прогон `{shown}` зелёный.
-- **Undo:** two-way door (один откат); touches только запуск `{shown}`.
+{human}
 
 ## For the agent
 Facts: the workflow `{name}` ended its latest run {run.run_id} at {run.url} as {how}; it ended {run.ended_at}.
