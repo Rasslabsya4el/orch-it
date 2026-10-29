@@ -170,6 +170,11 @@ def test_an_absent_value_is_listed_with_its_reason_and_the_others_are_still_foun
     assert kinds_in("mail t9@example.invalid", values) == {"git_email"}
 
 
+def test_a_reason_no_table_names_is_written_as_it_is():
+    values = Values(not_checked=(("git_email", "some other reason"),))
+    assert values.render_not_checked() == "not checked: git_email (some other reason)"
+
+
 def test_a_value_too_short_to_scan_is_listed_and_never_scanned():
     values = machine(env={"USERNAME": "ab"})
     assert values.user is None

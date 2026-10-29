@@ -43,12 +43,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from orch_it import language
+from orch_it import language, settings
 
 HOOK = "tickets"
 WRITE_TICKET = "write-ticket"
+BAD_SETTING = "bad_setting"  # a named bad setting (HumanLanguageError): refused, not failed open (D4 amd 2)
 HOOK_CODES = ("write_ticket_missing", "park_by_hand", "body_unreadable", "command_unreadable", "issue_unreadable",
-              "literal_value", "literal_pattern")
+              "literal_value", "literal_pattern", BAD_SETTING)
 _QUICK = re.compile(r"issue", re.IGNORECASE)  # no `gh issue` call without the word: the rest is passed at once
 _ISSUE_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/([1-9][0-9]*)(?:[/?#]\S*)?",
                         re.IGNORECASE)
@@ -103,7 +104,10 @@ def judge(payload: dict, *, hub, repo_of, values=None) -> Refusal | None:
     repo = None
     memo: dict = {}  # the setup's values and check names, read once, when the first body is judged
     for call in judged:
-        found, lines, repo = call.judge(payload, hub, repo_of, cwd, values, memo)
+        try:
+            found, lines, repo = call.judge(payload, hub, repo_of, cwd, values, memo)
+        except settings.HumanLanguageError as e:  # a named bad setting: its own words, after the earlier calls
+            return Refusal(codes + [BAD_SETTING], "\n".join(said + [str(e)]), repo)
         codes += [code for code in found if code not in codes]
         said += [line for line in lines if line not in said]
     if codes and "values" in memo:  # a refusal whose literal check ran ends with what that check could not check
@@ -471,7 +475,10 @@ def main(text: str | None = None) -> int:
         return 0
     _record(payload, refusal)
     if refusal.codes:
-        reason = language.text_or_refusal("ticket_hook_refused") + "\n" + refusal.message
+        if BAD_SETTING in refusal.codes:  # the reason is the setting's own words, already in the message (D4 amd 2)
+            reason = refusal.message
+        else:
+            reason = language.text_or_refusal("ticket_hook_refused") + "\n" + refusal.message
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": reason}}))
     return 0

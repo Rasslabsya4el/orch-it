@@ -166,6 +166,30 @@ pattern = '"ctypes\.windll": re\.compile'
 kinds = ["one_os_call"]
 reason = "A table of the one-OS calls this test forbids in the research bridge's code; it names the calls to look for and uses none."
 
+[[exception]]
+file = "src/orch_it/guards/kinds.py"
+pattern = '(?i)\b(task[k]ill|tsk[i]ll|Stop-[P]rocess|wm[i]c)\b'
+kinds = ["one_os_call"]
+reason = "The detector itself: this regex lists the Windows-only process-stop tools the check looks for, in any casing."
+
+[[exception]]
+file = ["src/orch_it/guards/triggers.py", "src/orch_it/guards/processes.py"]
+pattern = '(?i)\b(task[k]ill|tsk[i]ll|Stop-[P]rocess|wm[i]c)\b'
+kinds = ["one_os_call"]
+reason = "The guard's own trigger tables, and the words of its docstrings and comments, name the process-stop commands it recognises and reads; these lines parse a command and run none of them."
+
+[[exception]]
+file = "src/orch_it/proctree.py"
+pattern = '(?i)\b(task[k]ill|tsk[i]ll|Stop-[P]rocess|wm[i]c)\b'
+kinds = ["one_os_call"]
+reason = "The Windows-only job helper: its class is defined only under the win32 test at the top of the module and its kill is reached only on win32; the tree stop is the fallback when Windows will not make a job, and the other OSes stop the process group."
+
+[[exception]]
+file = ["tests/test_guards_kinds.py", "tests/test_process_ownership.py", "tests/test_process_real.py", "tests/test_triggers_coverage.py", "tests/test_triggers_forms.py", "tests/test_triggers_hardening.py", "tests/test_triggers_sets.py", "tests/test_triggers_stop.py"]
+pattern = '(?i)\b(task[k]ill|tsk[i]ll|Stop-[P]rocess|wm[i]c)\b'
+kinds = ["one_os_call"]
+reason = "Test fixtures plant the process-stop command names on purpose: the command text the guard parses, or a stop record the judge reads; the fixtures run no such command."
+
 # ---- 2. The login name of the machine ----------------------------------------------------------------------
 # The scan reads the login name of the machine it runs on. On a machine whose login is a common word, the word
 # in an invented path, an address or a comment is a finding; on any other machine these patterns match nothing.

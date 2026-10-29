@@ -12,6 +12,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from orch_it import language
 from orch_it.guards import kinds as pattern_kinds
 from orch_it.guards import values as setup_values
 
@@ -23,7 +24,14 @@ EXCUSABLE_KINDS = tuple(kind for kind in (*setup_values.KINDS, *pattern_kinds.KI
 
 
 class ExceptionsError(Exception):
-    """An exceptions file, or one of its entries, that cannot be used. The message names the entry at fault."""
+    """An exceptions file, or one of its entries, that cannot be used. The message is the sentence of the
+    table `exc_*` for the refusal, in the setting's language, and names the entry at fault. `code` is the
+    stable word of the refusal for callers: `not_toml`, `not_tables`, `no_file`, `no_pattern`, `kinds`,
+    `no_reason`, `bad_pattern`; `unreadable` when a caller gives only a message."""
+
+    def __init__(self, message: str, code: str = "unreadable"):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -59,10 +67,10 @@ def load_exceptions(path: str | Path) -> Exceptions:
     try:
         data = tomllib.loads(file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:  # a TOML error and a decoding error are both ValueErrors
-        raise ExceptionsError(f"{file}: not readable as TOML: {error}") from error
+        raise _refused("not_toml", "exc_not_toml", file=file, error=error) from error
     tables = data.get("exception", [])
     if not isinstance(tables, list):
-        raise ExceptionsError(f"{file}: the entries are [[exception]] tables")
+        raise _refused("not_tables", "exc_not_tables", file=file)
     return Exceptions(tuple(_entry(number, table) for number, table in enumerate(tables, 1)))
 
 
@@ -73,27 +81,37 @@ def is_allowed_place(path: str, settings_file: str) -> bool:
     return path == _posix(settings_file) or any(path.startswith(place) for place in ALLOWED_PLACES)
 
 
+def _refused(code: str, key: str, **fields: object) -> ExceptionsError:
+    """The refusal `code`, its sentence the table's `key` in the setting's language (the words of the setting's
+    table, or the refusal naming the missing table)."""
+
+    return ExceptionsError(language.text_or_refusal(key, **fields), code)
+
+
 def _entry(number: int, table: dict) -> _Entry:
-    name = f"[[exception]] entry {number} (file {table.get('file')!r})"
+    def refuse(code: str, key: str, **fields: object) -> ExceptionsError:
+        name = language.text_or_refusal("exc_entry", number=number, file=repr(table.get("file")))
+        return _refused(code, key, name=name, **fields)
+
     globs = table.get("file")
     if isinstance(globs, str):
         globs = [globs]
     if not isinstance(globs, list) or not globs or not all(isinstance(glob, str) and glob.strip() for glob in globs):
-        raise ExceptionsError(f"{name}: no file: a glob or a repo path (or a list of them) is required")
+        raise refuse("no_file", "exc_no_file")
     pattern = table.get("pattern")
     if not isinstance(pattern, str) or not pattern:
-        raise ExceptionsError(f"{name}: no pattern: a regex over the line is required")
+        raise refuse("no_pattern", "exc_no_pattern")
     kinds = table.get("kinds")
     if (not isinstance(kinds, list) or not kinds or not all(isinstance(kind, str) for kind in kinds)
             or not set(kinds) <= set(EXCUSABLE_KINDS)):
-        raise ExceptionsError(f"{name}: kinds: a non-empty list of {', '.join(EXCUSABLE_KINDS)} is required")
+        raise refuse("kinds", "exc_kinds", kinds=", ".join(EXCUSABLE_KINDS))
     reason = table.get("reason")
     if not isinstance(reason, str) or not reason.strip():
-        raise ExceptionsError(f"{name}: empty or missing reason: each entry says why it is allowed")
+        raise refuse("no_reason", "exc_no_reason")
     try:
         compiled = re.compile(pattern)
     except re.error as error:
-        raise ExceptionsError(f"{name}: pattern does not compile: {error}") from error
+        raise refuse("bad_pattern", "exc_bad_pattern", error=error) from error
     files = "|".join(f"(?:{_glob_regex(_posix(glob))})" for glob in globs)
     return _Entry(re.compile(files), compiled, frozenset(kinds), reason.strip())
 
