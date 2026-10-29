@@ -1290,4 +1290,4 @@ def test_the_reading_is_what_would_cross_asks_and_the_spend_follows_the_readings
     assert len(readings(store)) == 2
     now = BASE + timedelta(minutes=20)
     assert github_budget.would_cross(REPO, 10, store=store, now=now, raw={}) is True  # 150 - 10 < 200 (20% of 1000)
-    assert github_budget.actions_spend(REPO, store=store) == 250  # 400 at the first reading, 150 at the last
+    assert github_budget.actions_spend(REPO, store=store) == 850  # 1000 - 150 at the last reading (GitHub's used)

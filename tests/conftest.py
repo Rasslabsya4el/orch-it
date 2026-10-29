@@ -32,7 +32,6 @@ def no_login_call(monkeypatch):
     monkeypatch.setattr(github_budget, "_read_login", lambda: None)
     monkeypatch.setattr(github_budget, "_login", None)
     monkeypatch.setattr(github_budget, "_login_failed_at", None)
-    monkeypatch.setattr(github_budget, "_last_repo", None)
 
 
 @pytest.fixture

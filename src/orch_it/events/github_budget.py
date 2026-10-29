@@ -8,20 +8,21 @@ Two budgets, two tokens:
   `gh api user --jq .login` per process; the owner of the repo the call names when that call fails). GitHub's
   window is not the clock hour: a `gh api rate_limit` answer carries the `reset` of the window, `run_gh` stores it
   as a reading (`budget_reset` set, not a counted call), and `hourly_totals` counts the calls inside the window
-  that ends at the latest remembered reset (reset - 1 h .. reset), the UTC clock hours when no reset is known;
+  that holds "now" on the hour grid anchored at the latest remembered reset (a reset in the past still anchors the
+  grid, so the window rolls on with no new reading), the UTC clock hours when no reset is known;
 - the Actions token's budget per repo (about 1000 requests an hour): a reading `budget` `actions` with the repo's
-  remaining, limit and reset, stored with the repo (the importer writes one per run from the run's
+  remaining, limit and reset, stored with the repo and no account (the importer writes one per run from the run's
   `actions-rate-limit.json`). `would_cross` asks whether spending some more calls takes the repo under its
-  threshold, the place rule's question; `actions_spend` is what the readings of the latest window show was spent.
+  threshold, the place rule's question; a reading whose reset has passed holds nothing back (the budget refilled).
+  `actions_spend` is `limit - remaining` of the last reading.
 
 Pollers read the remaining limit GitHub returns (`GET /rate_limit`) and wait longer through `poll_interval` when the
 remaining falls under the threshold, a share of the limit (setting `request_budget_threshold`, default 20%).
 
 Known gap: the event list needs a repo on every event, so a call that names no repo (`gh api user`,
 `users/<login>`) is made and counted by nobody here: `count_call` takes no repo and stores nothing. A `rate_limit`
-reading takes the repo of the last call this process counted (before any, it is not stored); GitHub does not count
-`rate_limit` calls against the limit, nor does the counter. The window of the latest reset is not rolled forward
-once the clock passes it.
+reading names none, so it is stored under `<login>/.account`; with no login known it is not stored. GitHub does not
+count `rate_limit` calls against the limit, nor does the counter.
 Counting never fails a call: every failure of the store is swallowed by `count_call`.
 """
 
@@ -49,15 +50,16 @@ RESET_WINDOW = timedelta(hours=1)  # GitHub's window ends at its `reset` and beg
 ACTIONS_FILE = "actions-rate-limit.json"  # the run's own `gh api rate_limit`, written by the workflow (#414 unit 10)
 LOGIN_TIMEOUT_S = 20
 LOGIN_RETRY_S = 60  # after a failed `gh api user` the next count within this many seconds does not ask again
+ACCOUNT_REPO_NAME = ".account"  # the repo name of a reading that names no repo: `<login>/.account` (the envelope needs one)
 _LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 _AT_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"  # the index's own `at` format: text order is time order
-_PATH_REPO =re.compile(r"repos/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:[/?]|$)")
+_PATH_REPO = re.compile(r"repos/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:[/?]|$)")
 _OWNER_REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _REPO_FLAGS = ("--repo", "-R")
 dropped_calls = 0  # calls whose count the store refused (counting never fails a call); this process's count
 _login: str | None = None  # the token's login, read once per process
 _login_failed_at: float | None = None
-_last_repo: str | None = None  # the repo of the last call counted: a `rate_limit` reading names none of its own
+monotonic = time.monotonic  # the clock of the login retry; a test replaces it
 
 
 def default_threshold() -> float:
@@ -123,10 +125,8 @@ def count_call(repo: str | None, *, store: Store | None = None, at: datetime | N
     raises: a store that cannot be written loses the count, not the call; the loss is counted in `dropped_calls` and
     said in one line on stderr."""
 
-    global _last_repo
     if repo is None:
         return
-    _last_repo = repo
     try:
         _write(store or Store.open(), reading_event(repo, budget="account", remaining=None, limit=None, at=at))
     except Exception as failure:  # counting never fails the call it counts
@@ -139,7 +139,7 @@ def after_call(args: list[str], answer: str | None) -> None:
 
     if any(arg in ("rate_limit", "/rate_limit") for arg in args):
         if answer is not None:
-            note_rate_limit(answer)
+            note_rate_limit(answer, repo=repo_of(args))
     else:
         count_call(repo_of(args))
 
@@ -147,14 +147,18 @@ def after_call(args: list[str], answer: str | None) -> None:
 def note_rate_limit(text: str, *, store: Store | None = None, repo: str | None = None,
                     at: datetime | None = None) -> None:
     """Remember the account reading in a `gh api rate_limit` answer (its `resources.core` remaining, limit and
-    reset) as an event of `repo` (default: the last repo this process counted). An answer that is no reading, or
-    carries no reset, stores nothing. Never raises."""
+    reset) as an event of `repo`; one that names no repo is stored under the account (`<login>/.account`). An answer
+    that is no reading, or carries no reset, stores nothing. Never raises."""
 
-    repo = repo or _last_repo
     reading = read_core(text)
-    if repo is None or reading is None or reading[2] is None:
+    if reading is None or reading[2] is None:
         return
     try:
+        if repo is None:
+            login = account_login()
+            if login is None:
+                return
+            repo = f"{login}/{ACCOUNT_REPO_NAME}"
         _write(store or Store.open(), reading_event(repo, budget="account", remaining=reading[0], limit=reading[1],
                                                      reset=reading[2], at=at))
     except Exception as failure:
@@ -198,14 +202,15 @@ def record_budget(store: Store, repo: str, *, budget: str, remaining: int, limit
 
 def reading_event(repo: str, *, budget: str, remaining: int | None, limit: int | None, reset: datetime | None = None,
                   at: datetime | None = None, event_id: str | None = None) -> dict:
-    """The `github.called` event of a counted call (`remaining`, `limit`, `reset` None) or of a budget reading."""
+    """The `github.called` event of a counted call (`remaining`, `limit`, `reset` None) or of a budget reading. The
+    `actions` budget is per repo: its event has no account."""
 
     event = {
         "kind": KIND, "repo": repo, "ticket": None, "role": ROLE, "session": None, "parent_session": None,
         "turn": None, "step": None, "run": None, "note": None,
-        "detail": {"budget": budget, "account": account_key(repo), "budget_remaining": remaining,
-                   "budget_limit": limit,
-                   "budget_reset": reset.astimezone(UTC).strftime(_AT_FORMAT) if reset else None},
+        "detail": {"budget": budget, "account": None if budget == "actions" else account_key(repo),
+                   "budget_remaining": remaining, "budget_limit": limit,
+                   "budget_reset": _utc_text(reset) if reset else None},
     }
     if at is not None:
         event["at"] = at.isoformat()
@@ -221,11 +226,11 @@ def account_login() -> str | None:
     global _login, _login_failed_at
     if _login is not None:
         return _login
-    if _login_failed_at is not None and time.monotonic() - _login_failed_at < LOGIN_RETRY_S:
+    if _login_failed_at is not None and monotonic() - _login_failed_at < LOGIN_RETRY_S:
         return None
     found = _read_login()
     if found is None:
-        _login_failed_at = time.monotonic()
+        _login_failed_at = monotonic()
         return None
     _login = found
     return found
@@ -247,75 +252,100 @@ def account_key(repo: str) -> str:
     return account_login() or _account_key(repo)
 
 
-def latest_reset(store: Store, account: str, *, budget: str = "account") -> datetime | None:
-    """The latest `reset` of a window remembered for `account`, None when no reading carried one."""
+def _utc_text(moment: datetime) -> str:
+    """`moment` in the index's own `at` text: UTC, fixed width, so text order is time order."""
 
+    return moment.astimezone(UTC).strftime(_AT_FORMAT)
+
+
+def _account_where(account: str | None) -> tuple[str, tuple]:
+    """(SQL condition, its parameters) for the calls of `account`. A named account is its exact key. The default
+    account is the token's login together with the calls counted while the login was not known (the fallback key,
+    the owner of the call's own repo), so a failed lookup does not split the counter."""
+
+    if account is not None:
+        return "account = ?", (_account_key(account),)
+    login = account_login()
+    if login is None:
+        raise ValueError("the token's login is not known: name the account")
+    return "(account = ? OR account = lower(substr(repo, 1, instr(repo, '/') - 1)))", (login,)
+
+
+def latest_reset(store: Store, account: str | None = None, *, budget: str = "account") -> datetime | None:
+    """The latest `reset` of a window remembered for `account` (default: the token's), None when no reading carried
+    one."""
+
+    condition, params = _account_where(account)
     ((found,),) = store.query(
-        f"SELECT MAX(budget_reset) FROM events WHERE kind = '{KIND}' AND budget = ? AND account = ?",
-        (budget, account)).rows
+        f"SELECT MAX(budget_reset) FROM events WHERE kind = '{KIND}' AND budget = ? AND {condition}",
+        (budget, *params)).rows
     return schema.parse_at(found) if found else None
 
 
-def hourly_totals(store: Store, account: str | None = None, *, budget: str = "account") -> dict[str, int]:
-    """The calls counted for `account` (default: the token's login) inside GitHub's window that ends at the latest
-    remembered reset (reset - 1 h up to the reset), as `{window start 'YYYY-MM-DDTHH:MM': calls}`. With no reset
-    known, per UTC clock hour, keyed `YYYY-MM-DDTHH`."""
+def window_of(reset: datetime, now: datetime) -> tuple[datetime, datetime]:
+    """GitHub's window that holds `now`, on the hour grid anchored at `reset`: the window ending at `reset` while
+    `now` is not past it, else the one reached by whole hours from it."""
 
-    if account is None:
-        account = account_login()
-        if account is None:
-            raise ValueError("the token's login is not known: name the account")
-    key = _account_key(account)
-    where = f"kind = '{KIND}' AND budget = ? AND account = ? AND budget_reset IS NULL"
-    reset = latest_reset(store, key, budget=budget)
+    reset, now = reset.astimezone(UTC), now.astimezone(UTC)
+    if now < reset:
+        return reset - RESET_WINDOW, reset
+    end = reset + RESET_WINDOW * (int((now - reset) / RESET_WINDOW) + 1)
+    return end - RESET_WINDOW, end
+
+
+def hourly_totals(store: Store, account: str | None = None, *, budget: str = "account",
+                  now: datetime | None = None) -> dict[str, int]:
+    """The calls counted for `account` (default: the token's login, see `_account_where`) inside GitHub's window that
+    holds `now` (default: the clock), as `{window start 'YYYY-MM-DDTHH:MM' (UTC): calls}`. The window is on the hour
+    grid anchored at the latest remembered reset (`window_of`). With no reset known, per UTC clock hour, keyed
+    `YYYY-MM-DDTHH`."""
+
+    condition, params = _account_where(account)
+    where = f"kind = '{KIND}' AND budget = ? AND budget_reset IS NULL AND {condition}"
+    reset = latest_reset(store, account, budget=budget)
     if reset is None:
         rows = store.query(f"SELECT substr(at, 1, 13) AS hour, COUNT(*) FROM events WHERE {where}"
-                           " GROUP BY hour ORDER BY hour", (budget, key)).rows
+                           " GROUP BY hour ORDER BY hour", (budget, *params)).rows
         return {hour: count for hour, count in rows}
-    start = reset - RESET_WINDOW
+    start, end = window_of(reset, now or datetime.now(UTC))
     ((count,),) = store.query(f"SELECT COUNT(*) FROM events WHERE {where} AND at >= ? AND at < ?",
-                              (budget, key, start.strftime(_AT_FORMAT), reset.strftime(_AT_FORMAT))).rows
+                              (budget, *params, _utc_text(start), _utc_text(end))).rows
     return {start.strftime("%Y-%m-%dT%H:%M"): count}
 
 
 def actions_spend(repo: str, *, store: Store | None = None) -> int:
-    """How many Actions requests `repo` spent in its latest window, from the stored readings: the remaining at the
-    window's first reading less the remaining at its last. The window ends at the latest remembered reset (with no
-    reset known, at the latest reading). 0 with fewer than two readings."""
+    """How many Actions requests `repo` spent in its window, as GitHub's own `used` shows at the last stored reading:
+    `limit - remaining` there. 0 with no reading. No caller yet: #406 reads it."""
 
     store = store or Store.open()
-    ((reset,),) = store.query(f"SELECT MAX(budget_reset) FROM events WHERE kind = '{KIND}' AND budget = 'actions'"
-                              " AND repo = ?", (repo,)).rows
-    if reset:
-        end = schema.parse_at(reset)
-    else:
-        ((latest,),) = store.query(f"SELECT MAX(at) FROM events WHERE kind = '{KIND}' AND budget = 'actions'"
-                                   " AND repo = ?", (repo,)).rows
-        if not latest:
-            return 0
-        end = schema.parse_at(latest) + timedelta(microseconds=1)
     rows = store.query(
-        f"SELECT budget_remaining FROM events WHERE kind = '{KIND}' AND budget = 'actions' AND repo = ?"
-        " AND budget_remaining IS NOT NULL AND at >= ? AND at < ? ORDER BY at",
-        (repo, (end - RESET_WINDOW).astimezone(UTC).strftime(_AT_FORMAT),
-         end.astimezone(UTC).strftime(_AT_FORMAT))).rows
-    return max(rows[0][0] - rows[-1][0], 0) if len(rows) >= 2 else 0
+        f"SELECT budget_remaining, budget_limit FROM events WHERE kind = '{KIND}' AND budget = 'actions'"
+        " AND repo = ? AND budget_remaining IS NOT NULL AND budget_limit IS NOT NULL ORDER BY at DESC LIMIT 1",
+        (repo,)).rows
+    return max(rows[0][1] - rows[0][0], 0) if rows else 0
 
 
 def would_cross(repo: str, calls: int, *, store: Store | None = None, now: datetime | None = None,
                 raw: dict | None = None) -> bool:
     """Whether `calls` more Actions requests in `repo` would take its remaining budget under the threshold. The
-    latest stored reading of the repo decides; no reading, or one older than `ACTIONS_WINDOW`, never crosses."""
+    latest stored reading of the repo decides. It holds nothing back once its reset has passed (the budget
+    refilled); a reading with no reset does so an hour after it was taken (`ACTIONS_WINDOW`); no reading never
+    crosses."""
 
     store = store or Store.open()
     now = now or datetime.now(UTC)
     rows = store.query(
-        f"SELECT at, budget_remaining, budget_limit FROM events WHERE kind = '{KIND}' AND budget = 'actions'"
-        " AND repo = ? ORDER BY at DESC LIMIT 1", (repo,)).rows
+        f"SELECT at, budget_remaining, budget_limit, budget_reset FROM events WHERE kind = '{KIND}'"
+        " AND budget = 'actions' AND repo = ? ORDER BY at DESC LIMIT 1", (repo,)).rows
     if not rows:
         return False
-    at, remaining, limit = rows[0]
-    if remaining is None or not limit or now - schema.parse_at(at) > ACTIONS_WINDOW:
+    at, remaining, limit, reset = rows[0]
+    if remaining is None or not limit:
+        return False
+    if reset is not None:
+        if schema.parse_at(reset) <= now:
+            return False
+    elif now - schema.parse_at(at) > ACTIONS_WINDOW:
         return False
     return remaining - calls < threshold(raw) * limit
 
