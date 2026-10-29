@@ -126,6 +126,37 @@ def test_a_run_whose_every_job_was_skipped_is_neither_green_nor_non_green():
     assert decide([all_skipped], [watch.WatchIssue(7, "example-flow", last_run_id=4117)]) == []
 
 
+# a run GitHub cancelled before any job of it started (a newer run took its place in the concurrency queue) is
+# replaced: passed over exactly like a skipped run, so the watch reads the newest run that is neither
+def test_a_replaced_newest_run_over_a_green_run_closes_the_open_watch_and_nothing_else():
+    replaced = run(run_id=4118, outcome="cancelled", jobs=0, ended="2026-10-28T10:00:00Z")
+    green_earlier = run(run_id=4117, outcome="success", jobs=3, ended="2026-10-28T09:00:00Z")
+    actions = decide([replaced, green_earlier], [watch.WatchIssue(7, "example-flow", last_run_id=4116)])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Close)
+    assert actions[0].issue_number == 7
+    assert actions[0].run.run_id == 4117
+    assert opened(actions) == []
+    assert not any(isinstance(action, watch.Comment) for action in actions)
+
+
+def test_a_replaced_newest_run_over_a_cancelled_run_with_jobs_opens_one_watch_for_that_cut_run():
+    replaced = run(run_id=4118, outcome="cancelled", jobs=0, ended="2026-10-28T10:00:00Z")
+    cut = run(run_id=4117, outcome="cancelled", jobs=2, ended="2026-10-28T09:00:00Z")
+    actions = decide([replaced, cut])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Open)
+    assert actions[0].run.run_id == 4117
+    assert "cancelled" in actions[0].body
+
+
+def test_a_replaced_newest_run_over_a_failure_that_started_no_job_opens_one_watch_for_that_failure():
+    replaced = run(run_id=4118, outcome="cancelled", jobs=0, ended="2026-10-28T10:00:00Z")
+    failed = run(run_id=4117, outcome="failure", jobs=0, ended="2026-10-28T09:00:00Z")
+    actions = decide([replaced, failed])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Open)
+    assert actions[0].run.run_id == 4117
+    assert "no job started" in actions[0].body
+
+
 def test_the_skipped_workflow_does_nothing_with_or_without_a_watch():
     failing = run(workflow="example-tests", outcome="failure")
     assert decide([failing], skip=SKIP) == []
