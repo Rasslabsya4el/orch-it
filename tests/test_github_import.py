@@ -924,6 +924,9 @@ def test_the_summary_count_takes_the_last_summary_line():
     assert summary_count("1 passed in 1.00s\n2 passed in 2.00s\n") == 2
 
 
+# the margin the live test leaves for skew between the runner's clock and GitHub's
+CLOCK_SKEW_MARGIN = timedelta(seconds=60)
+
 MAPPED = {"success": {"passed"}, "failure": {"failed", "no_result"}, "cancelled": {"stopped", "no_result"}}
 
 
@@ -931,10 +934,10 @@ def completed_before(runs, moment, since):
     """The completed runs created at or after `since` and completed strictly before `moment`
     (both `%Y-%m-%dT%H:%M:%SZ`, UTC), newest first. A run's `updated_at` is its completion."""
 
-    floor, bound = datetime.fromisoformat(since), datetime.fromisoformat(moment)
+    since_at, moment_at = datetime.fromisoformat(since), datetime.fromisoformat(moment)
     judged = [r for r in runs if r["status"] == "completed"
-              and datetime.fromisoformat(r["created_at"]) >= floor
-              and datetime.fromisoformat(r["updated_at"]) < bound]
+              and datetime.fromisoformat(r["created_at"]) >= since_at
+              and datetime.fromisoformat(r["updated_at"]) < moment_at]
     return sorted(judged, key=lambda r: datetime.fromisoformat(r["created_at"]), reverse=True)
 
 
@@ -982,9 +985,9 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
         pytest.skip("gh is not signed in")
     since = "2026-10-25T20:40:00Z"
     # the runner's clock minus 60 s of margin for skew with GitHub: a run completed after it is not judged
-    moment = (datetime.now(UTC) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    moment = (datetime.now(UTC) - CLOCK_SKEW_MARGIN).strftime("%Y-%m-%dT%H:%M:%SZ")
     store = Store.open(tmp_path / "live-store")
-    first = import_github(store, REPO, since=since)
+    first_import = import_github(store, REPO, since=since)
     runs = github._items(github.run_gh(
         ["api", "--paginate", f"repos/{REPO}/actions/workflows/tests.yml/runs?per_page=100"]),
         "workflow_runs")
@@ -1000,8 +1003,8 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
         jobs_of[run["id"]] = [j for j in jobs if j["name"] in required and j["conclusion"] != "skipped"]
         for job in jobs_of[run["id"]]:
             key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
-            assert key in run_pairs, (f"{key}: first import runs_failed={first.runs_failed}, "
-                                      f"failure_codes={first.failure_codes}")
+            assert key in run_pairs, (f"{key}: first import runs_failed={first_import.runs_failed}, "
+                                      f"failure_codes={first_import.failure_codes}")
             assert run_pairs[key][1]["outcome"] in MAPPED.get(job["conclusion"], {"no_result"}), key
             assert (key in waits) == bool(job["started_at"]), key
         seen = {started["run_os"] for key, (started, _) in run_pairs.items()
