@@ -11,13 +11,14 @@ from fake_github import FAILED, PASSED, REPO, FakeGitHub
 from required_names import LINUX_CHECK, LINUX_OS, WINDOWS_CHECK
 
 from orch_it.events.store import Store
-from orch_it.merge import scheduled_checks
+from orch_it.merge import commands, scheduled_checks
 from orch_it.merge.hub import Result
 from orch_it.merge.main_check import check_main
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
 from orch_it.testruns.bound_check import default_bounds
 from orch_it.testruns.config import windows_thin
+from orch_it.testruns.windows_unmarked import post_windows_time
 
 NOW = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 TEST = "tests/test_paths.py::test_a_windows_path"
@@ -55,8 +56,8 @@ def plant_runs(store, start: int, count: int, place: str, os_name: str, minutes:
                                   detail={"outcome": "passed", "run_minutes": minutes, "reason": None}))
 
 
-def tick(store, hub):
-    return scheduled_checks.run_scheduled_checks(store, hub, REPO, {}, "tick")
+def tick(store, hub, role="github"):
+    return scheduled_checks.run_scheduled_checks(store, hub, REPO, {}, "tick", role)
 
 
 def triage(hub):
@@ -72,12 +73,21 @@ def night(hub):
 
 
 def per_change_green(hub):
-    """A green push run of `tests` on main: Linux runs TEST, the thin Windows job does not (it is unmarked)."""
+    """A green push run of `tests` on main whose reports lack TEST: Linux runs other tests, the thin Windows job
+    takes only a marked one."""
 
     hub.later(minutes=10)
-    results = [Result(LINUX_CHECK, TEST, "passed", False),
+    results = [Result(LINUX_CHECK, "tests/test_other.py::test_linux", "passed", False),
                Result(WINDOWS_CHECK, "tests/test_other.py::test_marked", "passed", True)]
     return hub.main_run(hub.land(), GREEN, event="push", results=results)
+
+
+def green_night_holding_test(hub):
+    """A green nightly run of `tests` on main whose reports hold TEST passed in both jobs."""
+
+    hub.later(days=1)
+    results = [Result(LINUX_CHECK, TEST, "passed", False), Result(WINDOWS_CHECK, TEST, "passed", False)]
+    return hub.main_run(hub.land(), GREEN, event="schedule", results=results)
 
 
 def test_a_planted_slow_history_gives_one_ticket_with_the_numbers_after_one_tick(world):
