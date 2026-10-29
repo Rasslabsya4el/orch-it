@@ -924,15 +924,58 @@ def test_the_summary_count_takes_the_last_summary_line():
     assert summary_count("1 passed in 1.00s\n2 passed in 2.00s\n") == 2
 
 
+# the margin the live test leaves for skew between the runner's clock and GitHub's
+CLOCK_SKEW_MARGIN = timedelta(seconds=60)
+
 MAPPED = {"success": {"passed"}, "failure": {"failed", "no_result"}, "cancelled": {"stopped", "no_result"}}
+
+
+def completed_before(runs, moment, since):
+    """The completed runs created at or after `since` and completed strictly before `moment`
+    (both `%Y-%m-%dT%H:%M:%SZ`, UTC), newest first. A run's `updated_at` is its completion."""
+
+    since_at, moment_at = datetime.fromisoformat(since), datetime.fromisoformat(moment)
+    judged = [r for r in runs if r["status"] == "completed"
+              and datetime.fromisoformat(r["created_at"]) >= since_at
+              and datetime.fromisoformat(r["updated_at"]) < moment_at]
+    return sorted(judged, key=lambda r: datetime.fromisoformat(r["created_at"]), reverse=True)
+
+
+def rows_per_run(store):
+    """run id -> how many events the store holds under the keys `github:<run id>/...`."""
+
+    counts = {}
+    for run, rows in store.query(
+            "SELECT run, count(*) FROM events WHERE run LIKE 'github:%' GROUP BY run").rows:
+        run_id = int(run.split("/")[0].removeprefix("github:"))
+        counts[run_id] = counts.get(run_id, 0) + rows
+    return counts
+
+
+def test_completed_before_keeps_the_runs_completed_before_the_moment_since_the_floor():
+    moment, since = "2026-10-29T13:00:00Z", "2026-10-25T20:40:00Z"
+
+    def run(run_id, created, updated, status="completed"):
+        return {"id": run_id, "status": status, "created_at": created, "updated_at": updated}
+
+    runs = [
+        run(1, "2026-10-29T12:00:00Z", "2026-10-29T12:30:00Z"),
+        run(2, "2026-10-29T12:10:00Z", "2026-10-29T13:00:01Z"),
+        run(3, "2026-10-29T12:20:00Z", "2026-10-29T13:00:00Z"),
+        run(4, "2026-10-29T12:30:00Z", "2026-10-29T12:40:00Z", status="in_progress"),
+        run(5, "2026-10-25T20:30:00Z", "2026-10-25T21:00:00Z"),
+        run(6, "2026-10-28T09:00:00Z", "2026-10-28T10:00:00Z"),
+    ]
+    assert [r["id"] for r in completed_before(runs, moment, since)] == [1, 6]
 
 
 @pytest.mark.live
 def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as_mapped(tmp_path):
     """Runs the real `gh` against the repo (nightly only, where GH_TOKEN is set): each required
-    job of each completed run has a pair with the outcome its conclusion maps to and a queue
-    wait when it started; the test rows of the newest 3 pull request runs equal the counts of
-    their pytest logs; and a second import writes nothing."""
+    job of each run completed before a moment 60 s before the first import has a pair with the
+    outcome its conclusion maps to and a queue wait when it started; the test rows of the newest
+    3 pull request runs among them equal the counts of their pytest logs; and a second import
+    writes no row of those runs (a run completed later is not judged)."""
 
     if shutil.which("gh") is None:
         pytest.skip("no gh")
@@ -941,25 +984,27 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     if auth.returncode != 0:
         pytest.skip("gh is not signed in")
     since = "2026-10-25T20:40:00Z"
+    # the runner's clock minus 60 s of margin for skew with GitHub: a run completed after it is not judged
+    moment = (datetime.now(UTC) - CLOCK_SKEW_MARGIN).strftime("%Y-%m-%dT%H:%M:%SZ")
     store = Store.open(tmp_path / "live-store")
-    import_github(store, REPO, since=since)
+    first_import = import_github(store, REPO, since=since)
     runs = github._items(github.run_gh(
         ["api", "--paginate", f"repos/{REPO}/actions/workflows/tests.yml/runs?per_page=100"]),
         "workflow_runs")
-    completed = sorted((r for r in runs if r["status"] == "completed" and r["created_at"] >= since),
-                       key=lambda r: r["created_at"], reverse=True)
-    assert completed, "no completed run since the first pull request run"
+    judged = completed_before(runs, moment, since)
+    assert judged, "no run completed since the first pull request run and before the moment"
     required = ("linux", "windows")
     run_pairs, waits = pairs(store), pairs(store, "wait")
     jobs_of = {}
-    for run in completed:
+    for run in judged:
         jobs = github._items(github.run_gh(
             ["api", "--paginate", f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=all&per_page=100"]),
             "jobs")
         jobs_of[run["id"]] = [j for j in jobs if j["name"] in required and j["conclusion"] != "skipped"]
         for job in jobs_of[run["id"]]:
             key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
-            assert key in run_pairs, key
+            assert key in run_pairs, (f"{key}: first import runs_failed={first_import.runs_failed}, "
+                                      f"failure_codes={first_import.failure_codes}")
             assert run_pairs[key][1]["outcome"] in MAPPED.get(job["conclusion"], {"no_result"}), key
             assert (key in waits) == bool(job["started_at"]), key
         seen = {started["run_os"] for key, (started, _) in run_pairs.items()
@@ -967,7 +1012,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
         assert seen >= set(required), run["id"]
 
     compared = 0
-    for run in [r for r in completed if r["event"] == "pull_request"][:3]:
+    for run in [r for r in judged if r["event"] == "pull_request"][:3]:
         for job in jobs_of[run["id"]]:
             key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
             if job["conclusion"] not in ("success", "failure") or not run_pairs[key][1]["summary_seen"]:
@@ -978,7 +1023,13 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
             assert rows == summary_count(log), key
             compared += 1
     assert compared, "no pull request job with a report to count"
-    assert import_github(store, REPO, since=since).written == 0
+    judged_ids = [r["id"] for r in judged]
+    before = rows_per_run(store)
+    import_github(store, REPO, since=since)
+    after = rows_per_run(store)
+    changed = {i: (before.get(i, 0), after.get(i, 0)) for i in judged_ids
+               if before.get(i, 0) != after.get(i, 0)}
+    assert not changed, f"a second import wrote rows of judged runs (run id: before, after): {changed}"
 
 
 def test_json_values_is_public_and_reads_pages_printed_one_after_the_other():
