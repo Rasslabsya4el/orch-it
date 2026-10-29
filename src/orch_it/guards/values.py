@@ -53,11 +53,12 @@ _ORIGIN = re.compile(r"(?:^|[@/])github\.com[^:/\s]*[:/]+([^/\s]+)/([^/\s]+?)(?:
 _DRIVE = re.compile(r"([A-Za-z]):(?:[\\/]+(.*))?$")
 
 
-def default_run(cmd: list[str]) -> str:
-    """The output of `cmd`, run without a window; raises when it cannot run or fails."""
+def default_run(cmd: list[str], timeout: float = COMMAND_SECONDS) -> str:
+    """The output of `cmd`, run without a window and cut after `timeout` seconds; raises when it cannot run, fails
+    or is cut."""
 
     done = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          timeout=COMMAND_SECONDS, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
+                          timeout=timeout, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
                           check=True)
     return done.stdout
 
