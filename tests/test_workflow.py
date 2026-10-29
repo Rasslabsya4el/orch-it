@@ -281,7 +281,7 @@ def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_do
     assert "ORCH_IT_REQUIRE_SSHD" not in windows
 
 
-# --- the job bounds (#411 unit 4): 15 minutes per change, the night's bound from measured full runs ---
+# --- the job bounds (#411 unit 4): 9 minutes per change and 16 for the night, each ceil(longest measured job x 1.5) (#421 rule 6) ---
 
 PER_CHANGE_BOUND = 9
 NIGHT_BOUND = {"linux": 16, "windows": 16}  # ceil(10.4 x 1.5): both jobs share it, the importer reads one setting
