@@ -260,7 +260,8 @@ def test_the_repo_s_claude_settings_run_the_hook_before_every_shell_command():
     settings = json.loads((Path(__file__).parents[1] / ".claude" / "settings.json").read_text("utf-8"),
                           object_pairs_hook=no_repeats)
     entries = [entry for entry in settings["hooks"]["PreToolUse"]
-               if any(h.get("command") == "python -m orch_it.tickets.hook" for h in entry["hooks"])]
+               if any(h.get("command") == 'sh "$CLAUDE_PROJECT_DIR"/hooks/orch-it -m orch_it.tickets.hook'
+                      for h in entry["hooks"])]
     assert len(entries) == 1
     assert set(entries[0]["matcher"].split("|")) >= {"Bash", "PowerShell"}
 

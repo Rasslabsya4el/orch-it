@@ -130,7 +130,7 @@ def test_the_hook_never_blocks_on_bad_input(tmp_path):
 def test_the_repo_runs_the_hook_at_every_session_start():
     settings = json.loads((Path(__file__).resolve().parents[1] / ".claude" / "settings.json").read_text("utf-8"))
     commands = [hook["command"] for entry in settings["hooks"]["SessionStart"] for hook in entry["hooks"]]
-    assert "python -m orch_it skills shadowed" in commands
+    assert 'sh "$CLAUDE_PROJECT_DIR"/hooks/orch-it -m orch_it skills shadowed' in commands
 
 
 def test_a_resumed_or_compacted_session_writes_no_new_event(tmp_path):
