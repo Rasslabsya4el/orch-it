@@ -75,6 +75,7 @@ class FakeGitHub(FakeHub):
         self.event_files: dict[str, dict[str, str]] = {}  # artifact name -> {relative path: text}
         self.flows: list[FakeFlow] = []  # the workflows GitHub lists, in the order they were listed
         self.default_branch = DEFAULT_BRANCH
+        self.required_by_base: dict[str, set[str]] = {}  # base -> the check names its protection requires
         self._shas = 0
 
     # building the world
@@ -175,6 +176,9 @@ class FakeGitHub(FakeHub):
     def set_auto_merge(self, repo, number, method):
         self.calls.append(("auto_merge", number, method))
         self.pulls[number].auto_merge = method
+
+    def required_checks_of(self, repo, base):
+        return set(self.required_by_base.get(base, set()))
 
     def update_branch(self, repo, number, head_sha):
         self.calls.append(("update_branch", number))

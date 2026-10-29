@@ -386,6 +386,70 @@ def test_auto_merge_already_on_is_no_error_and_a_method_not_known_is_refused_bef
     assert len(gh.calls) == 1
 
 
+# --- the checks a base requires (#424 unit 4) -----------------------------------------------------
+
+PROTECTION = f"repos/{REPO}/branches/main/protection"
+RULES = f"repos/{REPO}/rules/branches/main"
+FIRST, SECOND = "job-one", "job-two"  # invented names: the required jobs are a setting, never a literal here
+
+
+def classic(*contexts, checks=()):
+    return {"required_status_checks": {"strict": True, "contexts": list(contexts),
+                                        "checks": [{"context": name, "app_id": None} for name in checks]}}
+
+
+def rules(*contexts):
+    return [{"type": "pull_request", "parameters": {}},
+            {"type": "required_status_checks",
+             "parameters": {"required_status_checks": [{"context": name, "integration_id": None}
+                                                       for name in contexts]}}]
+
+
+def test_classic_protection_names_the_jobs_in_contexts_and_in_checks():
+    gh = Gh(([PROTECTION], classic(FIRST, checks=[SECOND])), ([RULES], []))
+    assert GhPullHub(gh).required_checks_of(REPO, "main") == {FIRST, SECOND}
+
+
+def test_rulesets_name_the_jobs_of_their_required_status_checks_rule():
+    gh = Gh(([PROTECTION], NOT_FOUND), ([RULES], rules(FIRST, SECOND)))
+    assert GhPullHub(gh).required_checks_of(REPO, "main") == {FIRST, SECOND}
+
+
+def test_a_base_that_requires_only_one_of_two_jobs_names_only_that_one():
+    gh = Gh(([PROTECTION], classic(FIRST)), ([RULES], rules()))
+    assert GhPullHub(gh).required_checks_of(REPO, "main") == {FIRST}
+
+
+@pytest.mark.parametrize("error", [failed(403, "Upgrade to GitHub Pro or make this repository public"),
+                                   failed(403, "Branch not protected"), NOT_FOUND])
+def test_a_plan_or_protection_refusal_is_a_base_that_requires_nothing(error):
+    gh = Gh(([PROTECTION], error), ([RULES], error))
+    assert GhPullHub(gh).required_checks_of(REPO, "main") == set()
+
+
+@pytest.mark.parametrize("text", ["API rate limit exceeded for user ID 1",
+                                  "You have triggered an abuse detection mechanism",
+                                  "Resource not accessible by integration"])
+def test_a_403_that_is_not_the_plan_or_protection_refusal_raises(text):
+    refused = failed(403, text)
+    for gh in (Gh(([PROTECTION], refused), ([RULES], [])), Gh(([PROTECTION], NOT_FOUND), ([RULES], refused))):
+        with pytest.raises(GithubError) as error:
+            GhPullHub(gh).required_checks_of(REPO, "main")
+        assert error.value.code == "gh_failed"
+
+
+def test_empty_lists_are_a_base_that_requires_nothing():
+    gh = Gh(([PROTECTION], classic()), ([RULES], []))
+    assert GhPullHub(gh).required_checks_of(REPO, "main") == set()
+
+
+def test_any_other_failure_of_the_read_raises():
+    gh = Gh(([PROTECTION], failed(500, "boom")), ([RULES], []))
+    with pytest.raises(GithubError) as error:
+        GhPullHub(gh).required_checks_of(REPO, "main")
+    assert error.value.code == "gh_failed"
+
+
 def test_the_branch_is_updated_only_from_the_head_the_caller_saw():
     gh = Gh((["PUT", f"repos/{REPO}/pulls/5/update-branch"], {"message": "Updating pull request branch."}))
     assert GhPullHub(gh).update_branch(REPO, 5, "abc") is True
