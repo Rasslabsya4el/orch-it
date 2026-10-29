@@ -112,7 +112,8 @@ def _is_machine_of_the_limit(job: dict) -> bool:
 
     labels = [label for label in job.get("labels") or [] if isinstance(label, str)]
     hosted = "self-hosted" not in (label.lower() for label in labels)
-    return hosted and os_of({"labels": labels}) in ("linux", "windows")
+    os_name = os_of({"labels": labels})
+    return hosted and os_name is not None and os_name != "macos"
 
 
 def _stored_oses(store: Store, repo: str) -> tuple[str, ...]:
