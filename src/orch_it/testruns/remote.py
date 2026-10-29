@@ -179,11 +179,21 @@ def _remove(slot: str) -> None:
         shutil.rmtree(slot, onerror=writable)
 
 
-def _clone(slot: str, origin: str) -> None:
+def _clone(slot: str, origin: str, identity: dict | None = None) -> None:
     if not origin:
         raise SetupFailed("clone", "the folder is no clone and no origin url is known")
     _git(["clone", "--no-checkout", "--", origin, slot], cwd=None, step="clone")
+    if identity:
+        _set_identity(slot, identity, "clone")
     Path(slot, ".git", MARKER).write_text("made by orch-it\n", "utf-8")
+
+
+def _set_identity(slot: str, identity: dict, step: str) -> None:
+    """Set `user.name` and `user.email` in the checkout's own config only: the identity its commits
+    carry, written on a fresh clone and on every fetch of a reused slot."""
+
+    _git(["config", "--local", "user.name", identity["name"]], cwd=slot, step=step)
+    _git(["config", "--local", "user.email", identity["email"]], cwd=slot, step=step)
 
 
 def _setup(request: dict, slot: str, gone: threading.Event) -> str:
@@ -198,7 +208,7 @@ def _setup(request: dict, slot: str, gone: threading.Event) -> str:
         if not _own_repository(slot):
             _remove(slot)
     if not os.path.isdir(slot) or not os.listdir(slot):
-        _clone(slot, request.get("origin"))
+        _clone(slot, request.get("origin"), request.get("identity"))
     else:
         try:
             _git(["fetch", "origin"], cwd=slot, step="fetch")
@@ -206,7 +216,10 @@ def _setup(request: dict, slot: str, gone: threading.Event) -> str:
             if "not a git repository" not in str(e):
                 raise
             _remove(slot)
-            _clone(slot, request.get("origin"))
+            _clone(slot, request.get("origin"), request.get("identity"))
+        else:
+            if request.get("identity"):  # the identity asked for now, not the one of the earlier run
+                _set_identity(slot, request["identity"], "fetch")
     if gone.is_set():
         return slot
     try:

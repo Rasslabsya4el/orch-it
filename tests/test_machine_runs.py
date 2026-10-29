@@ -17,6 +17,7 @@ import pytest
 from machine_repos import (GREEN, RED, SLOW_GREEN, SLOW_RED, Repos, dead_within, git, prefer_machine,
                            sleeping_suite)
 
+from orch_it import identity
 from orch_it.events.store import Store
 from orch_it.testruns import environment, machine, outcome
 from orch_it.testruns.config import Machine, TestSettings
@@ -71,6 +72,19 @@ def ssh_that(code: str) -> tuple[str, ...]:
 def place_with(repos, ssh, machine_=None, **options) -> MachinePlace:
     return MachinePlace(machine_ or Machine("box", "fakehost", "linux", "/srv/x"),
                         origin_url=str(repos.origin), ssh=ssh, **options)
+
+
+def test_a_failing_gh_user_read_does_not_refuse_a_machine_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "absent" / "settings.json"))
+    monkeypatch.setattr(identity, "github_repo_of", lambda origin: "acme/example")  # the origin counts as GitHub
+
+    def gh_fails():
+        raise identity.IdentityError("gh_failed", "gh api user: no answer")
+
+    monkeypatch.setattr(identity, "current_user", gh_fails)
+    repos, box, settings, places, store = setup(tmp_path)
+    done = run_at(store, repos, settings, places, place=BOX)
+    assert (done.place, done.outcome) == (BOX, "passed")  # the run goes on with no identity
 
 
 def test_a_run_checks_its_commit_out_in_the_machine_s_own_folder(tmp_path):

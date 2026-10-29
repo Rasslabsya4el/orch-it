@@ -105,7 +105,7 @@ def test_a_full_report_passes(tmp_path, role, keywords, report):
 
 
 def test_every_role_with_a_report_rule_has_cases_both_ways():
-    held = {role for role, role_settings in ROLES.roles.items() if role_settings.report is not None}
+    held = {role for role, role_settings in ROLES.roles.items() if role_settings.report is not None and role_settings.inputs}
     assert held == {c[0] for c in CASES} == {f[0] for f in FULL}
     assert "orch" not in held and "brain" not in held  # sessions, not subagents
 

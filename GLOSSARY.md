@@ -117,7 +117,7 @@ A research run's own session and every helper session under it; the run's cost i
 _Avoid_: session family, call tree
 
 **Model alias**:
-The short name a brief asks for (`luna`, `terra`), which the settings map to the provider's model id.
+The short name a brief asks for (`small`, `big`), which the settings map to the provider's model id.
 _Avoid_: model name, model id
 
 **Job**:
@@ -263,6 +263,18 @@ _Avoid_: backup model, second model
 **Session**:
 A role that runs as its own conversation, started by the owner or the launcher: the brain and ORCH.
 _Avoid_: main agent, chat
+
+**Brain title**:
+The exact title of the owner's session that is the brain in a repo; the layer knows the brain by it.
+_Avoid_: brain name, chat name
+
+**Hand-off**:
+What a brain session leaves for the next one: what is done, what is next, the live runs, the pending question, the owner's words.
+_Avoid_: state entry, handover, summary
+
+**Hand-off issue**:
+The one pinned issue of a repo that holds its hand-offs, one per comment; never a ticket.
+_Avoid_: state file, hand-off ticket
 
 **Subagent**:
 A role started inside a session for one piece of work, with its inputs filled at its spawn.

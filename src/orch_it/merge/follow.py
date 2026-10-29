@@ -6,7 +6,9 @@ request ended. Calling it again changes nothing: a pull request it took out of t
 off, a left mark) is `idle` until `pr open` puts it back.
 
 The ticket of a pull request is the one its line `Refs #N` names; of several such lines, the one
-whose park waits on this pull request; with none, the open ticket parked on it.
+whose park waits on this pull request; with none, the open ticket parked on it. A skills update's pull
+request (branch `skills-upstream/<commit>-<base>`) with none of these is followed through the issue `skills
+report` opened for its commit, on a red or no result only: that issue goes to the brain (#412).
 
 Merged (`close` rules): the ticket is closed with its acceptance rows (`closed`), or, when the ticket
 has rows marked `after merge`, its park comes off and it goes back to ready for those rows only
@@ -57,6 +59,7 @@ from orch_it.events.store import Store
 from orch_it.merge import marks, record, red_main
 from orch_it.merge.hub import FAILED, NO_RESULT, PENDING, Check, Pull, PullHub
 from orch_it.merge.settings import MergeSettings
+from orch_it.skills.update import BRANCH_PREFIX, ISSUE_TITLE
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
 from orch_it.tickets import park
 from orch_it.tickets.hub import Issue
@@ -147,6 +150,25 @@ def ticket_of(hub: PullHub, repo: str, pull: Pull) -> Issue | None:
     return None
 
 
+_SKILLS_HEAD = re.compile(re.escape(BRANCH_PREFIX) + r"([0-9a-f]{12})-[0-9a-f]+")
+
+
+def skills_issue_of(hub: PullHub, repo: str, pull: Pull) -> Issue | None:
+    """The open issue `skills report` opened for the upstream commit of a skills update's pull request
+    (its branch `skills-upstream/<commit>-<base>`), found by its title; None for any other pull request."""
+
+    found = _SKILLS_HEAD.fullmatch(pull.branch)
+    if found is None:
+        return None
+    title = ISSUE_TITLE + found.group(1)
+    for label in (TRIAGE_LABEL, READY_LABEL):
+        for number in hub.issues_with_label(repo, label):
+            issue = hub.issue(repo, number)
+            if issue is not None and issue.open and not issue.is_pr and issue.title == title:
+                return issue
+    return None
+
+
 def pr_of_event(event: dict, hub: PullHub, repo: str) -> tuple[int | None, str]:
     """The pull request a GitHub event of the `follow` workflow is about, and why when none: a
     pull request, review or review comment event names it; a comment on a pull request is about
@@ -193,6 +215,7 @@ class _Follow:
         self.said = hub.pull_comments(repo, pull.number)
         started = marks.last_ready(marks.of_layer(self.said, owner))
         self.run = record.pr_run(repo, pull.number, started.at if started else None)
+        self.skills = False  # the ticket is the issue of a skills update (`skills_issue_of`)
 
     @classmethod
     def of(cls, hub, store, repo, number, settings, now, role, owner, required) -> _Follow:
@@ -359,6 +382,15 @@ class _Follow:
         self._end_pr("stopped", "withdrawn")
         return self.report("commented", first.author)
 
+    def _adopt_skills_issue(self) -> bool:
+        """A skills update's pull request with no ticket of its own is followed through the issue `skills
+        report` opened for its commit (`skills_issue_of`); True when this pull request is one."""
+
+        if self.issue is None:
+            self.issue = skills_issue_of(self.hub, self.repo, self.pull)
+            self.skills = self.issue is not None
+        return self.skills
+
     def _red(self, failed: list[Check]) -> FollowReport:
         got = {run_id: self.hub.failing_ids(self.repo, run_id) for run_id in dict.fromkeys(c.run_id for c in failed)
                if run_id}
@@ -366,6 +398,7 @@ class _Follow:
         if not ids:  # a red that names no test is no result, never an attempt (MERGE-5)
             return self._no_result(failed)
         names = ", ".join(c.name for c in failed)
+        skills = self._adopt_skills_issue()
         if not self._is_open_ticket():
             self._leave("red", f"{names} red")
             self._end_pr("failed", "red")
@@ -384,7 +417,11 @@ class _Follow:
             reds += 1
         in_a_row = reds + 1
         head = self.pull.head_sha[:SHORT_SHA]
-        if in_a_row >= self.settings.red_in_a_row:
+        if skills:  # a skills update's red goes to the brain at once, whatever its count
+            self._to_brain("red", f"#{self.pull.number} (a skills update) is red at `{head}` on these tests:\n\n"
+                           f"{_listed(ids)}", "other_way")
+            outcome = "red"
+        elif in_a_row >= self.settings.red_in_a_row:
             self._to_brain("red_in_a_row", f"#{self.pull.number} is red for the {in_a_row}th time in a row:\n\n"
                            f"{_listed(ids)}", "other_way")
             outcome = "red_in_a_row"
@@ -398,6 +435,7 @@ class _Follow:
         return self.report(outcome, f"{len(ids)} tests")
 
     def _no_result(self, checks: list[Check]) -> FollowReport:
+        self._adopt_skills_issue()
         runs = list(dict.fromkeys(c.run_id for c in checks if c.run_id))
         if max(c.attempt for c in checks) >= 2 or not runs:
             if self._is_open_ticket():
