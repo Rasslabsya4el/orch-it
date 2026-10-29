@@ -33,7 +33,7 @@ Every wait is bounded (`Plan.wait_minutes`, the line's own bounds in `Plan.setti
 every `poll_seconds`. A workflow or Actions turned off is turned on again when its row ends and
 by `RealTrial.restore` when the script ends (every setting is restored even when one restore
 fails). Before any row, `RealTrial.preflight` refuses a clone that is not the repo's (its origin
-names exactly OWNER/NAME) or has changes to tracked files, a repo without auto-merge or a `tests`
+names exactly OWNER/NAME) or has changes to tracked files, a repo without a `tests`
 workflow, a base that does not exist, is not protected by strict checks `linux` and `windows` only,
 or is the repo's default branch (row 5 puts a red test on the base; `--allow-default-base`). When
 the rows end, every trial ticket still open is closed `not_planned` (`ready-for-agent` off first,
@@ -281,7 +281,7 @@ def end_judges(tag: str) -> dict[str, Callable[[dict], bool]]:
         "closed_unmerged": lambda r: (
             r["needs_triage"] and not r["ready"] and not r["parked"] and r["open"] and r["pr_state"] == "closed"),
         "comment": lambda r: (
-            r["auto_merge"] is None and r["needs_triage"] and not r["ready"] and not r["parked"]
+            not r["in_line"] and r["needs_triage"] and not r["ready"] and not r["parked"]
             and r["pr_state"] == "open"),
         "merged": lambda r: (
             not r["open"] and r["state_reason"] == "completed" and r["pr_state"] == "merged"
@@ -499,10 +499,10 @@ def _conflict_record(run: _Run, loser: str | None, prepared: dict, order: list[s
         "ticket_ready": state["ready"], "ticket_parked": state["parked"], "ticket_open": state["open"],
         "last_comment": state["comment"][:300], "last_comment_names_the_file": shared in state["comment"],
         "attempt_counted": counted, "behind": [opened[label].pr for label in behind], "merged_behind": merged_behind,
-        "auto_merge": state["auto_merge"]}
+        "in_line": state["in_line"]}
     row["passed"] = bool(
         state["ready"] and not state["parked"] and state["open"] and row["last_comment_names_the_file"]
-        and counted == [False] and behind and len(merged_behind) == len(behind) and state["auto_merge"] is None
+        and counted == [False] and behind and len(merged_behind) == len(behind) and not state["in_line"]
         and winners == 4)
     return row
 
@@ -587,7 +587,7 @@ class _Run:
         return states if ended and FAILED in states.values() else None
 
     def land(self, pr: int) -> Pull:
-        """Merge `pr` once its required checks are green on its head (GitHub's auto-merge may do it first)."""
+        """Merge `pr` once its required checks are green on its head."""
 
         def probe() -> Pull | None:
             pull = self.hub.pull(self.repo, pr)
@@ -686,10 +686,11 @@ class _Run:
         text = "\n".join(line for line in (said[-1].body if said else "").splitlines() if not line.startswith("<!--"))
         found = {"open": issue.open, "state_reason": issue.state_reason, "labels": sorted(issue.labels),
                  "ready": parsed.ready, "parked": parsed.parked or bool(parsed.park_lines),
-                 "needs_triage": TRIAGE_LABEL in parsed.labels, "comment": text.strip(), "auto_merge": None}
+                 "needs_triage": TRIAGE_LABEL in parsed.labels, "comment": text.strip(), "in_line": False}
         if pr is not None:
             pull = self.hub.pull(self.repo, pr)
-            found |= {"pr_state": pull.state, "auto_merge": pull.auto_merge}
+            held = marks.ready_since(marks.of_layer(self.hub.pull_comments(self.repo, pr), self.owner))
+            found |= {"pr_state": pull.state, "in_line": held is not None}
         return found
 
     def events(self, ticket: int) -> list[tuple[str, dict]]:
@@ -794,8 +795,6 @@ class RealTrial:
         if self.git(["status", "--porcelain", "--untracked-files=no"]).strip():
             raise TrialError(f"the work tree {self.work_tree} has changes to tracked files: use a clean clone")
         info = self._json(["api", f"repos/{self.repo}"])
-        if not info.get("allow_auto_merge"):
-            raise TrialError(f"{self.repo} does not allow auto-merge (settings > General): `pr open` needs it")
         default = info.get("default_branch")
         self.default_branch = default
         if default == self.base and not self.allow_default_base:
