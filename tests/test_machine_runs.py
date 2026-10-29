@@ -217,14 +217,21 @@ def test_a_dropped_connection_after_the_start_is_lost_and_the_run_goes_to_own_ne
     assert store.query("SELECT COUNT(*) FROM events WHERE outcome = 'failed'").rows == [(0,)]
 
 
-def test_the_remote_test_process_is_dead_within_its_bound_of_the_connection_dropping(
+def keepalive_bound() -> float:
+    """How long a dead connection may stand before the product's ssh gives it up: the keepalive's
+    interval times its count (`machine.SSH_OPTIONS`), read from the product, not retyped here."""
+    settings = dict(option.split("=", 1) for option in machine.SSH_OPTIONS[1::2])
+    return float(settings["ServerAliveInterval"]) * float(settings["ServerAliveCountMax"])
+
+
+def test_the_remote_test_process_is_dead_within_the_keepalive_bound_of_the_connection_dropping(
         tmp_path, monkeypatch):
     pidfile = tmp_path / "test.pid"
     repos, box, settings, places, store = setup(tmp_path, sleeping_suite(pidfile))
     monkeypatch.setenv("FAKE_SSH_DROP_WHEN_FILE", str(pidfile))
     done = run_at(store, repos, settings, places, place=BOX)
     assert (done.outcome, done.reason) == ("lost", "place_vanished")
-    assert dead_within(int(pidfile.read_text()))
+    assert dead_within(int(pidfile.read_text()), keepalive_bound())
 
 
 def test_a_report_cut_off_halfway_is_never_read_and_the_run_is_lost(tmp_path, monkeypatch):

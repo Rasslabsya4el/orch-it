@@ -11,7 +11,7 @@ import pytest
 
 from orch_it.brain import hook
 from orch_it.events.store import Store
-from orch_it.roles import RoleSet
+from orch_it.roles import RoleSet, context
 
 LINE = RoleSet.load().roles["brain"].report.context_line
 REPO = "owner-x/orch-it"
@@ -81,16 +81,33 @@ def test_a_long_transcript_is_read_from_its_end(tmp_path, monkeypatch):
         out.write(json.dumps(TITLE) + "\n")
         out.write(line * 600_000)  # about 50 MB of short records
         out.write(json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": LINE + 1}}}) + "\n")
-    parsed = []  # the records parsed, counted: a read of the whole file would parse 600 000 of them
-    real_loads = json.loads
+    read = []  # the bytes the context reader takes from the transcript: a whole-file read takes about 50 MB
+    real_open = open
 
-    def counting_loads(raw, *args, **kwargs):
-        parsed.append(raw)
-        return real_loads(raw, *args, **kwargs)
+    class Spy:
+        def __init__(self, source):
+            self.source = source
 
-    monkeypatch.setattr(json, "loads", counting_loads)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self.source.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self.source, name)
+
+        def read(self, *args):
+            data = self.source.read(*args)
+            read.append(len(data))
+            return data
+
+    def spy_open(file, mode="r", *args, **kwargs):
+        return Spy(real_open(file, mode, *args, **kwargs))
+
+    monkeypatch.setattr(context, "open", spy_open, raising=False)  # the context module's own open only
     out, _ = run(tmp_path, payload(path), Store.open(tmp_path / "store"))
-    assert PAST in out and len(parsed) < 1000, len(parsed)
+    assert PAST in out and 0 < sum(read) <= context.TAIL_BYTES, sum(read)
 
 
 @pytest.mark.parametrize("context, title, agent", [(1000, TITLE, None), (10**6, None, "orch"),
