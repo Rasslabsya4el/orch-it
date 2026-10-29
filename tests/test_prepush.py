@@ -10,6 +10,7 @@ Two tests push with real git through the tracked `hooks/pre-push` file."""
 
 import json
 import os
+import secrets
 import stat
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from orch_it.events.store import Store
 from orch_it.guards import prepush, scanner
 from orch_it.guards.scanner import Patterns
 from orch_it.testruns import github
+from scan_setup import invented_setup, with_values  # noqa: F401  (invented_setup: an autouse fixture)
 from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, NO_WINDOW,
                         OPENAI_KEY, PRIVATE_KEY, Repo, make_template)
 
@@ -36,18 +38,18 @@ HOME_SPELLINGS = {
     "root": "/ro" + "ot",
 }
 MACHINE_HOME = "D:" + "\\bo" + "b"
-MACHINE_HOST = "Lab-Pc" + "-42"
+MACHINE_HOST = f"testbox-{secrets.token_hex(3)}"
 MACHINE_WORD = "Blue" + "Heron"
 DEFAULT_HOST = "WI" + "N-OHK3JQ5AM84"
 # what the hook reads off the machine, put together by hand so no test depends on this one
-PATTERNS = Patterns(homes=(MACHINE_HOME,), host=MACHINE_HOST, words=(MACHINE_WORD,))
+PATTERNS = with_values(home=MACHINE_HOME, host=MACHINE_HOST, words=(MACHINE_WORD,))
 
 # kind -> the value, for the places a value can be put (content and message take any; a path
 # takes what a file name can hold on every OS)
 IN_CONTENT = {
     **{f"home_path:{name}": ("home_path", value) for name, value in HOME_SPELLINGS.items()},
-    "home_path:machine": ("home_path", MACHINE_HOME + "\\work"),
-    "host_name:machine": ("host_name", MACHINE_HOST),
+    "home:machine": ("home", MACHINE_HOME + "\\work"),
+    "host:machine": ("host", MACHINE_HOST),
     "host_name:default": ("host_name", DEFAULT_HOST),
     "github_token": ("github_token", GITHUB_TOKEN),
     "github_token:fine": ("github_token", GITHUB_FINE_TOKEN),
@@ -58,7 +60,7 @@ IN_CONTENT = {
     "email": ("email", EMAIL),
     "private_word": ("private_word", MACHINE_WORD),
 }
-IN_PATH = {name: case for name, case in IN_CONTENT.items() if not name.startswith("home_path")}
+IN_PATH = {name: case for name, case in IN_CONTENT.items() if not name.startswith(("home_path", "home:"))}
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +127,7 @@ def test_a_push_of_each_kind_in_content_is_refused_to_a_public_repo_naming_file_
         (text, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert (text, code) == ("", 1), name
-        assert f"{sha[:12]} content notes.txt:2 {kind}\n" in err, (name, err)
+        assert f"{sha[:12]} content notes.txt:2 {kind}{scanner.cited(kind)}\n" in err, (name, err)
         assert value not in err, name
     assert value not in event_text(store)
     assert MACHINE_HOME not in event_text(store)
@@ -154,7 +156,7 @@ def test_a_push_of_each_kind_in_a_file_path_is_refused_and_the_path_is_shown_wit
         (_, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert code == 1, name
-        assert f"{sha[:12]} path data/<{kind}>:- {kind}\n" in err, (name, err)
+        assert f"{sha[:12]} path data/<{kind}>:- {kind}{scanner.cited(kind)}\n" in err, (name, err)
         assert value not in err, name
     assert value not in event_text(store)
 
@@ -167,7 +169,7 @@ def test_a_push_of_each_kind_in_a_commit_message_is_refused(repo, store, capsys)
         (_, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert code == 1, name
-        assert f"{sha[:12]} message -:2 {kind}\n" in err, (name, err)
+        assert f"{sha[:12]} message -:2 {kind}{scanner.cited(kind)}\n" in err, (name, err)
         assert value not in err, name
     assert value not in event_text(store)
 
@@ -186,7 +188,7 @@ def test_a_non_noreply_author_or_committer_email_is_refused(repo, store, capsys)
 
 def test_the_same_pushes_to_a_private_repo_pass_and_say_nothing(repo, store, capsys):
     cases = [(visibility, name, value) for visibility in ("private", "internal")
-             for name, (_, value) in IN_CONTENT.items()]
+             for name, (_, value) in IN_CONTENT.items() if not name.startswith(("home:", "host:"))]
     shas = repo.commits_on(repo.base, [{"files": {"notes.txt": f"see {value}\n"},
                                         "message": f"add {name} {value}"} for _, name, value in cases])
     for (visibility, name, _), sha in zip(cases, shas):
@@ -195,7 +197,8 @@ def test_the_same_pushes_to_a_private_repo_pass_and_say_nothing(repo, store, cap
         assert capsys.readouterr().err == ""
     bad_author = repo.commit({"a.txt": "x\n"}, author=EMAIL)
     assert push(repo, store, line(bad_author, repo.base), visibility="private")[0] == ("", 0)
-    assert events(store) == []
+    # the kinds of #413 run on every push, so a clean scan of a private remote writes its pass; never a deny
+    assert "deny" not in event_text(store)
 
 
 def test_a_clean_push_to_a_public_repo_passes_and_writes_one_pass(repo, store, capsys):
