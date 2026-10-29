@@ -225,7 +225,7 @@
     "setting.read": {"key": {}, "value": {}, "source": {"codes": "setting_source"}},
     "value.measured": {"name": {}, "value": {}, "unit": {}, "source": {}},
     "view.read": {"view": {}, "item": {}},
-    "github.called": {"budget": {"codes": "github_budget"}, "account": {}, "budget_remaining": {}, "budget_limit": {}},
+    "github.called": {"budget": {"codes": "github_budget"}, "account": {}, "budget_remaining": {}, "budget_limit": {}, "budget_reset": {}},
     "step.progressed": {},
     "machine.resumed": {"gap_minutes": {}, "cause": {"codes": "resume_cause"}}
   }
