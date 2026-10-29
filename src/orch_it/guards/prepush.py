@@ -158,7 +158,7 @@ def _closing_in(sha: str, message: str, marks) -> list[tuple[str, int, str, str]
     return found
 
 
-def _closing_hits(work_tree: Path, commits: list[str], store, repo: str) -> list[tuple[str, int, str, str]]:
+def _closing_hits(work_tree: Path, commits: list[str], store, repo: str | None) -> list[tuple[str, int, str, str]]:
     """The closing keyword hits in the messages of the commits this push sends. The import of the
     matcher is inside the fail-open read, so a failure of it is written like any other. A git failure
     of a batch ends the read there: the hits of the batches before it still refuse, and the unread
@@ -198,7 +198,7 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
     try:
         repo = github_repo_of(remote_url) or hook._repo_of(str(work_tree))
     except Exception:
-        repo = hook.DEFAULT_REPO
+        repo = None  # no repo known: the scans still run, their events are not written (hook._no_repo)
     try:
         commits = list(dict.fromkeys(
             sha for local, remote in _pushes(raw_stdin)
@@ -239,13 +239,13 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
     return "", 0
 
 
-def _profile_emails(repo: str) -> tuple[str, ...]:
+def _profile_emails(repo: str | None) -> tuple[str, ...]:
     """The public profile emails that are NOT private data (decision 4): the authenticated
     account's and the repo owner's, read from GitHub now; a reader that fails adds nothing, so
     at worst that address is treated as private. The scanner already exempts noreply addresses."""
 
     logins = ["user"]  # `gh api user` is the authenticated account
-    owner = repo.split("/", 1)[0] if "/" in repo else ""
+    owner = repo.split("/", 1)[0] if repo and "/" in repo else ""
     if owner:
         logins.append(f"users/{owner}")
     found: list[str] = []
@@ -259,7 +259,7 @@ def _profile_emails(repo: str) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _write_crash(store, exc: BaseException, repo: str) -> None:
+def _write_crash(store, exc: BaseException, repo: str | None) -> None:
     try:
         hook._safe_write_error(store, COMPONENT, getattr(exc, "code", type(exc).__name__),
                                repo=repo, session=None)

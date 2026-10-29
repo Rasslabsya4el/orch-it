@@ -1,4 +1,4 @@
-"""The workflow watch's decision (https://github.com/Rasslabsya4el/orchestration-layer/issues/411 rule 3, unit 2):
+"""The workflow watch's decision (layer ticket 411, rule 3, unit 2):
 what a non-green workflow run opens, comments on or closes. `decide` reads the latest ended run of each workflow and
 the open watch issues, and returns actions; it does no I/O. A run is non-green when it ended `failure`, `cancelled`
 or `timed_out`, or when it started no job at all (a run that failed at start), unless GitHub skipped it by its `if:`.

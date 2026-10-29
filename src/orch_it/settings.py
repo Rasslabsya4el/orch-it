@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 
+from orch_it.events.schema import is_repo
+
 
 class SettingsError(ValueError):
     """`code`: `settings_unreadable` (the settings file is no JSON object of settings),
@@ -151,6 +153,21 @@ def save_in_repo(repo: str, key: str, value: object) -> Path:
         spelling = next((name for name in repos if str(name).lower() == repo.lower()), repo)
         repos[spelling] = {**repos.get(spelling, {}), key: value}
         return _write(raw)
+
+
+def default_repo() -> str | None:
+    """The repo a command takes when it is given no `--repo` and its work tree has no GitHub origin:
+    the top-level setting `repo` (`owner/name`), or None when the setting is absent. A value that is
+    no `owner/name` is `bad_setting`. The callers, each reading the origin before this setting:
+    cli `_repo_of` (flag, then origin, then this); hook `_repo_of` (origin, then this, a bad value
+    printed to stderr and read as None); prepush (remote url, then hook `_repo_of`). Never a literal."""
+
+    chosen = load().get("repo")
+    if chosen is None:
+        return None
+    if not is_repo(chosen):
+        raise SettingsError("bad_setting", f"repo: {chosen!r} is no owner/name")
+    return chosen
 
 
 def store_path() -> Path:
