@@ -4,7 +4,8 @@ ticket waits on (`pr_ended`) and every member of the merge line, so a merged pul
 follow never ran closes its ticket (MERGE-9), a stuck check is cancelled and run again, a pull
 request open too long goes to the brain; then it runs the main check, so red main without a ticket
 gets one and green main closes it; then the workflow watch (#411) opens, comments on or closes the
-watch tickets of the workflows' latest runs.
+watch tickets of the workflows' latest runs; then one tick of the scheduled checks (#414, `scheduled_checks`: the bound
+check and the Windows checks), after the import, so the store holds the runs they read.
 
 It runs the same code wherever it runs: on its schedule in the workflow `reconcile`, and on the
 machine when Actions are off or refused (it says whether they are on, and runs anyway). On the
@@ -35,6 +36,7 @@ from orch_it.merge import marks, record
 from orch_it.merge.follow import FollowReport, follow
 from orch_it.merge.hub import PullHub
 from orch_it.merge.main_check import MainReport, check_main
+from orch_it.merge.scheduled_checks import ScheduledChecks, run_scheduled_checks
 from orch_it.merge.settings import MergeSettings, required_checks_now
 from orch_it.merge.workflow_watch_run import checked_names, watch_workflows
 from orch_it.tickets import park
@@ -57,12 +59,14 @@ class ReconcileReport:
     main: MainReport | None = None
     imported: int = 0
     failed: list[str] = field(default_factory=list)
+    checks: ScheduledChecks | None = None  # the scheduled checks of this sweep (#414 items 3 and 8)
 
 
 def reconcile(hub: PullHub, store: Store, repo: str, base: str, *, settings: MergeSettings, now: datetime,
               role: str = ROLE, required: tuple[str, ...] | None = None, owner: str | None = None,
-              bring_events: bool = False) -> ReconcileReport:
-    """One sweep of `repo` (its merge line into `base`); see the module text."""
+              bring_events: bool = False, raw_settings: dict | None = None) -> ReconcileReport:
+    """One sweep of `repo` (its merge line into `base`); see the module text. `raw_settings`: the settings file's
+    content, for the scheduled checks (read with the defaults when not given)."""
 
     if required is None:
         required = required_checks_now(repo)
@@ -92,14 +96,15 @@ def reconcile(hub: PullHub, store: Store, repo: str, base: str, *, settings: Mer
         watch_workflows(hub, repo, checked_names(hub, repo))
     except Exception as e:  # a watch that breaks never ends the sweep (#411 rule 3)
         failed.append(_failed(store, repo, role, run, "workflows", e))
+    checks = run_scheduled_checks(store, hub, repo, raw_settings or {}, run)  # after the import: the store holds the runs
     if main is not None:
         repairs += [("red_ticket_opened", f"#{n}") for n in main.opened]
         repairs += [("closed", f"#{n}") for n in main.closed]
         repairs += [("rerun", "main")] if main.outcome == "rerun" else []
     record.write(store, repo, None, role, run, "reconcile", [("step.ended", {
-        "outcome": "failed" if failed else "passed", "repairs": [code for code, _ in repairs], "actions": actions,
-        "imported": imported})])
-    return ReconcileReport(actions, repairs, followed, main, imported, failed)
+        "outcome": "failed" if failed or checks.failed else "passed", "repairs": [code for code, _ in repairs],
+        "actions": actions, "imported": imported})])
+    return ReconcileReport(actions, repairs, followed, main, imported, failed, checks=checks)
 
 
 def _failed(store: Store, repo: str, role: str, run: str, what: str, e: Exception) -> str:

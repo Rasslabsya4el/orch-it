@@ -201,10 +201,11 @@ def _reconcile(args, store_of, repo_of, now: datetime) -> str:
     raw = settings.load()
     done = reconcile(GhPullHub(), store_of(), repo, args.base, settings=MergeSettings.from_settings(raw, repo), now=now,
                      role=args.role, required=required_checks(raw, repo), owner=owner_login(raw),
-                     bring_events=os.environ.get("GITHUB_ACTIONS") != "true")
+                     bring_events=os.environ.get("GITHUB_ACTIONS") != "true", raw_settings=raw)
     lines = ["actions=on" if done.actions else "actions=off: the sweep runs here"]
     lines += [f"{code} {what}" for code, what in done.repairs]
     lines += [f"not followed {why}" for why in done.failed]
+    lines += [f"check failed {why}" for why in done.checks.failed] if done.checks else []
     if done.imported:
         lines.append(f"brought in {done.imported} events files of the workflows")
     return "".join(f"{line}\n" for line in lines)
