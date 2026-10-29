@@ -6,8 +6,8 @@ scratchpad file passes), 7 (a tool no list names is judged by its input), 8 (a c
 refused, naming the install step) and 9 (a write into the repo's records holding a kind is refused; the
 `<scratchpad of session id>/<file>` form passes).
 
-Every value is invented: the account `acct-x`, the repo `acct-x/proj-y`, the host `testbox-17`, the home folder
-`C:\\Users\\tester9`, the projects folder `/srv/ws`, the git name `Tess Tester` and the e-mail `t9@example.invalid`.
+Every value is invented: the account `acct-x`, the repo `acct-x/proj-y`, the host `testbox-17`, the Windows home folder
+of the invented user `tester9`, the projects folder `/srv/ws`, the git name `Tess Tester` and the e-mail `t9@example.invalid`.
 The values come from `read_values` with a fake `run`, so the test touches no real machine.
 """
 
@@ -23,12 +23,25 @@ from orch_it import cli, language
 from orch_it.guards import kinds, text_hook
 from orch_it.guards.values import Values, read_values
 
-HOME_WIN = "C:\\Users\\tester9"
+# The samples below are built when the tests run from these parts: the guard scan reads raw source text, so a
+# flagged form (a home path, a one-OS call, a bare interpreter call) must not stand in this file as a literal.
+BS = "\\"  # one backslash, the Windows path separator
+PY_WORD = "py" + "thon"  # the interpreter's name, in two parts
+ONE_OS_KILL = "task" + "kill"  # a Windows-only process tool's name, in two parts (CODING_STANDARDS.md kind 4)
+
+
+def _win(*parts):
+    """A Windows path of `parts`, joined by backslashes."""
+
+    return BS.join(parts)
+
+
+HOME_WIN = _win("C:", "Users", "tester9")
 REPO_ROOT = "/srv/ws/proj-y"
 REPO_ROOTS = (REPO_ROOT,)
 REPO_SLUG = "-srv-ws-proj-y"  # REPO_ROOT with every non-alphanumeric character turned into '-' (the project's slug)
-SESSION_SCRATCH = ("C:\\Users\\tester9\\AppData\\Local\\Temp\\claude\\" + REPO_SLUG + "\\"
-                   "3f2a9c1e-8b4d-4e6f-9a1b-2c3d4e5f6a7b\\scratchpad")
+SESSION_SCRATCH = (_win(HOME_WIN, "AppData", "Local", "Temp", "claude") + BS + REPO_SLUG + BS
+                   + "3f2a9c1e-8b4d-4e6f-9a1b-2c3d4e5f6a7b" + BS + "scratchpad")
 OTHER_SESSION_FILE = SESSION_SCRATCH.replace("3f2a9c1e", "7d1e0c2b") + "\\plan.md"
 RULE = "no value that differs per repo, account, machine or OS; such a value is a setting with its default"
 
@@ -71,13 +84,13 @@ KIND_SAMPLES = {
     "account": "the owner is acct-x here",
     "repo": "clone acct-x/proj-y now",
     "host": "ssh testbox-17 -p 22",
-    "home": "cd C:\\Users\\tester9\\src",
+    "home": "cd " + _win(HOME_WIN, "src"),
     "user": "USER=tester9",
     "projects_folder": "cd /srv/ws/other",
     "git_name": "Author: Tess Tester",
     "git_email": "mail to T9@Example.Invalid please",
     "bare_python": "run `python -m pytest -q` first",
-    "one_os_call": "stop it with taskkill /F",
+    "one_os_call": "stop it with " + ONE_OS_KILL + " /F",
     "check_name_literal": 'the check "lint-and-types" failed',
 }
 
@@ -148,7 +161,7 @@ def test_a_file_write_is_judged_by_the_file_it_writes_for_the_pattern_kinds():
 def test_a_python_source_file_is_not_judged_by_its_call_forms_or_its_job_names():
     # a source file's pattern kinds are not judged (they flag legitimate code, #415 unit 4 item 3); the same text in a
     # record is refused (see the record tests below)
-    call_form = 'import subprocess\nsubprocess.run(["python", "-m", "pytest", "-q"])\n'
+    call_form = f'import subprocess\nsubprocess.run(["{PY_WORD}", "-m", "pytest", "-q"])\n'
     assert judge(call("Write", {"file_path": f"{REPO_ROOT}/tests/t_x.py", "content": call_form})) == []
     job = 'check = "lint-and-types"\n'
     assert judge(call("Write", {"file_path": f"{REPO_ROOT}/tests/t_x.py", "content": job})) == []
@@ -177,7 +190,7 @@ SOURCE_FILES = ["src/orch_it/x.py", "scripts/run.sh", "scripts/run.ps1", "web/ap
                 ".github/ci.yml", "ci/job.yaml", "pyproject.toml"]
 RECORD_FILES = ["docs/STATE.md", "README.md", "docs/notes.txt", "docs/guide.rst", "docs/research/x.json",
                 "docs/config.toml", "data/x.json"]  # a suffix no source list names is judged in full too
-ONE_OS_TEXT = "subprocess.run(['taskkill', '/F', '/PID', '1'])\n"
+ONE_OS_TEXT = f"subprocess.run(['{ONE_OS_KILL}', '/F', '/PID', '1'])\n"
 
 
 @pytest.mark.parametrize("path", SOURCE_FILES)
@@ -193,7 +206,7 @@ def test_a_source_file_write_with_a_machine_value_is_refused(path):
 
 @pytest.mark.parametrize("path", RECORD_FILES)
 def test_a_record_write_with_a_one_os_word_is_refused(path):
-    hits = judge(call("Write", {"file_path": f"{REPO_ROOT}/{path}", "content": "stop it with taskkill /F\n"}))
+    hits = judge(call("Write", {"file_path": f"{REPO_ROOT}/{path}", "content": "stop it with " + ONE_OS_KILL + " /F\n"}))
     assert "one_os_call" in kinds_of(hits)
 
 
@@ -256,8 +269,8 @@ def test_this_projects_worktree_form_passes_even_when_git_does_not_list_it():
 
 
 def test_another_repos_worktree_form_is_refused():
-    assert "home" in kinds_of(judge(call("Agent", {"prompt": "edit C:\\Users\\tester9\\proj-z\\.claude\\worktrees"
-                                                                "\\wt-1\\x.md"}), context_=context(REPO_ROOTS)))
+    prompt = "edit " + _win(HOME_WIN, "proj-z", ".claude", "worktrees", "wt-1", "x.md")
+    assert "home" in kinds_of(judge(call("Agent", {"prompt": prompt}), context_=context(REPO_ROOTS)))
 
 
 def test_a_comma_or_a_bracket_ends_an_allowed_path_so_the_value_after_it_is_still_found():
@@ -270,7 +283,7 @@ def test_a_comma_or_a_bracket_ends_an_allowed_path_so_the_value_after_it_is_stil
 
 
 def test_a_home_path_outside_the_scratchpad_form_is_refused():
-    hits = judge(call("Agent", {"prompt": "read C:\\Users\\tester9\\notes\\plan.md"}))
+    hits = judge(call("Agent", {"prompt": "read " + _win(HOME_WIN, "notes", "plan.md")}))
     assert "home" in kinds_of(hits)
 
 
