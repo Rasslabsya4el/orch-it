@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.merge import lock, marks, record
 from orch_it.merge.follow import FollowReport, follow, follow_conflict
@@ -50,6 +51,17 @@ from orch_it.tickets.park import ROLE
 # `raced` follow wrote nothing: the member waits a poll and is followed again)
 _STAYS = ("waiting", "green", "behind", "rerun", "stuck", "raced")
 LINE_ERROR_CODES = ("closing_keyword",)  # a merge the line will not make
+
+
+def poll_wait(hub: PullHub, settings: MergeSettings) -> float:
+    """The wait before the line's next read of its head (#414 decision 9): `poll_seconds`, longer while the account's
+    request budget, as GitHub reports it now, is under the threshold. No reading keeps the interval."""
+
+    left = hub.rate_limit()
+    if left is None:
+        return float(settings.poll_seconds)
+    remaining, limit = left
+    return github_budget.poll_interval(settings.poll_seconds, remaining, limit, github_budget.threshold())
 
 
 class LineError(ValueError):
@@ -235,7 +247,7 @@ class _Line:
             if self.clock() >= turn_ends:
                 self.for_next_run.add(number)
                 return self.turn(member, "bound", updates, done.outcome)
-            self.sleep(self.settings.poll_seconds)
+            self.sleep(poll_wait(self.hub, self.settings))
             self.hold_others(number)
 
     def follow(self, number: int) -> FollowReport:

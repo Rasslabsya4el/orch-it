@@ -38,6 +38,8 @@ POINT_KINDS = [
     "skill.shadowed",
     # #400 decision 2
     "lock.removed", "line.served",
+    # #414 decision 9: one GitHub call counted per account per hour, with the budget read from GitHub when known
+    "github.called",
 ]
 
 OUTCOMES = ["passed", "failed", "no_result", "refused", "lost", "stopped"]
@@ -136,6 +138,7 @@ CODE_FIELDS = {
     },
     ("setting.read", "source"): {"repo", "machine", "default"},
     ("machine.resumed", "cause"): {"suspend", "hibernate"},
+    ("github.called", "budget"): {"account", "actions"},
 }
 
 
