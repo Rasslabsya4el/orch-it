@@ -93,8 +93,7 @@ def _put_back(live: Path, snapshot: Path) -> None:
 @pytest.fixture
 def world(tmp_path, template):
     """This test's world: his upstream, our repo with its bare origin, and the cache, put back from the snapshot before
-    the test. Copying folders costs no git process; the build it replaces (a commit per step) was 645 of the file's
-    1426 git processes."""
+    the test. Copying folders starts no git process; the build the snapshot replaces made one per commit step."""
 
     for name in PARTS:
         _put_back(template["live"] / name, template["snapshot"] / name)
@@ -510,9 +509,25 @@ def test_a_copy_edited_on_main_stops_the_update(world):
 
 
 def test_an_upstream_that_cannot_be_reached_is_its_own_error(world, tmp_path):
+    update._remove_tree(world["cache"])  # no cache yet: the first fetch fails on a cache built this run
     with pytest.raises(SkillsError) as e:
         update.check(world["repo"], cache=world["cache"], upstream=str(tmp_path / "nowhere"))
     assert e.value.code == "fetch_failed"
+
+
+def test_an_upstream_that_cannot_be_reached_with_a_cache_is_its_own_error(world, tmp_path):
+    # the cache exists: its first fetch fails, the cache is thrown away and built again, and that fails too
+    with pytest.raises(SkillsError) as e:
+        update.check(world["repo"], cache=world["cache"], upstream=str(tmp_path / "nowhere"))
+    assert e.value.code == "fetch_failed"
+
+
+def test_a_cache_removed_whole_is_built_again_by_the_check(world):
+    update._remove_tree(world["cache"])  # no HEAD, no folder: the check initialises the cache and fetches into it
+    found = update.check(world["repo"], cache=world["cache"])
+    assert found.new_commit == world["pinned"]
+    assert {c.cls for c in found.changes} == {"same"}
+    assert (world["cache"] / "HEAD").exists() and update.render(found).splitlines()[-1] == "no change"
 
 
 def test_a_broken_cache_is_built_again(world):
