@@ -167,6 +167,7 @@ def test_when_every_port_is_taken_the_start_fails_after_its_tries(tmp_path, monk
         server.__enter__()
     assert caught.value.code == "server_start_failed"
     assert "no free port in 3 tries" in str(caught.value)
+    assert "the last 1" in str(caught.value)
     log = (stub.dir / "state" / "server.log").read_text()
     assert log.count("start on port") == 3
     assert all(f"start on port {port}" in log for port in taken)

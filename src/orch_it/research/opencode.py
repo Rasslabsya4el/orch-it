@@ -199,6 +199,7 @@ class Server:
         self.log = None
         self.port: int | None = None
         self.pid: int | None = None
+        self.last_exit: int | None = None  # the exit code of the newest try that ended before it served
 
     @property
     def log_path(self) -> Path:
@@ -232,8 +233,9 @@ class Server:
             client = self._start_on(port, password, env)
             if client is not None:
                 return client
-        raise OpencodeError("server_start_failed", f"opencode found no free port in {START_TRIES} tries, "
-                            f"see {self.log_path}")
+        raise OpencodeError("server_start_failed", f"opencode found no free port in {START_TRIES} tries "
+                            f"(each try ended with a non-zero exit code, the last {self.last_exit}: a taken port, "
+                            f"or another failure), see {self.log_path}")
 
     def _start_on(self, port: int, password: str, env: dict[str, str]) -> Client | None:
         """One try: opencode on `port`, its client once it answers. None when the port is taken: the
@@ -256,6 +258,7 @@ class Server:
         while True:
             if self.tree.poll() is not None:
                 if self.tree.returncode != 0:  # opencode exits 1 on a port another program holds
+                    self.last_exit = self.tree.returncode
                     self.tree.kill()
                     return None
                 raise OpencodeError("server_start_failed", f"opencode exited with code "
@@ -267,6 +270,7 @@ class Server:
             else:
                 time.sleep(POLL_SECONDS)  # an answer from a port that was taken meanwhile comes
                 if self.tree.poll() is not None:  # from another program: the server of this try is gone
+                    self.last_exit = self.tree.returncode
                     self.tree.kill()
                     return None
                 return client
