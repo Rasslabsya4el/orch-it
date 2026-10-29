@@ -97,6 +97,11 @@ def _is_exclusive_create(call: ast.Call, imports: _Imports, scope: ast.AST) -> b
             exist_ok = _argument(call, 2, "exist_ok")
             return not (isinstance(exist_ok, ast.Constant) and exist_ok.value is True)
         return False
+    if name == "touch" and isinstance(call.func, ast.Attribute):  # <expr>.touch(mode, exist_ok): exist_ok defaults to True
+        exist_ok = _argument(call, 1, "exist_ok")
+        if exist_ok is None:  # absent: the default True, so no create
+            return False
+        return not (isinstance(exist_ok, ast.Constant) and exist_ok.value is True)  # a non-constant counts, as for mkdir
     if name == "open" and module == "os":  # os.open(path, flags, mode), under any alias
         return _os_open_is_create(call, scope)
     if name == "open":
@@ -364,6 +369,28 @@ def test_path_mkdir_exist_ok_given_positionally_as_true_is_not_a_create():
 def test_makedirs_exist_ok_given_positionally_as_false_is_a_create():
     source = "os.makedirs(p, 0o777, False)\n"
     assert [c.line for c in exclusive_creates(source, "demo.py")] == [1]
+
+
+# --- gap 8: Path.touch creates a file with O_EXCL when exist_ok is False -------------------------------
+
+def test_path_touch_exist_ok_false_caught_only_by_file_exists_is_reported():
+    source = "try:\n    p.touch(exist_ok=False)\nexcept FileExistsError:\n    pass\n"
+    assert [c.line for c in exclusive_creates_without_handler(source, "demo.py")] == [2]
+
+
+def test_path_touch_mode_and_exist_ok_false_positionally_is_reported():
+    source = "p.touch(0o600, False)\n"
+    assert [c.line for c in exclusive_creates_without_handler(source, "demo.py")] == [1]
+
+
+def test_path_touch_exist_ok_true_or_absent_is_not_a_create():
+    source = "p.touch(exist_ok=True)\np.touch()\np.touch(0o600, True)\n"
+    assert exclusive_creates(source, "demo.py") == []
+
+
+def test_path_touch_exist_ok_false_caught_by_a_tuple_with_permission_error_passes():
+    source = "try:\n    p.touch(exist_ok=False)\nexcept (FileExistsError, PermissionError):\n    pass\n"
+    assert exclusive_creates_without_handler(source, "demo.py") == []
 
 
 # --- gap 6: a listing covers exactly the creates it names ----------------------------------------------
