@@ -1,0 +1,13 @@
+name: scratch-row4
+
+# Scratch probe for row 4 of #411 (never merged): `steps` context at job level, where it is not available.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    if: ${{ steps.x.outputs.y }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: x
+        run: echo "y=true" >> "$GITHUB_OUTPUT"
