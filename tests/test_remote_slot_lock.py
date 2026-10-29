@@ -4,6 +4,7 @@ Windows refuses a create that races a removal of the same name with PermissionEr
 platforms say the file exists; the lock must read both the same way, inside its own wait.
 """
 
+import pytest
 import multiprocessing
 import os
 
@@ -14,6 +15,9 @@ ROUNDS = 50
 TRIES = 300  # takes and releases per contender in the churn test
 STALE_SECONDS = 3600.0
 WAIT_SECONDS = 60  # a barrier or queue read that waits this long means a broken harness, not a slow one
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 def _refused(path: str) -> PermissionError:

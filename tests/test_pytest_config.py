@@ -1,6 +1,7 @@
 """The repo's pytest settings the `tests` workflow reads (#421): the per-test time bound of each run kind, the
 `serial` mark for a test that cannot share a machine, and the plugins the parallel, bounded run needs."""
 
+import pytest
 import os
 import subprocess
 import sys
@@ -10,6 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 def test_the_test_extra_holds_the_parallel_and_the_per_test_bound_plugins():

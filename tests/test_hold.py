@@ -16,6 +16,9 @@ from orch_it.roles.hold import judge, run_subagent_stop
 ROLES = RoleSet.load()
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def transcript(tmp_path: Path, *, skills=(), edits=(), context=1000, spawn="spawn-0001", report="done") -> Path:
     records = [{"type": "user", "message": {"role": "user", "content": f"You are the x.\nSpawn: {spawn}\n"}}]
     for skill in skills:

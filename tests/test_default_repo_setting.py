@@ -25,6 +25,9 @@ MODULES = ("cli", "guards/hook", "guards/prepush", "merge/workflow_watch", "merg
            "settings")
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))

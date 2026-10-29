@@ -29,6 +29,9 @@ NOREPLY = f"{USER_ID}+{LOGIN}@users.noreply.github.com"
 REPO = "acme/example"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def git(cwd, *args, env=None):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True,
                           timeout=60, creationflags=NO_WINDOW, env=env).stdout.strip()

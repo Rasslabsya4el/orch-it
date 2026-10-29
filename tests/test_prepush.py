@@ -62,6 +62,9 @@ IN_CONTENT = {
 IN_PATH = {name: case for name, case in IN_CONTENT.items() if not name.startswith(("home_path", "home:"))}
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))

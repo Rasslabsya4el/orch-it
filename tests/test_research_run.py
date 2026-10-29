@@ -17,6 +17,9 @@ from orch_it.research.settings import ResearchRefused
 from research_bridge import BRIEF, KEY_ENV, PROMPT_ONLY, Bridge, report_messages
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def test_a_passed_run_writes_the_report_where_the_brief_names_it_and_both_events(tmp_path):
     bridge = Bridge(tmp_path, messages=report_messages("lost-report-380"))
     done = bridge.run(model="tiny")

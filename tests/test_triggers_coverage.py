@@ -12,6 +12,9 @@ from orch_it.guards.triggers import Delete, Stop, actions
 OTHER = "/work/other"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def act(command, tool="Bash", cwd="/work/self", env=None, windows=False):
     return actions(command, tool=tool, cwd=cwd, env=env or {}, windows=windows)
 

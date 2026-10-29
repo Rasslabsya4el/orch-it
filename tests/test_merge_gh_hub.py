@@ -20,6 +20,9 @@ from required_names import LINUX_CHECK, WINDOWS_CHECK
 REPO = "owner-x/repo-y"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 class Gh:
     """Answers `gh` calls by the first matching (words, answer) pair; an answer may be a function
     of the call. Records each call and the JSON of any `--input` file as it stood when called."""

@@ -21,6 +21,9 @@ START = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 class Clock:
     """Time that moves only when the lock sleeps; `during_sleep` runs once per sleep."""
 

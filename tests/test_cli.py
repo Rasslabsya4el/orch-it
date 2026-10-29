@@ -18,6 +18,9 @@ REPO = "acme-x/widgets-y"
 DAY = "2026-10-25"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def envelope(**over):
     base = {
         "kind": "value.measured", "repo": REPO, "ticket": None,

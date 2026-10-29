@@ -15,6 +15,9 @@ WINDOWS = sys.platform == "win32"
 INSENSITIVE_HERE = sys.platform in ("win32", "darwin")
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def hit(target, roots, **options):
     """The guard's rule for deleting `target` against `roots`, or `pass` when it is let
     through; both the target and the roots resolved to their real paths first."""
