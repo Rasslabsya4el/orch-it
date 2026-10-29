@@ -96,6 +96,10 @@ class FakeGitHub(FakeHub):
         self.main_branch = DEFAULT_BRANCH  # the repo's default branch, as `default_branch` reads it
         self.required_by_base: dict[str, set[str]] = {}  # base -> the check names its protection requires
         self.required = REQUIRED  # the check names a merge is held to (a test may name its own)
+        self.clashes: set[frozenset[int]] = set()  # pairs of pull requests that conflict when combined
+        self.advances: list[str] = []  # every sha a base was moved forward to, in order
+        self.batch_members: dict[str, list[int]] = {}  # batch branch -> the pull requests merged into it, in order
+        self.trees: dict[str, list[str]] = {}  # a batch commit's sha -> the commits it holds
         self._shas = 0
 
     # building the world
@@ -230,6 +234,53 @@ class FakeGitHub(FakeHub):
         for hook in list(self.on_merge):
             hook(number)
         return sha
+
+    def start_batch(self, repo, base, branch):
+        self.calls.append(("start_batch", branch))
+        self.branches[branch] = list(self.branches[base])
+        self.batch_members[branch] = []
+        return self.branches[branch][-1]
+
+    def add_to_batch(self, repo, branch, head_sha):
+        self.calls.append(("add_to_batch", branch, head_sha))
+        number = next(n for n in self.pulls if self.head(n) == head_sha)
+        found, held = self.pulls[number], self.batch_members[branch]
+        if found.conflict or any(frozenset((number, other)) in self.clashes for other in held):
+            return None
+        tree = self.branches[branch]
+        tree += [sha for sha in self.branches[found.branch] if sha not in tree]
+        tree.append(self.sha("b"))
+        held.append(number)
+        self.trees[tree[-1]] = list(tree)
+        return tree[-1]
+
+    def advance_base(self, repo, base, sha):
+        self.calls.append(("advance_base", base, sha))
+        branch = next((b for b, tree in self.branches.items() if b in self.batch_members and tree[-1] == sha), None)
+        main = self.branches[base]
+        if branch is None or self.branches[branch][:len(main)] != main:
+            return False
+        main[:] = self.branches[branch]
+        self.advances.append(sha)
+        for number in self.batch_members[branch]:
+            found = self.pulls[number]
+            found.state, found.merged_at, found.merge_sha = "merged", self.now, sha
+            self.commit_pulls[sha] = [*self.commit_pulls.get(sha, []), number]
+            self.close(number, merged=True)
+            for hook in list(self.on_merge):
+                hook(number)
+        return True
+
+    def end_batch(self, repo, branch):
+        self.calls.append(("end_batch", branch))
+        self.branches.pop(branch, None)
+        self.batch_members.pop(branch, None)
+
+    def members_of(self, sha):
+        """The pull requests whose heads the commit `sha` holds, ascending."""
+
+        tree = self.trees.get(sha, [])
+        return sorted(n for n in self.pulls if self.head(n) in tree)
 
     def close_pull(self, repo_or_number, number=None):
         number = repo_or_number if number is None else number

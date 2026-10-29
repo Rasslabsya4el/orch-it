@@ -146,6 +146,19 @@ def follow_conflict(hub: PullHub, store: Store, repo: str, number: int, files: l
         return one.report("raced", str(e))
 
 
+def follow_red(hub: PullHub, store: Store, repo: str, number: int, names: str, ids: list[str], *,
+               settings: MergeSettings, now: datetime, role: str = ROLE, owner: str | None = None) -> FollowReport:
+    """The red rule for a pull request the merge line found red alone in a batch (#414 item 5): the follow's own red
+    path as if its head's check `names` had failed on the tests `ids` (the failing tests of the pass that held only
+    it), so its ticket goes back to ready, to the brain or parked on red main as any red does."""
+
+    one = _Follow.of(hub, store, repo, number, settings, now, role, owner, required_checks_now(repo))
+    try:
+        return one.red_on(names, ids)
+    except _Raced as e:
+        return one.report("raced", str(e))
+
+
 def refs_of(body: str) -> list[int]:
     """Every ticket a pull request's body names with a line `Refs #N`, in body order."""
 
@@ -509,7 +522,9 @@ class _Follow:
         ids = sorted({test_id for named in got.values() if named for test_id in named})
         if not ids:  # a red that names no test is no result, never an attempt (MERGE-5)
             return self._no_result(failed)
-        names = ", ".join(c.name for c in failed)
+        return self.red_on(", ".join(c.name for c in failed), ids)
+
+    def red_on(self, names: str, ids: list[str]) -> FollowReport:
         skills = self._adopt_skills_issue()
         if not self._is_open_ticket():
             self._leave("red", f"{names} red")

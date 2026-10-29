@@ -215,6 +215,49 @@ class GhPullHub(GhHub):
             raise GithubError("gh_bad_output", f"{repo}#{number}: a merge answered with no sha")
         return answer["sha"]
 
+    # --- the batch branch (#414 item 5) -------------------------------------------------------
+
+    def start_batch(self, repo: str, base: str, branch: str) -> str:
+        tip = self._tip(repo, base)
+        self._answer(["api", "-X", "POST", f"repos/{repo}/git/refs"], {"ref": f"refs/heads/{branch}", "sha": tip})
+        return tip
+
+    def add_to_batch(self, repo: str, branch: str, head_sha: str) -> str | None:
+        try:
+            answer = self._answer(["api", "-X", "POST", f"repos/{repo}/merges"],
+                                  {"base": branch, "head": head_sha, "commit_message": f"Combine {head_sha[:7]}"})
+        except GithubError as e:
+            if "HTTP 409" in str(e):  # the two conflict
+                return None
+            if e.code == "gh_bad_output" and "expected one object" in str(e):  # 204: the branch holds the head already
+                return self._tip(repo, branch)
+            raise
+        return _text(answer.get("sha")) or self._tip(repo, branch)
+
+    def advance_base(self, repo: str, base: str, sha: str) -> bool:
+        try:
+            self._answer(["api", "-X", "PATCH", f"repos/{repo}/git/refs/heads/{quote(base, safe='/')}"],
+                         {"sha": sha, "force": False})
+        except GithubError as e:
+            if any(f"HTTP {status}" in str(e) for status in (409, 422)):  # not a fast-forward: the base moved
+                return False
+            raise
+        return True
+
+    def end_batch(self, repo: str, branch: str) -> None:
+        try:
+            self.gh(["api", "-X", "DELETE", f"repos/{repo}/git/refs/heads/{quote(branch, safe='/')}"])
+        except GithubError as e:
+            if "HTTP 404" not in str(e) and "HTTP 422" not in str(e):  # already gone
+                raise
+
+    def _tip(self, repo: str, branch: str) -> str:
+        found = self._object(["api", f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}"])
+        sha = _text((found.get("object") or {}).get("sha")) if isinstance(found, dict) else ""
+        if not sha:
+            raise GithubError("gh_bad_output", f"{repo}: no tip for {branch}")
+        return sha
+
     # --- check runs and pull comments ---------------------------------------------------------------
 
     def checks(self, repo: str, sha: str) -> list[Check]:

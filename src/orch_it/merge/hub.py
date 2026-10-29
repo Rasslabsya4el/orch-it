@@ -111,6 +111,20 @@ class PullHub(Hub, Protocol):
         """Merge only if the head is still `head_sha`; the merge commit's sha, None when GitHub
         refused (the head moved, the base moved under strict protection, a check is not green)."""
 
+    def start_batch(self, repo: str, base: str, branch: str) -> str:
+        """Make `branch` at the tip of `base`; the tip's sha. The merge line's batch branch (#414 item 5)."""
+
+    def add_to_batch(self, repo: str, branch: str, head_sha: str) -> str | None:
+        """Merge the commit `head_sha` into `branch` with a merge commit; the branch's new tip, or None when the two
+        conflict (nothing changed)."""
+
+    def advance_base(self, repo: str, base: str, sha: str) -> bool:
+        """Move `base` forward to `sha`, never otherwise: False when `base` is not an ancestor of `sha` (it moved since
+        the batch was made); the pull requests whose heads `sha` holds end merged."""
+
+    def end_batch(self, repo: str, branch: str) -> None:
+        """Delete a batch branch; one already gone is not an error."""
+
     def rerun(self, repo: str, run_id: str) -> None:
         """Run the failed and cancelled jobs of an Actions run again."""
 
