@@ -16,7 +16,7 @@ test = ["pytest>=8", "pytest-xdist>=3", "pytest-timeout>=2", "actionlint-py>=1.7
 where = ["src"]
 
 [tool.setuptools.package-data]
-orch_it = ["events/*.json", "events/*.sql", "events/queries/*.sql", "labels/*.json", "roles/*.json", "shipped/*.md"]
+orch_it = ["events/*.json", "events/*.sql", "events/queries/*.sql", "labels/*.json", "roles/*.json", "shipped/*.md", "language_tables/*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
