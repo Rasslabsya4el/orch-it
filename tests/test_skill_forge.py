@@ -136,10 +136,11 @@ class PullGh(FakeGh):
                 return json.dumps([{"user": {"login": "o", "type": "User"}, "body": body,
                                     "created_at": "2026-11-02T09:00:00Z"} for body in self.posted])
             return "[]"
-        if path.endswith("/protection"):
-            if path != f"repos/o/r/branches/{self.base}/protection":
+        if path.startswith("repos/o/r/branches/"):
+            if path != f"repos/o/r/branches/{self.base}":
                 raise GithubError("gh_failed", f"api {path}: gh: Not Found (HTTP 404)")
-            return json.dumps({"required_status_checks": {"strict": True, "contexts": self.required, "checks": []}})
+            return json.dumps({"name": self.base, "protected": True, "protection": {
+                "enabled": True, "required_status_checks": {"contexts": self.required, "checks": []}}})
         if path == "repos/o/r/pulls/5":
             return json.dumps({"number": 5, "title": "t", "body": "Refs #10", "state": "open", "draft": False,
                                "head": {"sha": self.head, "ref": "ticket-10", "repo": {"full_name": "o/r"}},
@@ -203,8 +204,8 @@ def test_a_pull_request_into_another_base_reads_the_protection_of_that_base(tmp_
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
     gh = PullGh(HEAD, base="release")  # main is not protected in this stand-in: a read of main would merge nothing
     GithubForge("o/r", gh=gh).mark_ready(PULL)
-    reads = [c[1] for c in gh.calls if len(c) > 1 and c[1].endswith("/protection")]
-    assert reads == ["repos/o/r/branches/release/protection"]
+    reads = [c[1] for c in gh.calls if len(c) > 1 and c[1].startswith("repos/o/r/branches/")]
+    assert reads == ["repos/o/r/branches/release"]
     assert len(merges(gh)) == 1
 
 

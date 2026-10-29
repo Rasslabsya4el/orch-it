@@ -165,17 +165,20 @@ class GhPullHub(GhHub):
 
     def required_checks_of(self, repo: str, base: str) -> set[str]:
         """The names a base requires, from its classic protection (`contexts` and `checks`) and from its rulesets
-        (the `required_status_checks` rule). A 403 or 404 on either route (not protected, or a plan without it) is
-        no requirement on that route; any other refusal raises."""
+        (the `required_status_checks` rule). Classic protection is read from the branch itself, a route a read-only
+        token may call (the `/protection` route needs admin). A 403 or 404 on either route (not protected, or a plan
+        without it) is no requirement on that route; any other refusal raises."""
 
         names = set()
         try:
-            found = self._object(["api", f"repos/{repo}/branches/{quote(base, safe='')}/protection"], missing_ok=True)
+            found = self._object(["api", f"repos/{repo}/branches/{quote(base, safe='')}"], missing_ok=True)
         except GithubError as e:
             if not _unprotected(e):
                 raise
             found = None
-        section = (found or {}).get("required_status_checks")
+        found = found or {}
+        protection = found.get("protection") if found.get("protected") is not False else None
+        section = protection.get("required_status_checks") if isinstance(protection, dict) else None
         if isinstance(section, dict):
             names |= {name for name in section.get("contexts") or [] if _text(name)}
             names |= {_text(check.get("context")) for check in section.get("checks") or [] if isinstance(check, dict)}

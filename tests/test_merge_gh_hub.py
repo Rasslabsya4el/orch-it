@@ -388,14 +388,17 @@ def test_auto_merge_already_on_is_no_error_and_a_method_not_known_is_refused_bef
 
 # --- the checks a base requires (#424 unit 4) -----------------------------------------------------
 
-PROTECTION = f"repos/{REPO}/branches/main/protection"
+BRANCH = f"repos/{REPO}/branches/main"  # the route a read-only token may call; the /protection route needs admin
 RULES = f"repos/{REPO}/rules/branches/main"
 FIRST, SECOND = "job-one", "job-two"  # invented names: the required jobs are a setting, never a literal here
 
 
 def classic(*contexts, checks=()):
-    return {"required_status_checks": {"strict": True, "contexts": list(contexts),
-                                        "checks": [{"context": name, "app_id": None} for name in checks]}}
+    """What `GET branches/<base>` answers for a protected branch."""
+    return {"name": "main", "protected": True,
+            "protection": {"enabled": True, "required_status_checks": {
+                "enforcement_level": "everyone", "contexts": list(contexts),
+                "checks": [{"context": name, "app_id": None} for name in checks]}}}
 
 
 def rules(*contexts):
@@ -406,24 +409,24 @@ def rules(*contexts):
 
 
 def test_classic_protection_names_the_jobs_in_contexts_and_in_checks():
-    gh = Gh(([PROTECTION], classic(FIRST, checks=[SECOND])), ([RULES], []))
+    gh = Gh(([BRANCH], classic(FIRST, checks=[SECOND])), ([RULES], []))
     assert GhPullHub(gh).required_checks_of(REPO, "main") == {FIRST, SECOND}
 
 
 def test_rulesets_name_the_jobs_of_their_required_status_checks_rule():
-    gh = Gh(([PROTECTION], NOT_FOUND), ([RULES], rules(FIRST, SECOND)))
+    gh = Gh(([BRANCH], NOT_FOUND), ([RULES], rules(FIRST, SECOND)))
     assert GhPullHub(gh).required_checks_of(REPO, "main") == {FIRST, SECOND}
 
 
 def test_a_base_that_requires_only_one_of_two_jobs_names_only_that_one():
-    gh = Gh(([PROTECTION], classic(FIRST)), ([RULES], rules()))
+    gh = Gh(([BRANCH], classic(FIRST)), ([RULES], rules()))
     assert GhPullHub(gh).required_checks_of(REPO, "main") == {FIRST}
 
 
 @pytest.mark.parametrize("error", [failed(403, "Upgrade to GitHub Pro or make this repository public"),
                                    failed(403, "Branch not protected"), NOT_FOUND])
 def test_a_plan_or_protection_refusal_is_a_base_that_requires_nothing(error):
-    gh = Gh(([PROTECTION], error), ([RULES], error))
+    gh = Gh(([BRANCH], error), ([RULES], error))
     assert GhPullHub(gh).required_checks_of(REPO, "main") == set()
 
 
@@ -432,19 +435,50 @@ def test_a_plan_or_protection_refusal_is_a_base_that_requires_nothing(error):
                                   "Resource not accessible by integration"])
 def test_a_403_that_is_not_the_plan_or_protection_refusal_raises(text):
     refused = failed(403, text)
-    for gh in (Gh(([PROTECTION], refused), ([RULES], [])), Gh(([PROTECTION], NOT_FOUND), ([RULES], refused))):
+    for gh in (Gh(([BRANCH], refused), ([RULES], [])), Gh(([BRANCH], NOT_FOUND), ([RULES], refused))):
         with pytest.raises(GithubError) as error:
             GhPullHub(gh).required_checks_of(REPO, "main")
         assert error.value.code == "gh_failed"
 
 
+def test_an_unprotected_branch_with_the_empty_contexts_object_requires_nothing():
+    unprotected = {"name": "main", "protected": False,
+                   "protection": {"enabled": False, "required_status_checks": {
+                       "enforcement_level": "off", "contexts": [], "checks": []}}}
+    gh = Gh(([BRANCH], unprotected), ([RULES], []))
+    assert GhPullHub(gh).required_checks_of(REPO, "main") == set()
+
+
+@pytest.mark.parametrize("answer", [{"name": "main", "protected": False},
+                                    {"name": "main", "protected": False, "protection": {
+                                        "required_status_checks": {"contexts": [FIRST], "checks": []}}},
+                                    {"name": "main", "protection": None},
+                                    {"name": "main", "protected": True, "protection": {"enabled": True}},
+                                    {"name": "main", "protection": {"required_status_checks": None}}])
+def test_an_answer_with_no_protection_or_no_required_checks_requires_nothing(answer):
+    gh = Gh(([BRANCH], answer), ([RULES], []))
+    assert GhPullHub(gh).required_checks_of(REPO, "main") == set()
+
+
+def test_a_base_with_a_slash_is_encoded_in_both_routes():
+    base = "release/1"
+    gh = Gh(([f"repos/{REPO}/branches/release%2F1"], classic(FIRST)), ([f"repos/{REPO}/rules/branches/release%2F1"], []))
+    assert GhPullHub(gh).required_checks_of(REPO, base) == {FIRST}
+
+
+def test_the_admin_only_protection_route_is_never_called():
+    gh = Gh(([BRANCH], classic(FIRST)), ([RULES], []))
+    GhPullHub(gh).required_checks_of(REPO, "main")
+    assert not [c for c in gh.calls if any(a.endswith("/protection") for a in c)]
+
+
 def test_empty_lists_are_a_base_that_requires_nothing():
-    gh = Gh(([PROTECTION], classic()), ([RULES], []))
+    gh = Gh(([BRANCH], classic()), ([RULES], []))
     assert GhPullHub(gh).required_checks_of(REPO, "main") == set()
 
 
 def test_any_other_failure_of_the_read_raises():
-    gh = Gh(([PROTECTION], failed(500, "boom")), ([RULES], []))
+    gh = Gh(([BRANCH], failed(500, "boom")), ([RULES], []))
     with pytest.raises(GithubError) as error:
         GhPullHub(gh).required_checks_of(REPO, "main")
     assert error.value.code == "gh_failed"
