@@ -1,4 +1,4 @@
-"""The merge line's decision is superseded (Rasslabsya4el/orchestration-layer#414, unit 8b): the line merges ready pull
+"""The merge line's decision is superseded (#414, unit 8b): the line merges ready pull
 requests itself, in batches, with no GitHub auto-merge. The new ADR takes the next number and names ADR 0008 as
 superseded; ADR 0008's Status line says so; GLOSSARY.md has no "Held member" heading; docs/events.md has no `--auto`."""
 
