@@ -223,3 +223,11 @@ def test_a_second_reader_in_a_copy_of_src_turns_the_grep_red(tmp_path):
     readers = quoted_readers(copy)
     assert readers != {"orch_it/settings.py"}
     assert "orch_it/second_reader.py" in readers
+
+
+def test_the_repo_commits_its_language_in_the_root_settings_file_and_nothing_else():
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    assert json.loads((root / "settings.json").read_text(encoding="utf-8")) == {"human_language": "ru"}
