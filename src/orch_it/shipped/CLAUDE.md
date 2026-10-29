@@ -18,4 +18,4 @@ Test data uses invented names: another account, another repo, a folder with anot
 
 Every design answers the question "and on a second machine, under another account, on another OS?" before it is written.
 
-The standards the Standards reviewer judges by are in `CODING_STANDARDS.md`, the same rule with examples.
+This is the whole rule, and a question about it is answered from this text.
