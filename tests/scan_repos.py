@@ -3,7 +3,7 @@ run time from parts so none of them stands in a committed file (this repository'
 requests are scanned by the step these tests cover), and a throwaway repository to commit them to."""
 
 import os
-import secrets
+import random
 import shutil
 import string
 import subprocess
@@ -23,22 +23,23 @@ EMAIL = "jane.doe" + "@" + "corp" + ".io"
 # An invented account for every home folder below: built from parts of a path, so no home path
 # written out in full stands in a committed file (the scanner would find it there).
 INVENTED_USER = "jdoe"
-SOMEONE_HOME = str(PurePosixPath("/home") / INVENTED_USER)      # /home/jdoe
-MAC_HOME = str(PurePosixPath("/Users") / INVENTED_USER)         # /Users/jdoe
-WIN_HOME = str(PureWindowsPath("C:/") / "Users" / INVENTED_USER)  # C:\Users\jdoe
-WIN_TAIL = "/".join(PureWindowsPath(WIN_HOME).parts[1:])         # Users/jdoe
-MSYS_HOME = "/c/" + WIN_TAIL                                      # /c/Users/jdoe
+SOMEONE_HOME = str(PurePosixPath("/home") / INVENTED_USER)
+MAC_HOME = str(PurePosixPath("/Users") / INVENTED_USER)
+WIN_HOME = str(PureWindowsPath("C:/") / "Users" / INVENTED_USER)
+WIN_TAIL = "/".join(PureWindowsPath(WIN_HOME).parts[1:])
+MSYS_HOME = "/c/" + WIN_TAIL
 
 
 def invented_host(prefix: str = "testbox") -> str:
-    """A host name no machine has: the prefix, a dash and six random hex digits, made at run time."""
-    return f"{prefix}-{secrets.token_hex(3)}"
+    """A host name no machine has: the prefix, a dash and six hex digits drawn from a generator seeded by the prefix; the same in every xdist worker."""
+    return f"{prefix}-{random.Random(prefix).randbytes(3).hex()}"
 
 
 def default_host(prefix: str, size: int) -> str:
     """A host name the OS gives a machine nobody named: the prefix, a dash and `size` random upper-case
     letters and digits, the shape the scanner's default-name pattern takes. Made at run time."""
-    return prefix + "-" + "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(size))
+    drawn = random.Random(f"{prefix}{size}")
+    return prefix + "-" + "".join(drawn.choice(string.ascii_uppercase + string.digits) for _ in range(size))
 
 
 class Repo:
