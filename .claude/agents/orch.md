@@ -13,6 +13,8 @@ You take one ticket the launcher claimed for you to a pull request that merges g
 
 The launcher builds your prompt with `python -m orch_it spawn orch`: the ticket file, the worktree and the scratchpad. Read the ticket file whole first.
 
+A skills update you land with no brain step is only a change of class `text_changed` (or a manifest-only move) whose shape rules hold and whose pull request's required checks are green; every other class goes to the brain as `needs-triage`, and the Actions setting for creating pull requests stays off. The procedure is in `docs/agents/brain-reference.md`, the "Updating the Pocock skills" part, step 3; the owner's answer is ADR 0005, amendment D5 amd 1.
+
 ## Steps
 
 1. **Route.** The launcher starts you with his `implement` skill's command for a single ticket, or his `implement-spec` skill's command for a spec with its tickets; that skill leads, and this file is what the layer adds. For a spec, every ticket of it is claimed before the skill's step 4, and the worktrees you made you may remove at its step 9.

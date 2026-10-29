@@ -9,7 +9,7 @@ pinned tree is the one the manifest records file by file, and classifies every s
 <commit>", a ticket in #398's shape (the Russian human block, the class table, acceptance rows,
 `Outside case:`, `Same object:`, `Not in this ticket:`, `Weight:`) whose shape rules are run on it at
 write; opened with the
-label `needs-triage` when a copy is renamed, removed or changed in contract or the body breaks a shape
+label `needs-triage` when a skill is added or a copy is renamed, removed or changed in contract, or the body breaks a shape
 rule (the rules it breaks listed in it), else `ready-for-agent`. A later run updates that issue's body (its
 labels are the brain's from then on) rather than opening another, does not open again one the brain
 closed, and closes the issue of an older upstream commit as superseded; with no change, it closes the
@@ -22,8 +22,8 @@ its tree to a scratch folder, writes the new copies and manifest there (added sk
 his upstream dropped recorded as `gone`), runs the references check of decision 5 on it, builds the
 commit with a scratch index and pushes it to `skills-upstream/<upstream commit>-<main commit>`; the
 caller's work tree is never touched. Its pull request lists every skill with its class and merges as
-any pull request does; one with a copy renamed, removed or changed in contract is labelled
-`needs-triage`. A later run brings the open pull request of the same upstream commit up to date
+any pull request does; a change whose issue is `needs-triage` (a copy added, renamed, removed or
+changed in contract, or broken shape rules) opens no pull request at all: the brain decides. A later run brings the open pull request of the same upstream commit up to date
 instead of opening another, leaves one the brain closed alone, and closes the open one of an older
 upstream commit as superseded. The forge (GitHub) sits behind `Forge`.
 """
@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Protocol
 
 from orch_it import settings
+from orch_it.identity import commit_env
 from orch_it.skills import copies, references
 from orch_it.skills.classify import Change, classify
 from orch_it.skills.copies import GIT_TIMEOUT_SECONDS, NO_WINDOW, Manifest, SkillsError, Tree
@@ -55,7 +56,8 @@ TRIAGE_LABEL = "needs-triage"
 READY_LABEL = model.READY_LABEL
 ISSUE_TITLE = "His skills moved to "
 _ISSUE_TITLE = re.compile(re.escape(ISSUE_TITLE) + r"([0-9a-f]{12})")
-TRIAGE_CLASSES = ("renamed", "removed", "contract_changed")
+TRIAGE_CLASSES = ("renamed", "removed", "contract_changed")  # a copy of one of these waits for the brain
+NEW_CLASS = "added"  # a new skill waits for the brain whether or not a copy of it exists
 _COMMIT = re.compile(r"[0-9a-f]{7,40}")
 _EMPTY_BLOB = "0" * 40
 
@@ -87,7 +89,7 @@ class Check:
         """`copy`, `not copied (<why>)`, or `new` for an added skill."""
 
         old = change.old_name or change.name
-        if change.cls == "added":
+        if change.cls == NEW_CLASS:
             return "new"
         if old in self.manifest.not_copied:
             return f"not copied ({self.manifest.not_copied[old]['why']})"
@@ -95,15 +97,16 @@ class Check:
 
     @property
     def needs_triage(self) -> bool:
-        """A copy renamed, removed or changed in contract (the brain's word on orch-it #35: a skill the
-        layer does not copy is listed, and does not wait for the brain)."""
+        """An added skill (the brain decides whether a role takes it), or a copy renamed, removed or changed in
+        contract (the brain's word on orch-it #35: a skill the layer does not copy is listed, and does not wait
+        for the brain)."""
 
-        return any(c.cls in TRIAGE_CLASSES and self.held(c) == "copy" for c in self.changes)
+        return any(c.cls == NEW_CLASS or (c.cls in TRIAGE_CLASSES and self.held(c) == "copy") for c in self.changes)
 
 
 @dataclass
 class Done:
-    status: str               # no_change, opened, already_open, declined
+    status: str               # no_change, opened, already_open, declined, waits_for_brain (no pull request: the brain first)
     new_commit: str
     url: str | None = None    # the pull request (update) or the issue (report)
     labels: list[str] = field(default_factory=list)
@@ -256,7 +259,7 @@ def _class_table(found: Check) -> str:
 
     rows = ["| skill | class | in the repo | upstream path | why |", "|---|---|---|---|---|"]
     for change in found.changed[:TABLE_ROWS_MAX]:
-        held = "copied, called by no role" if change.cls == "added" else found.held(change)
+        held = "new, called by no role" if change.cls == NEW_CLASS else found.held(change)
         path = f"{change.old_path} -> {change.new_path}" if change.cls == "renamed" else (change.new_path or change.old_path)
         rows.append(f"| `{change.name}` | {change.cls} | {_cell(held)} | `{_cell(path)}` |"
                     f" {_cell(', '.join(change.why)) or '-'} |")
@@ -273,17 +276,13 @@ def _moved(found: Check) -> str:
 
 
 def pr_body(found: Check, problems: list[str]) -> str:
-    if found.needs_triage:
-        rule = (f"Label `{TRIAGE_LABEL}`: a copy is renamed, removed or changed in what it takes or returns."
-                " It waits for the brain.")
-    else:
-        rule = "No copy is renamed, removed or changed in contract: it merges as any pull request, when green."
     refs = ("references: none outside the repo's skills" if not problems else
             "references (decision 5; the tests are red until these are fixed in this pull request):\n"
             + "\n".join(f"- {p}" for p in problems))
     return "\n\n".join([
         _moved(found) + " The copies and `.claude/skills/pocock.json` are rewritten to the new commit.",
-        rule, _class_table(found), refs, "Written by `python -m orch_it skills update`."])
+        "No copy is renamed, removed or changed in contract: it merges as any pull request, when green.",
+        _class_table(found), refs, "Written by `python -m orch_it skills update`."])
 
 
 # the human block of the issue (#398 decision 2: five fields, Russian, no file path; the Undo field's fixed English
@@ -299,34 +298,53 @@ HUMAN_LINES = {
               " отнесён к своему классу.",
     "Undo": "two-way door (один откат пулл-реквеста возвращает прежние копии); touches все роли, которые вызывают эти навыки.",
 }
+# the Plan and the Result of an issue that waits for the brain (`needs-triage`): no pull request opens for it
+HUMAN_LINES_BRAIN = {
+    "Plan": "ORCH не открывает пулл-реквест по этому тикету: мозг решает по каждому классу из таблицы ниже, а"
+            " `python -m orch_it skills update` печатает `waits_for_brain` и ничего не переносит.",
+    "Result": "мозг записал своё решение по каждому классу в этом тикете, и ни одна копия не перенесена без него.",
+}
 
 
 WEIGHT_TRIAGE, WEIGHT_PLAIN = 3, 2  # a copy that moves in what it takes or returns asks the brain first
 OUTSIDE_ROW = "3"                   # the row the outside case names: the classes row
 
 
-def issue(found: Check) -> tuple[str, str]:
+def issue(found: Check, *, waits: bool = False) -> tuple[str, str]:
     """The title and the body of the issue of `found`, a ticket in #398's shape: the human block, then
     the agent block with the class table, the acceptance rows, `Outside case:`, `Same object:`,
-    `Not in this ticket:`, `Weight:`."""
+    `Not in this ticket:`, `Weight:`. `waits`: the issue waits for the brain whatever its change (its body
+    breaks a shape rule); a waiting issue says that no pull request opens for it."""
 
     old, new = found.manifest.commit[:12], found.new_commit[:12]
     copies_changed = sum(1 for c in found.changed if found.held(c) == "copy")
+    waiting = found.needs_triage or waits
+    texts = {**HUMAN_LINES, **(HUMAN_LINES_BRAIN if waiting else {})}
     filled = {name: text.format(old=old, new=new, changed=len(found.changed), copies=copies_changed)
-              for name, text in HUMAN_LINES.items()}
+              for name, text in texts.items()}
     human = "\n".join(f"- **{name}:** {text}" for name, text in filled.items())
-    if found.needs_triage:
-        rule = (f"Label `{TRIAGE_LABEL}`: a copy is renamed, removed or changed in what it takes or returns;"
-                " the brain decides before the copies move.")
+    if waiting:
+        because = ("a skill is added, or a copy is renamed, removed or changed in what it takes or returns"
+                   if found.needs_triage else "its body breaks a shape rule, listed below")
+        rule = (f"Label `{TRIAGE_LABEL}`: {because}; the brain decides before the copies move."
+                " `python -m orch_it skills update` opens no pull request for it.")
+        rows = [
+            f"| 1 | copies | `python -m orch_it skills update` opens no pull request while this issue is labelled"
+            f" `{TRIAGE_LABEL}` (it prints `waits_for_brain`) |",
+            "| 2 | references | the brain names here each role that calls a renamed or removed copy by bare name,"
+            " before any copy moves |",
+            f"| {OUTSIDE_ROW} | classes | the class of every skill in the table above equals its class in"
+            " `python -m orch_it skills check` |"]
     else:
-        rule = f"Label `{READY_LABEL}`: no copy is renamed, removed or changed in contract."
-    acceptance = "\n".join([
-        "| row | check | pass |", "|---|---|---|",
-        f"| 1 | copies | `python -m orch_it skills update` opens one pull request whose copies equal the manifest at"
-        f" `{new}` (`test_every_copy_is_on_disk_as_its_manifest_hashes_say` green) |",
-        "| 2 | references | `test_the_repo_names_no_skill_it_does_not_hold` green on that pull request: the names of a"
-        " renamed or removed copy fixed in it |",
-        f"| {OUTSIDE_ROW} | classes | the class of every skill in the pull request's body equals the table above |"])
+        rule = (f"Label `{READY_LABEL}`: no copy is renamed, removed or changed in contract, and no skill is added;"
+                " `python -m orch_it skills update` opens one pull request for it.")
+        rows = [
+            f"| 1 | copies | `python -m orch_it skills update` opens one pull request whose copies equal the manifest at"
+            f" `{new}` (`test_every_copy_is_on_disk_as_its_manifest_hashes_say` green) |",
+            "| 2 | references | `test_the_repo_names_no_skill_it_does_not_hold` green on that pull request: the names of a"
+            " renamed or removed copy fixed in it |",
+            f"| {OUTSIDE_ROW} | classes | the class of every skill in the pull request's body equals the table above |"]
+    acceptance = "\n".join(["| row | check | pass |", "|---|---|---|", *rows])
     agent = "\n\n".join([
         f"{_moved(found)} {rule}", _class_table(found), acceptance,
         "Outside case: a skill changed only inside a support file, with no name or heading change, still stands in"
@@ -334,17 +352,19 @@ def issue(found: Check) -> tuple[str, str]:
         "Same object: `.claude/skills/` and its manifest, and the roles that call these skills by bare name (the"
         " references test holds them); `skills update` writes only the copies and the manifest",
         "Not in this ticket: which role calls an added skill (the brain decides)",
-        f"Weight: {WEIGHT_TRIAGE if found.needs_triage else WEIGHT_PLAIN}",
+        f"Weight: {WEIGHT_TRIAGE if waiting else WEIGHT_PLAIN}",
         "Written by `python -m orch_it skills report` (the daily `skills-update` workflow)."])
     return ISSUE_TITLE + new, f"## For the human\n\n{human}\n\n## For the agent\n\n{agent}\n"
 
 
 def checked_issue(found: Check) -> tuple[str, str, list[str]]:
-    """The issue with #398's shape rules run on it at write: the rules it breaks are listed in its body."""
+    """The issue with #398's shape rules run on it at write: the rules it breaks are listed in its body, and
+    such an issue waits for the brain whatever its change."""
 
     title, body = issue(found)
     broken = [v.message for v in shape.violations(model.parse(body, title=title))]
     if broken:
+        title, body = issue(found, waits=True)
         body += ("\nShape violations (#398 decision 2; not ready for an agent until they are fixed):\n"
                  + "\n".join(f"- {line}" for line in broken) + "\n")
     return title, body, broken
@@ -391,7 +411,7 @@ def _export(repo: Path, commit: str, into: Path) -> None:
         raise SkillsError("git_failed", f"the tree of {commit[:12]} could not be laid out: {e}") from None
 
 
-def _commit_skills(repo: Path, base: str, scratch: Path, message: str) -> str:
+def _commit_skills(repo: Path, base: str, scratch: Path, message: str, identity: tuple[str, str] | None = None) -> str:
     """A commit on `base` whose `.claude/skills/` is the scratch folder's, built with a scratch index."""
 
     folder = copies.SKILLS_FOLDER.as_posix()
@@ -411,11 +431,11 @@ def _commit_skills(repo: Path, base: str, scratch: Path, message: str) -> str:
         info += [f"0 {_EMPTY_BLOB}\t{rel}" for rel in sorted(modes.keys() - set(rels))]
         _run(repo, "update-index", "-z", "--index-info", env=env, stdin="".join(f"{line}\0" for line in info).encode())
         tree = _run(repo, "write-tree", env=env)
-    return _run(repo, "commit-tree", tree, "-p", base, "-m", message)
+    return _run(repo, "commit-tree", tree, "-p", base, "-m", message, env=commit_env(identity))
 
 
 def _settle(forge: Forge, found: Check, pr: str) -> list[str]:
-    """Label the pull request `needs-triage` when a copy is renamed, removed or changed in contract."""
+    """Label the pull request `needs-triage` when a skill is added or a copy is renamed, removed or changed in contract."""
 
     if not found.needs_triage:
         return []
@@ -424,7 +444,7 @@ def _settle(forge: Forge, found: Check, pr: str) -> list[str]:
 
 
 def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: str = "main",
-           cache: Path | None = None) -> Done:
+           cache: Path | None = None, identity: tuple[str, str] | None = None) -> Done:
     repo = Path(repo)
     _run(repo, "fetch", "-q", "origin", BASE_REF)
     base = _run(repo, "rev-parse", "--verify", f"origin/{BASE_REF}^{{commit}}")
@@ -437,6 +457,7 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
         found = check(scratch, upstream=upstream, ref=ref, cache=cache)
         if not found.changed:
             return Done("no_change", found.new_commit)
+        waits = found.needs_triage or bool(checked_issue(found)[2])  # the brain decides first: no pull request
         prefix = f"{BRANCH_PREFIX}{found.new_commit[:12]}-"
         prs = forge.update_prs()
         older = [p["url"] for p in prs if p["state"] == "OPEN" and not p["branch"].startswith(prefix)]
@@ -454,11 +475,17 @@ def update(repo: str | Path, *, forge: Forge, upstream: str | None = None, ref: 
         if mine_closed:
             _supersede(forge, older, mine_closed[0]["url"])
             return Done("declined", found.new_commit, mine_closed[0]["url"])
+        if waits:
+            failed = _attempt(lambda: _supersede(forge, older, found.new_commit[:12]))
+            if failed:
+                raise failed[0]
+            return Done("waits_for_brain", found.new_commit)
         branch = prefix + base[:8]
         copies.write(scratch, found.new_tree, new_manifest(found))
         refs = references.check(scratch)
         commit = _commit_skills(repo, base, scratch,
-                                f"His skills at {found.new_commit[:12]}: {len(found.changed)} changed (#397 skills update)")
+                                f"His skills at {found.new_commit[:12]}: {len(found.changed)} changed (#397 skills update)",
+                                identity)
     if not _run(repo, "ls-remote", "--heads", "origin", branch):
         _run(repo, "push", "-q", "origin", f"{commit}:refs/heads/{branch}")
     title = f"His skills move to {found.new_commit[:12]}: " + ", ".join(
