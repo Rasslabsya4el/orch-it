@@ -6,7 +6,7 @@ pull request and puts it back in the line."""
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fake_github import REPO, FakeGitHub
+from fake_github import REPO, REQUIRED, FakeGitHub
 from ticket_fixtures import fixture
 
 from orch_it import tickets
@@ -51,6 +51,7 @@ class Git:
 def world(tmp_path):
     hub = FakeGitHub(NOW)
     hub.add(10, BODY, ["ready-for-agent"], title=TITLE)
+    hub.required_by_base = {"main": set(REQUIRED)}  # main requires every job, as the protection of the layer's repo
     return hub, Store.open(tmp_path / "events")
 
 
@@ -83,9 +84,21 @@ def test_pr_open_hands_the_ready_mark_and_auto_merge_to_after_open(world, monkey
     calls = []
     monkeypatch.setattr(pr_open, "after_open", lambda *args: calls.append(args))
     done = opened(world)
-    [(hub, repo, pr, head, ticket, now, method)] = calls
-    assert (repo, pr, head, ticket, method) == (REPO, done.pr, done.head, 10, "merge")
+    [(hub, repo, pr, head, ticket, now, method, base, required)] = calls
+    assert (repo, pr, head, ticket, method, base) == (REPO, done.pr, done.head, 10, "merge", "main")
+    assert tuple(required) == REQUIRED
     assert now == world[0].now and hub is world[0]
+
+
+@pytest.mark.parametrize("requires, on", [(set(REQUIRED), True), (set(), False), ({REQUIRED[0]}, False)])
+def test_after_open_turns_auto_merge_on_only_where_the_base_requires_every_job(requires, on):
+    hub = FakeGitHub(NOW)
+    hub.required_by_base = {"main": requires}
+    pr = hub.open_pull(branch="feature")
+    pr_open.after_open(hub, REPO, pr, hub.head(pr), None, NOW, "merge", "main", REQUIRED)
+    assert marks.ready_since(hub.comments(REPO, pr)) is not None  # the mark is written on every base
+    assert hub.pull(REPO, pr).auto_merge == ("merge" if on else None)
+    assert [c for c in hub.calls if c[0] == "auto_merge"] == ([("auto_merge", pr, "merge")] if on else [])
 
 
 def test_the_acceptance_comment_on_the_ticket_holds_every_row_and_the_body_it_was_checked_on(world):

@@ -163,6 +163,35 @@ class GhPullHub(GhHub):
     def close_pull(self, repo: str, number: int) -> None:
         self._send(["api", "-X", "PATCH", f"repos/{repo}/pulls/{number}"], {"state": "closed"})
 
+    def required_checks_of(self, repo: str, base: str) -> set[str]:
+        """The names a base requires, from its classic protection (`contexts` and `checks`) and from its rulesets
+        (the `required_status_checks` rule). A 403 or 404 on either route (not protected, or a plan without it) is
+        no requirement on that route; any other refusal raises."""
+
+        names = set()
+        try:
+            found = self._object(["api", f"repos/{repo}/branches/{quote(base, safe='')}/protection"], missing_ok=True)
+        except GithubError as e:
+            if not _unprotected(e):
+                raise
+            found = None
+        section = (found or {}).get("required_status_checks")
+        if isinstance(section, dict):
+            names |= {name for name in section.get("contexts") or [] if _text(name)}
+            names |= {_text(check.get("context")) for check in section.get("checks") or [] if isinstance(check, dict)}
+        try:
+            rules = self._list(["api", f"repos/{repo}/rules/branches/{quote(base, safe='')}"])
+        except GithubError as e:
+            if not _unprotected(e):
+                raise
+            rules = []
+        for rule in rules:
+            if rule.get("type") != "required_status_checks":
+                continue
+            checks = (rule.get("parameters") or {}).get("required_status_checks") or []
+            names |= {_text(check.get("context")) for check in checks if isinstance(check, dict)}
+        return names - {""}
+
     def set_auto_merge(self, repo: str, number: int, method: str | None) -> None:
         if method is None:
             args, already = ["--disable-auto"], ("not enabled", "not on", "already disabled", "already off")
@@ -504,6 +533,11 @@ class GhPullHub(GhHub):
         if len(values) != 1 or not isinstance(values[0], dict):
             raise GithubError("gh_bad_output", f"{' '.join(args[:3])}: expected one object")
         return values[0]
+
+
+def _unprotected(error: GithubError) -> bool:
+    """GitHub's refusal to say what a base requires: 404 (not protected) or 403 (the plan has no protection)."""
+    return "HTTP 403" in str(error) or "HTTP 404" in str(error)
 
 
 def _auto_merge(repo: str, value: object) -> str | None:

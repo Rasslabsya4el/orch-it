@@ -7,7 +7,7 @@ import pytest
 
 from orch_it.skills.copies import SkillsError
 from orch_it.skills.forge import GithubForge
-from orch_it.testruns.github import GithubError
+from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, GithubError
 
 
 class FakeGh:
@@ -115,9 +115,9 @@ PULL = "https://github.com/o/r/pull/5"
 class PullGh(FakeGh):
     """Pull request 5 of o/r at `head`: the comments posted to it are read back, `pr merge` is answered."""
 
-    def __init__(self, head, *, fail=()):
+    def __init__(self, head, *, fail=(), required=DEFAULT_REQUIRED_JOBS):
         super().__init__(fail=fail)
-        self.head, self.posted = head, []
+        self.head, self.posted, self.required = head, [], list(required)  # the jobs main's protection requires
 
     def __call__(self, args):
         self.calls.append(list(args))
@@ -132,6 +132,8 @@ class PullGh(FakeGh):
                 return json.dumps([{"user": {"login": "o", "type": "User"}, "body": body,
                                     "created_at": "2026-11-02T09:00:00Z"} for body in self.posted])
             return "[]"
+        if path == "repos/o/r/branches/main/protection":
+            return json.dumps({"required_status_checks": {"strict": True, "contexts": self.required, "checks": []}})
         if path == "repos/o/r/pulls/5":
             return json.dumps({"number": 5, "title": "t", "body": "Refs #10", "state": "open", "draft": False,
                                "head": {"sha": self.head, "ref": "ticket-10", "repo": {"full_name": "o/r"}},
@@ -163,6 +165,13 @@ def test_mark_ready_twice_writes_one_mark_and_still_sets_auto_merge(tmp_path, mo
     forge.mark_ready("5")
     assert len(gh.posted) == 1
     assert len(merges(gh)) == 2
+
+
+def test_mark_ready_on_a_base_that_requires_no_job_writes_the_mark_and_no_auto_merge(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
+    gh = PullGh(HEAD, required=())
+    GithubForge("o/r", gh=gh).mark_ready(PULL)
+    assert len(gh.posted) == 1 and merges(gh) == []
 
 
 def test_a_refused_mark_ready_is_forge_failed(tmp_path, monkeypatch):

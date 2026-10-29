@@ -153,9 +153,10 @@ def _pr_open(args, store_of, repo_of, now: datetime) -> str:
         branch = args.branch or git(["rev-parse", "--abbrev-ref", "HEAD"]).strip()
     except GitError as e:
         raise PrError("git_failed", str(e)) from None
+    raw = settings.load()
     done = open_pr(GhPullHub(), store_of(), repo, args.ticket, acceptance=acceptance, branch=branch, base=args.base,
-                   git=git, settings=MergeSettings.from_settings(settings.load(), repo), now=now, role=args.role,
-                   notes=notes, part=part)
+                   required=required_jobs(raw), git=git, settings=MergeSettings.from_settings(raw, repo), now=now,
+                   role=args.role, notes=notes, part=part)
     return f"pr #{done.pr} {'reused' if done.reused else 'opened'} at {done.head[:12]}: {done.park}\n"
 
 
