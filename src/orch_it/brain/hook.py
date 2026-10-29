@@ -49,8 +49,9 @@ RULES_FILE = "docs/agents/brain.md"
 RULES_CHARS = 30_000  # past this the rules are cut, and the cut is said
 HEAD_LINE = f"The brain's rules (`{RULES_FILE}` on the default branch):"  # the head of the rules as given
 # the same line the root CLAUDE.md carries; the hook says it when its own rules read missed
-READ_WHOLE = (f"A brain chat whose context lacks the brain rules' head line, ``{HEAD_LINE}``, "
-              f"or holds it with a cut note after it, reads `{RULES_FILE}` whole before its first reply.")
+READ_WHOLE = (f"A brain chat whose context holds no message that BEGINS with the line ``{HEAD_LINE}``"
+              f" followed by the rules text, or holds it followed by a cut note, reads `{RULES_FILE}` whole"
+              " before its first reply.")
 COMPONENT = "brain_hook"
 EVENTS = ("SessionStart", "UserPromptSubmit")
 MARK_DAYS = 7  # a session's "rules given" mark older than this is removed
@@ -66,11 +67,13 @@ RENAME = ("This chat's title is {title!r}, not this repo's brain title. Ask the 
 def run(raw: str, *, store=None, open_store: Callable | None = None, repo: str | None = None, hub=None,
         rules: Callable[[str], str | None] | None = None, marks: Path | None = None) -> tuple[str, int]:
     """The hook: (stdout, exit code), always exit 0. `hub`, `rules` and `marks` replace GitHub, the
-    reading of the rules from `origin` and the folder of the per-session marks (tests)."""
+    reading of the rules from `origin` and the folder of the per-session marks (tests). An unreadable payload and an
+    unreadable transcript are the two silent exits: they cannot tell a brain, so they say nothing, by design."""
 
     payload = None
     event = None
     said = []
+    brain = False  # set once the session is known to be the brain: only then does a raise say READ_WHOLE
     events = {"store": store, "open_store": open_store, "repo": repo, "hook": "brain"}
 
     def error(code: str) -> None:
@@ -106,6 +109,7 @@ def run(raw: str, *, store=None, open_store: Callable | None = None, repo: str |
             return "", 0
         try:
             if session.is_brain(payload, wanted):
+                brain = True
                 said += _brain(payload, event, repo, raw_settings, hub, rules or rules_from_origin,
                                marks or settings.data_folder() / "brain-hook", error, events)
             elif event == "UserPromptSubmit":
@@ -119,7 +123,8 @@ def run(raw: str, *, store=None, open_store: Callable | None = None, repo: str |
             return "", 0
     except Exception as e:  # noqa: BLE001 - a broken hook never stops a prompt, and says so
         error(type(e).__name__)
-        said.append(READ_WHOLE)  # not silent: the brain is told to read its rules whole
+        if brain:  # not silent for the brain: it is told to read its rules whole; any other chat gets nothing
+            said.append(READ_WHOLE)
     if not said:
         return "", 0
     return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n\n".join(said)}},
@@ -149,8 +154,7 @@ def _rules(payload: dict, rules, error) -> list[str]:
     text = rules(cwd)
     if not text:
         error("rules_missing")
-        return [f"The brain's rules file `{RULES_FILE}` is not on the default branch of origin yet: work from the "
-                "role file and say so to the owner.", READ_WHOLE]
+        return [f"{READ_WHOLE} If `{RULES_FILE}` cannot be read, work from the role file and say so to the owner."]
     if len(text) > RULES_CHARS:
         text = text[:RULES_CHARS] + f"\n\n[cut at {RULES_CHARS} characters: read the rest of `{RULES_FILE}`]"
         return [f"{HEAD_LINE}\n\n{text}", READ_WHOLE]

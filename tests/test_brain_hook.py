@@ -14,6 +14,7 @@ import pytest
 from fake_hub import FakeHub
 from orch_it import settings
 from orch_it.brain import hook
+from orch_it.brain.hook import HEAD_LINE, READ_WHOLE
 from orch_it.events.store import Store
 
 REPO = "owner-x/orch-it"
@@ -226,14 +227,16 @@ def test_a_broken_context_check_keeps_the_rules_already_given(world, monkeypatch
     assert "# The brain: the owner's chat" in text and ("brain_hook", "RuntimeError", True) in errors(world)
 
 
-READ_WHOLE = ("A brain chat whose context lacks the brain rules' head line, ``The brain's rules (`docs/agents/brain.md` "
-              "on the default branch):``, or holds it with a cut note after it, reads `docs/agents/brain.md` "
-              "whole before its first reply.")
-
-
-def test_the_file_missing_at_origin_head_gives_the_read_it_whole_line(world):
+def test_the_file_missing_at_origin_head_gives_the_read_it_whole_line_and_one_fallback(world):
     out, code = run(world, payload(transcript(world["tmp"] / "a.jsonl", "Brain: orch-it")), rules=None)
-    assert code == 0 and READ_WHOLE in said(out)
+    text = said(out)
+    assert code == 0 and READ_WHOLE in text and f"{HEAD_LINE}\n\n" not in text
+    assert "work from the role file and say so" in text and "not on the default branch" not in text
+
+
+def test_the_root_claude_md_carries_the_line_the_hook_gives():
+    root = Path(__file__).resolve().parents[1]
+    assert READ_WHOLE in (root / "CLAUDE.md").read_text("utf-8")
 
 
 def test_rules_over_the_cap_give_the_read_it_whole_line(world):
@@ -252,13 +255,23 @@ def test_git_failing_gives_the_read_it_whole_line(world, monkeypatch):
     assert code == 0 and READ_WHOLE in said(out)
 
 
-def test_a_hook_that_raises_still_gives_the_read_it_whole_line(world, monkeypatch):
+def test_a_hook_that_raises_for_the_brain_still_gives_the_read_it_whole_line(world, monkeypatch):
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr(hook, "_brain", broken)
+    out, code = run(world, payload(transcript(world["tmp"] / "a.jsonl", "Brain: orch-it")))
+    assert code == 0 and READ_WHOLE in said(out) and ("brain_hook", "RuntimeError", True) in errors(world)
+
+
+@pytest.mark.parametrize("owner, name", [(hook.session, "is_brain"), (hook, "_subagent")])
+def test_a_raise_before_the_session_is_known_to_be_the_brain_gives_no_line(world, monkeypatch, owner, name):
     def broken(*_args):
         raise RuntimeError("broken")
 
-    monkeypatch.setattr(hook.session, "is_brain", broken)
-    out, code = run(world, payload(transcript(world["tmp"] / "a.jsonl", "Brain: orch-it")))
-    assert code == 0 and READ_WHOLE in said(out) and ("brain_hook", "RuntimeError", True) in errors(world)
+    monkeypatch.setattr(owner, name, broken)
+    out, code = run(world, payload(transcript(world["tmp"] / "a.jsonl", "Fix the parser")))
+    assert (out, code) == ("", 0) and ("brain_hook", "RuntimeError", True) in errors(world)
 
 
 def test_the_repo_s_brain_rules_fit_the_cap_or_the_read_it_whole_line_is_given(world):
