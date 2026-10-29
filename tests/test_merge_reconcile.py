@@ -108,3 +108,47 @@ def test_the_workflows_events_are_brought_into_the_machine_store_once(tmp_path):
         ("pr.commented", "runner")]
     assert not (Path(store.root) / "elsewhere").exists()  # only a store's own day folders are brought in
     assert sweep(hub, store, tmp_path, bring_events=True).imported == 0
+
+
+def test_the_workflow_watch_runs_after_the_main_check_and_opens_its_ticket(tmp_path, monkeypatch):
+    from orch_it.merge import reconcile as sweep_module
+    from orch_it.tickets.reader import TRIAGE_LABEL
+
+    hub, store, prs = world(tmp_path)
+    merged(hub, prs[10])
+    order = []
+    real_main, real_watch = sweep_module.check_main, sweep_module.watch_workflows
+
+    def main(*args, **kwargs):
+        order.append("main")
+        return real_main(*args, **kwargs)
+
+    def watch(*args, **kwargs):
+        order.append("watch")
+        return real_watch(*args, **kwargs)
+
+    monkeypatch.setattr(sweep_module, "check_main", main)
+    monkeypatch.setattr(sweep_module, "watch_workflows", watch)
+    hub.end_run("example-flow", 4117, "failure")
+    done = sweep(hub, store, tmp_path)
+    assert order == ["main", "watch"]
+    assert len(hub.issues_with_label(REPO, TRIAGE_LABEL)) == 1
+    assert done.failed == []
+
+
+def test_a_workflow_watch_that_breaks_never_stops_the_sweep(tmp_path, monkeypatch):
+    from orch_it.merge import reconcile as sweep_module
+
+    hub, store, prs = world(tmp_path)
+    merged(hub, prs[10])
+
+    def broken(*args, **kwargs):
+        raise ValueError("a bug")
+
+    monkeypatch.setattr(sweep_module, "watch_workflows", broken)
+    done = sweep(hub, store, tmp_path)
+    assert not hub.issues[(REPO, 10)].open
+    assert ("closed", f"#{prs[10]}") in done.repairs
+    assert len(done.failed) == 1 and done.failed[0].startswith("workflows:")
+    assert store.query("SELECT outcome FROM events WHERE kind = 'step.ended' AND step = 'reconcile'").rows == [
+        ("failed",)]
