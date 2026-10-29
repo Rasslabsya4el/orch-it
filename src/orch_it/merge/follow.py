@@ -18,7 +18,9 @@ has rows marked `after merge`, its park comes off and it goes back to ready for 
 row (`row_failed`), a body changed since the rows were checked (`ticket_changed`) or a person's
 comment on the ticket after them (`unanswered`) it goes to the brain and stays open; a ticket
 already closed is only recorded (`already_closed`); a ticket that waits on another pull request
-is not touched (`merged_other`).
+is not touched (`merged_other`). A skills update's pull request with no ticket of its own (`merged_alone`
+otherwise) closes the open issue `skills report` opened for its commit, with `done_text` and no acceptance
+table (`closed_skills`).
 
 Closed unmerged: a ticket parked on it goes to the brain (`closed_unmerged`).
 
@@ -61,7 +63,7 @@ from orch_it.events.store import Store
 from orch_it.merge import marks, record, red_main
 from orch_it.merge.hub import FAILED, NO_RESULT, PENDING, Check, Pull, PullHub
 from orch_it.merge.settings import MergeSettings
-from orch_it.skills.update import BRANCH_PREFIX, ISSUE_TITLE
+from orch_it.skills.update import BRANCH_PREFIX, ISSUE_TITLE, done_text
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
 from orch_it.tickets import park
 from orch_it.tickets.hub import Issue
@@ -238,6 +240,8 @@ class _Follow:
 
     def merged(self) -> FollowReport:
         merge = {"merge_sha": self.pull.merge_sha}
+        if self.issue is None and self._adopt_skills_issue():
+            return self._closed_skills(merge)
         if self.issue is None:
             self._end_pr("passed", "merged", merge)
             return self.report("merged_alone")
@@ -301,6 +305,30 @@ class _Follow:
         self._close_step("passed", None)
         self._end_pr("passed", "merged", merge)
         return self.report("part_landed", said)
+
+    def _closed_skills(self, merge: dict) -> FollowReport:
+        """A skills update's pull request merged: its skills issue (no acceptance table to judge) gets the closing
+        comment `done_text` of the commit in its branch, and closes as completed. Like the ticket's close, the issue
+        is read again and refused when it changed since it was read (`_Raced`, nothing written); a comment an
+        earlier follow posted before its close was refused is not posted a second time."""
+
+        commit = _SKILLS_HEAD.fullmatch(self.pull.branch).group(1)
+        text = marks.follow_mark("closed") + done_text(commit)
+        issue = self._fresh()
+        if issue is None or not issue.open:
+            self._close_step("refused", "already_closed")
+            self._end_pr("passed", "merged", merge)
+            return self.report("already_closed")
+        if (issue.body, issue.labels) != (self.issue.body, self.issue.labels):
+            raise _Raced(f"#{issue.number} changed since it was read")
+        if not any(said.body.startswith(text) for said in self.hub.comments(self.repo, issue.number)):
+            self.hub.comment(self.repo, issue.number, text)
+            self._write(None, None, [("comment.written", {"comment_kind": "closing"})])
+        self.hub.close_issue(self.repo, issue.number, "completed")
+        self._write(None, None, [record.ticket_closed(None, None)])
+        self._close_step("passed", None)
+        self._end_pr("passed", "merged", merge)
+        return self.report("closed_skills", commit)
 
     def _acceptance_judged(self) -> tuple[marks.Acceptance | None, tuple[str, str] | None]:
         said = self.hub.comments(self.repo, self.issue.number)

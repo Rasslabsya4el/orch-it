@@ -10,14 +10,22 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
+from datetime import UTC, datetime
 
-from orch_it import labels
+from orch_it import labels, settings
+from orch_it.merge import marks
+from orch_it.merge.gh import GhPullHub
+from orch_it.merge.pr_open import after_open
+from orch_it.merge.settings import MergeSettings
+from orch_it.settings import SettingsError
 from orch_it.skills.copies import SkillsError
 from orch_it.skills.update import BRANCH_PREFIX
 from orch_it.testruns.github import Gh, GithubError, run_gh
 
 LABEL_LIST_LIMIT = "500"
+_PULL_NUMBER = re.compile(r"(?:.*/pull/)?([1-9][0-9]*)/?")  # a pull request's url, or its bare number
 
 
 class GithubForge:
@@ -83,6 +91,28 @@ class GithubForge:
 
     def update_branch(self, pr: str) -> None:
         self._gh("pr", "update-branch", pr)
+
+    def mark_ready(self, pr: str) -> None:
+        """The ready mark and auto-merge of a pull request `update` opened or brought up to date (#424): it enters
+        the merge line. Already in the line at its head, it keeps its one mark and only auto-merge is set again."""
+
+        found = _PULL_NUMBER.fullmatch(pr.strip())
+        if found is None:
+            raise SkillsError("forge_failed", f"{pr[:120]}: no pull request number")
+        number = int(found.group(1))
+        try:
+            hub = GhPullHub(gh=self._run)
+            pull = hub.pull(self.repo, number)
+            if pull is None:
+                raise SkillsError("forge_failed", f"{self.repo}#{number}: no such pull request")
+            method = MergeSettings.from_settings(settings.load(), self.repo).merge_method
+            ready = marks.ready_since(marks.of_layer(hub.pull_comments(self.repo, number), self.repo.split("/")[0]))
+            if ready is not None and ready.head == pull.head_sha:
+                hub.set_auto_merge(self.repo, number, method)
+            else:
+                after_open(hub, self.repo, number, pull.head_sha, None, datetime.now(UTC), method)
+        except (GithubError, SettingsError) as e:
+            raise SkillsError("forge_failed", str(e)) from None
 
     def close_pr(self, pr: str, comment: str) -> None:
         self._gh("pr", "close", pr, "--comment", comment)
