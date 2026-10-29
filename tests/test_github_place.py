@@ -27,6 +27,41 @@ GREEN_JOBS = {LINUX_CHECK: DispatchedJob(), WINDOWS_CHECK: DispatchedJob(label="
 JUNIT = "<testsuites><testsuite name='pytest'><testcase classname='t' name='test_a'/></testsuite></testsuites>"
 
 
+class Clock:
+    """Time that only moves when the code sleeps or a `gh` call takes its seconds."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.t += seconds
+
+
+class SlowGh:
+    """`gh` that takes `seconds` of the clock per call; the dispatched run is listed only `appear_after` seconds
+    after the dispatch call; `ref_at` and `cancels_at` keep the clock at the branch made and at each cancel."""
+
+    def __init__(self, actions, clock, seconds, appear_after=0.0):
+        self.actions, self.clock, self.seconds, self.appear_after = actions, clock, seconds, appear_after
+        self.appear_at = 0.0
+        self.ref_at, self.cancels_at = None, []
+
+    def __call__(self, args):
+        self.clock.t += self.seconds
+        if any(a.endswith("git/refs") for a in args):
+            self.ref_at = self.clock.t
+        if any(a.endswith("/dispatches") for a in args):
+            self.appear_at = self.clock.t + self.appear_after
+        if any(a.endswith("/cancel") for a in args):
+            self.cancels_at.append(self.clock.t)
+        if any("workflows/tests.yml/runs" in a for a in args) and self.clock.t < self.appear_at:
+            return json.dumps({"workflow_runs": []})
+        return self.actions(args)
+
+
 class StubOwn:
     """The own place without a process: a green report at once."""
 
@@ -54,13 +89,15 @@ def seed(store, place, minutes, *, run_os=None):
 def world(tmp_path):
     actions = FakeActions(tmp_path, REPO, NOW - timedelta(minutes=30), jobs=dict(GREEN_JOBS), now=NOW)
     return SimpleNamespace(repos=Repos(tmp_path), store=Store.open(tmp_path / "store"), actions=actions,
-                           settings=TestSettings(github_tests=True))
+                           settings=TestSettings(github_tests=True), clock=Clock())
 
 
 def github(world, **kwargs):
     kwargs.setdefault("oses", ("linux", "windows"))
     kwargs.setdefault("gh", world.actions)
-    return GithubPlace(repo=REPO, store=world.store, settings=world.settings, sleep=lambda seconds: None, **kwargs)
+    kwargs.setdefault("sleep", world.clock.sleep)
+    kwargs.setdefault("clock", world.clock.now)
+    return GithubPlace(repo=REPO, store=world.store, settings=world.settings, **kwargs)
 
 
 def run(world, place=None, *, need_os="any", forced=None, settings=None):
@@ -327,3 +364,31 @@ def test_a_run_of_selected_ids_is_a_refused_run_and_the_rule_goes_to_another_pla
                      sleep=lambda seconds: None)
     assert (done.outcome, done.reason) == ("refused", "place_off")
     assert not any("dispatches" in " ".join(c) for c in world.actions.calls)
+
+
+# --- the bound counts the time that passed, the calls' as well as the sleeps -----------------------------
+
+def test_the_bound_counts_the_seconds_gh_calls_take_not_only_the_sleeps(world):
+    world.actions.dispatch_jobs = {LINUX_CHECK: DispatchedJob(completed=None)}  # never ends
+    world.settings = TestSettings(github_tests=True, bound_minutes=1)
+    slow = SlowGh(world.actions, world.clock, 15)
+    done = run(world, github(world, gh=slow), forced="github")
+    assert (done.outcome, done.reason) == ("no_result", "cut")
+    [cancelled_at] = slow.cancels_at
+    assert cancelled_at <= slow.ref_at + 60 + 15 + 15  # the bound, the call that found it passed, the cancel call
+
+
+def test_a_run_that_appears_only_after_the_bound_is_looked_for_once_more_and_cancelled(world):
+    world.settings = TestSettings(github_tests=True, bound_minutes=1)
+    slow = SlowGh(world.actions, world.clock, 15, appear_after=60)  # shown first to the look made after the bound
+    done = run(world, github(world, gh=slow), forced="github")
+    assert (done.outcome, done.reason) == ("no_result", "cut")
+    assert world.actions.cancelled == [world.actions.runs[REPO][0]["id"]]
+
+
+def test_a_run_that_never_appears_is_cut_and_nothing_is_cancelled(world):
+    world.settings = TestSettings(github_tests=True, bound_minutes=1)
+    slow = SlowGh(world.actions, world.clock, 15, appear_after=10_000)
+    done = run(world, github(world, gh=slow), forced="github")
+    assert (done.outcome, done.reason) == ("no_result", "cut")
+    assert world.actions.cancelled == []

@@ -13,7 +13,6 @@ account really has; else the limit is the setting `github_capacity`. Any `gh` fa
 
 from __future__ import annotations
 
-import math
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -28,7 +27,7 @@ from orch_it.testruns.github import (WORKFLOW_FILE, Gh, GithubError, import_one_
                                      moment_of, os_of, run_gh)
 from orch_it.testruns.places import Availability, PlaceEnd, PlaceRefused, PlaceVanished, Request
 
-POLL_SECONDS = 20.0  # between two reads of a run's jobs; the polls made count against the run's bound
+POLL_SECONDS = 20.0  # between two reads of a run's jobs
 CACHE_SECONDS = 60.0  # an availability reading stands this long
 QUEUE_GRACE_SECONDS = 120.0  # a job queued longer than this while others run shows the account's limit
 REQUEST_ESTIMATE = 40  # Actions requests one availability reading and one run may make, asked of the budget
@@ -120,8 +119,9 @@ class GithubPlace:
     id = "github"
 
     def __init__(self, repo: str, store: Store, settings: TestSettings, gh: Gh = run_gh,
-                 oses: tuple[str, ...] = (), sleep=time.sleep):
-        self.repo, self.store, self.settings, self.gh, self.oses, self.sleep = repo, store, settings, gh, oses, sleep
+                 oses: tuple[str, ...] = (), sleep=time.sleep, clock=time.monotonic):
+        self.repo, self.store, self.settings, self.gh, self.oses = repo, store, settings, gh, oses
+        self.sleep, self.clock = sleep, clock  # injectable: the run's bound is counted on `clock`
         self._cached: tuple[datetime, Availability] | None = None
 
     @classmethod
@@ -231,16 +231,19 @@ class GithubPlace:
             pass  # a branch left behind costs nothing; the run's own result stands
 
     def _run_on(self, ref: str, request: Request, scratch: Path) -> PlaceEnd:
-        polls = [max(1, math.ceil(request.bound_seconds / POLL_SECONDS))]
+        deadline = self.clock() + request.bound_seconds
         try:
             self.gh(["api", "-X", "POST", f"repos/{self.repo}/actions/workflows/{WORKFLOW_FILE}/dispatches", "-f",
                      f"ref={ref}"])
         except GithubError as e:
             raise PlaceRefused("place_off", str(e), step="connect") from None
-        run_id = self._find_run(ref, request.commit, polls)
-        if run_id is None:
-            return self._cut(None, request)
-        jobs = self._wait_for_jobs(run_id, polls)
+        run_id = self._find_run(ref, request.commit, deadline)
+        if run_id is None:  # a run that shows up just after the bound is still ours to stop
+            run_id = self._ours(ref, request.commit)
+            if run_id is not None:
+                self._cancel(run_id)
+            return self._cut(run_id, request)
+        jobs = self._wait_for_jobs(run_id, deadline)
         if jobs is None:
             self._cancel(run_id)
             return self._cut(run_id, request)
@@ -249,32 +252,38 @@ class GithubPlace:
             raise PlaceVanished(f"a job of run {run_id} was cancelled")
         return self._finish(run_id, present, scratch)
 
-    def _pause(self, polls: list[int]) -> bool:
-        """One poll interval spent against the bound; False when the bound's polls are used up."""
+    def _pause(self, deadline: float) -> bool:
+        """One poll interval slept, never past the deadline; False when the deadline has passed."""
 
-        polls[0] -= 1
-        if polls[0] <= 0:
+        left = deadline - self.clock()
+        if left <= 0:
             return False
-        self.sleep(POLL_SECONDS)
+        self.sleep(min(POLL_SECONDS, left))
         return True
 
-    def _find_run(self, ref: str, sha: str, polls: list[int]) -> int | None:
-        """The id of the run the dispatch made: the one on our own branch."""
+    def _ours(self, ref: str, sha: str) -> int | None:
+        """The id of the run the dispatch made, the one on our own branch; None while none is listed."""
+
+        runs = items_of(self.gh(["api", f"repos/{self.repo}/actions/workflows/{WORKFLOW_FILE}/runs"
+                                        f"?head_sha={sha}&per_page={PER_PAGE}"]), "workflow_runs")
+        ours = [run["id"] for run in runs if run.get("head_branch") == ref]
+        return max(ours) if ours else None
+
+    def _find_run(self, ref: str, sha: str, deadline: float) -> int | None:
+        """The run the dispatch made, waited for until the deadline; None when it passes first."""
 
         while True:
-            runs = items_of(self.gh(["api", f"repos/{self.repo}/actions/workflows/{WORKFLOW_FILE}/runs"
-                                            f"?head_sha={sha}&per_page={PER_PAGE}"]), "workflow_runs")
-            ours = [run["id"] for run in runs if run.get("head_branch") == ref]
-            if ours:
-                return max(ours)
-            if not self._pause(polls):
+            run_id = self._ours(ref, sha)
+            if run_id is not None:
+                return run_id
+            if not self._pause(deadline):
                 return None
 
     def _present(self, jobs: list[dict]) -> list[dict]:
         return [job for job in jobs if isinstance(job.get("name"), str)
                 and job["name"].strip() in self.settings.required_checks]
 
-    def _wait_for_jobs(self, run_id: int, polls: list[int]) -> list[dict] | None:
+    def _wait_for_jobs(self, run_id: int, deadline: float) -> list[dict] | None:
         """The run's jobs once every present required job has completed; None at the bound."""
 
         while True:
@@ -287,7 +296,7 @@ class GithubPlace:
                 return jobs
             if any(job.get("conclusion") == "cancelled" for job in present):
                 return jobs
-            if not self._pause(polls):
+            if not self._pause(deadline):
                 return None
 
     def _run_completed(self, run_id: int) -> bool:
