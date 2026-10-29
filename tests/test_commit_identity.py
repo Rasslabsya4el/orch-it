@@ -59,13 +59,20 @@ class Work:
     root: str  # the commit the scanned range starts after
 
 
-@pytest.fixture
-def repo(tmp_path):
-    path = tmp_path / "work"
+def build_repo(folder: Path) -> str:
+    """The template of `repo`: a work tree of the repo, one root commit; returns the root's sha."""
+
+    path = folder / "work"
     path.mkdir()
     git(path, "init", "-q", "-b", "main")
     git(path, "remote", "add", "origin", f"https://github.com/{REPO}.git")
-    return Work(path, commit(path, NOREPLY, NOREPLY, "root"))
+    return commit(path, NOREPLY, NOREPLY, "root")
+
+
+@pytest.fixture
+def repo(tmp_path, templates):
+    path, root = templates.copy("commit identity: work repo", build_repo, tmp_path / "work", part="work")
+    return Work(path, root)
 
 
 def scan(capsys, work: Work, *extra: str) -> tuple[int, str]:
