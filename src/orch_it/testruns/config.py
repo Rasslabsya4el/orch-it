@@ -6,24 +6,55 @@ Keys (each optional): `test_command` (argv list; `{python}`, `{report}`, `{ids_f
 entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1), `python`,
 `on` (true), `origin` (default: the caller work tree's `origin`), `ssh_options` (list of extra
 `ssh` arguments such as `["-p", "2222"]`)), `own_capacity` (1) and `github_capacity` (20, GitHub's
-concurrent job cap on a free account). A key under `repos.<owner/name>` (any case) overrides the same key for that repo.
+concurrent job cap on a free account), `required_checks` (the names of the checks a merge is held to; default
+in `defaults.json` beside this module, read by `required_checks`). A key under `repos.<owner/name>` (any case)
+overrides the same key for that repo.
 A value of the wrong shape (a NUL in a command or `test_env` value, a bound over a week
 included) raises `SettingsError("bad_setting")` naming the key.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass, field
+from importlib import resources
 
+from orch_it import settings
 from orch_it.settings import SettingsError
 
 DEFAULT_COMMAND = ("{python}", "-m", "pytest", "-q", "-p", "orch_it_ids", "--junitxml={report}")
 OSES = ("linux", "windows", "macos")
 MAX_BOUND_MINUTES = 7 * 24 * 60  # a week: a longer bound is no bound
+REQUIRED_CHECKS_SETTING = "required_checks"
 _MACHINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _default_required_checks() -> tuple[str, ...]:
+    """The default of the setting `required_checks`, read from `defaults.json` beside this module."""
+
+    text = resources.files(__package__).joinpath("defaults.json").read_text("utf-8")
+    return tuple(json.loads(text)[REQUIRED_CHECKS_SETTING])
+
+
+DEFAULT_REQUIRED_CHECKS = _default_required_checks()
+
+
+def required_checks(raw: dict, repo: str) -> tuple[str, ...]:
+    """The check names a merge is held to: the setting `required_checks`, a repo's own section
+    (`repos.<owner/name>`, any case) overriding the top level, else the default. A non-empty list of
+    non-empty names with no surrounding space; any other shape raises `SettingsError("bad_setting")`."""
+
+    merged = {**raw, **settings.repo_section(raw, repo)}
+    if REQUIRED_CHECKS_SETTING not in merged:
+        return DEFAULT_REQUIRED_CHECKS
+    names = merged[REQUIRED_CHECKS_SETTING]
+    if (not isinstance(names, list) or not names
+            or not all(isinstance(name, str) and name and name == name.strip() for name in names)):
+        raise SettingsError("bad_setting", REQUIRED_CHECKS_SETTING)
+    return tuple(dict.fromkeys(names))
 
 
 @dataclass(frozen=True)
@@ -54,6 +85,7 @@ class TestSettings:
     machines: tuple[Machine, ...] = ()
     own_capacity: int = 1
     github_capacity: int = 20
+    required_checks: tuple[str, ...] = DEFAULT_REQUIRED_CHECKS
 
     @classmethod
     def from_settings(cls, raw: dict, repo: str) -> TestSettings:
@@ -91,6 +123,7 @@ class TestSettings:
                 values[name] = _count(key, merged[key])
         if "test_machines" in merged:
             values["machines"] = _machines(merged["test_machines"])
+        values["required_checks"] = required_checks(raw, repo)
         return cls(**values)
 
 
