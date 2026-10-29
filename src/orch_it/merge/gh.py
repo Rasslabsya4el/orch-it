@@ -425,7 +425,7 @@ class GhPullHub(GhHub):
         replaced (cancelled before any job started): the newest `RUNS_SCANNED` completed runs are read, and the first
         one neither is the workflow's run."""
 
-        branch = quote(self._default_branch(repo), safe="")
+        branch = quote(self.default_branch(repo), safe="")
         found = []
         for workflow in self._workflows(repo):
             runs = self._pages(["api", f"repos/{repo}/actions/workflows/{workflow.id}/runs?status=completed"
@@ -469,7 +469,9 @@ class GhPullHub(GhHub):
             found.append(WatchIssue(issue["number"], workflow, last_run_id(texts)))
         return found
 
-    def _default_branch(self, repo: str) -> str:
+    def default_branch(self, repo: str) -> str:
+        """The repo's default branch as GitHub reports it."""
+
         found = self._object(["api", f"repos/{repo}"])
         branch = _text(found.get("default_branch")) if found else ""
         if not branch:

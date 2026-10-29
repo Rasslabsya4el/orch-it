@@ -131,6 +131,9 @@ class PullHub(Hub, Protocol):
         """Every test case of the latest attempt of each job of an Actions run, from the JUnit reports its jobs
         upload, one `Result` per case; None when no report can be read."""
 
+    def default_branch(self, repo: str) -> str:
+        """The repo's default branch as GitHub reports it."""
+
     def branch_runs(self, repo: str, branch: str) -> list[MainRun]:
         """The runs of the `tests` workflow on `branch` from a push or the schedule, newest first."""
 

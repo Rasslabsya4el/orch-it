@@ -14,8 +14,8 @@ from required_names import LINUX_CHECK, WINDOWS_CHECK
 from orch_it.events.store import Store
 from orch_it.merge.hub import Result
 from orch_it.testruns import junit
-from orch_it.testruns.config import windows_thin
-from orch_it.testruns.windows_unmarked import post_windows_time, run_unmarked_check
+from orch_it.testruns.config import OSES, windows_thin
+from orch_it.testruns.windows_unmarked import post_windows_nightly_time, post_windows_time, run_unmarked_check
 
 pytest_plugins = ["pytester"]
 
@@ -117,6 +117,26 @@ def test_a_second_night_comments_on_the_open_ticket_and_opens_none(world):
     assert again.opened == [] and again.commented == [] and len(hub.comments(REPO, number)) == 1
 
 
+def test_the_nightly_is_read_on_the_repo_s_own_default_branch(world):
+    hub, store = world
+    hub.main_branch = "trunk"  # a repo whose default branch is not the one most repos have
+    night(hub, windows_red())
+    assert len(run_unmarked_check(store, hub, SETTINGS).opened) == 1
+
+
+def test_the_os_label_in_the_unmarked_ticket_and_its_comment_is_the_setting_not_a_typed_name(world):
+    hub, store = world
+    settings = SETTINGS | {"windows_os": "invented-os"}
+    night(hub, windows_red())
+    [number] = run_unmarked_check(store, hub, settings).opened
+    night(hub, windows_red())
+    run_unmarked_check(store, hub, settings)
+    issue = hub.issues[(REPO, number)]
+    text = issue.title + issue.body + hub.comments(REPO, number)[0].body
+    assert "invented-os" in issue.title and "invented-os" in hub.comments(REPO, number)[0].body
+    assert "Windows" not in text
+
+
 def test_a_marked_test_opens_no_ticket(world):
     hub, store = world
     night(hub, windows_red(marked=True))
@@ -183,30 +203,35 @@ def windows_run(store, n, minutes, *, selection="full", tests=(), os_name=THIN.o
     return run
 
 
-def test_three_per_change_runs_under_the_target_post_nothing(world):
+OTHER_OS = next(name for name in OSES if name != THIN.os)  # an OS the thin job does not run on
+SLOW = [(f"tests/test_p.py::test_{n}", 1000 * n) for n in range(1, 9)]  # 1 s ... 8 s
+
+
+def test_three_per_change_runs_under_the_target_post_their_three_numbers_and_open_no_ticket(world):
     hub, store = world
-    for n in range(3):
-        windows_run(store, n, THIN.change_minutes - 0.5)
+    for n, minutes in enumerate((2.0, 3.0, 2.5)):
+        windows_run(store, n, minutes)
     done = post_windows_time(store, hub, SETTINGS)
-    assert done.over is False and done.median == THIN.change_minutes - 0.5 and len(done.runs) == THIN.runs
+    assert done.over is False and done.median == 2.5 and len(done.runs) == THIN.runs
+    assert done.minutes == [2.5, 3.0, 2.0]  # newest first
+    assert all(number in done.line for number in ("2.0", "2.5", "3.0")) and f"{THIN.change_minutes:g}" in done.line
     assert triage(hub) == []
 
 
-def test_fewer_than_three_runs_are_no_verdict_and_a_nightly_run_is_not_a_per_change_run(world):
+def test_fewer_than_three_runs_are_no_verdict_and_a_nightly_or_other_os_run_is_not_a_per_change_run(world):
     hub, store = world
     windows_run(store, 0, 9.0)
     windows_run(store, 1, 9.0)
     windows_run(store, 2, 40.0, selection="nightly")
-    windows_run(store, 3, 9.0, os_name="macos")
+    windows_run(store, 3, 9.0, os_name=OTHER_OS)
     done = post_windows_time(store, hub, SETTINGS)
-    assert done.median is None and done.over is False and triage(hub) == []
+    assert done.median is None and done.over is False and done.line == "" and triage(hub) == []
 
 
-def test_a_median_over_the_target_names_the_slowest_tests_in_one_ticket_and_later_comments(world):
+def test_each_of_the_three_runs_over_the_target_names_the_slowest_tests_in_one_ticket_and_later_comments(world):
     hub, store = world
-    slow = [(f"tests/test_p.py::test_{n}", 1000 * n) for n in range(1, 9)]  # 1 s ... 8 s
     for n in range(3):
-        windows_run(store, n, THIN.change_minutes + 1, tests=slow)
+        windows_run(store, n, THIN.change_minutes + 1, tests=SLOW)
     done = post_windows_time(store, hub, SETTINGS)
     assert done.over and done.median == THIN.change_minutes + 1 and done.opened
     [number] = triage(hub)
@@ -214,9 +239,74 @@ def test_a_median_over_the_target_names_the_slowest_tests_in_one_ticket_and_late
     body = hub.issues[(REPO, number)].body
     assert [test_id for test_id, _ in done.slowest] == [f"tests/test_p.py::test_{n}" for n in range(8, 8 - THIN.slowest, -1)]
     assert "tests/test_p.py::test_8" in body and "tests/test_p.py::test_1`" not in body
-    windows_run(store, 3, THIN.change_minutes + 1, tests=slow)  # a newer run: the next check comments, opens none
+    assert f"{THIN.change_minutes + 1:.1f}" in body
+    windows_run(store, 3, THIN.change_minutes + 1, tests=SLOW)  # a newer run: the next check comments, opens none
     again = post_windows_time(store, hub, SETTINGS)
     assert again.opened is False and again.ticket == number and triage(hub) == [number]
     assert "tests/test_p.py::test_8" in hub.comments(REPO, number)[0].body
     post_windows_time(store, hub, SETTINGS)  # the same newest run says nothing twice
     assert len(hub.comments(REPO, number)) == 1
+
+
+def test_a_median_over_the_target_with_one_run_under_it_is_not_three_in_a_row(world):
+    hub, store = world
+    for n, minutes in enumerate((9.0, 9.0, THIN.change_minutes - 1)):  # the newest run is under the target
+        windows_run(store, n, minutes, tests=SLOW)
+    done = post_windows_time(store, hub, SETTINGS)
+    assert done.median > THIN.change_minutes and done.over is False and done.ticket is None
+    assert triage(hub) == [] and "9.0" in done.line
+
+
+def test_a_run_under_the_target_is_posted_on_the_open_ticket_once(world):
+    hub, store = world
+    for n in range(3):
+        windows_run(store, n, THIN.change_minutes + 1, tests=SLOW)
+    [number] = [post_windows_time(store, hub, SETTINGS).ticket]
+    for n in range(3, 6):
+        windows_run(store, n, THIN.change_minutes - 1)
+    back = post_windows_time(store, hub, SETTINGS)
+    assert back.over is False and back.ticket == number and triage(hub) == [number]
+    [comment] = hub.comments(REPO, number)
+    assert f"{THIN.change_minutes - 1:.1f}" in comment.body
+    post_windows_time(store, hub, SETTINGS)
+    assert len(hub.comments(REPO, number)) == 1
+
+
+def test_the_os_label_in_the_time_ticket_is_the_setting_not_a_typed_name(world):
+    hub, store = world
+    settings = SETTINGS | {"windows_os": OTHER_OS}
+    for n in range(3):
+        windows_run(store, n, THIN.change_minutes + 1, tests=SLOW, os_name=OTHER_OS)
+    [number] = [post_windows_time(store, hub, settings).ticket]
+    issue = hub.issues[(REPO, number)]
+    assert OTHER_OS in issue.title and OTHER_OS in issue.body
+    assert "Windows" not in issue.title + issue.body + post_windows_time(store, hub, settings).line
+
+
+def test_the_nightly_time_is_posted_from_the_newest_ended_nightly_run(world):
+    hub, store = world
+    windows_run(store, 0, 11.0, selection="nightly")
+    windows_run(store, 1, 14.5, selection="nightly")
+    windows_run(store, 2, 3.0)  # a per-change run is not the night
+    windows_run(store, 3, 99.0, selection="nightly", os_name=OTHER_OS)
+    done = post_windows_nightly_time(store, hub, SETTINGS)
+    assert done.run == f"gh-{THIN.os}-nightly-1" and done.minutes == 14.5 and "14.5" in done.line
+    assert triage(hub) == []  # no open time ticket: a result line only
+
+
+def test_the_nightly_time_is_a_comment_on_the_open_time_ticket_once_per_run(world):
+    hub, store = world
+    for n in range(3):
+        windows_run(store, n, THIN.change_minutes + 1, tests=SLOW)
+    [number] = [post_windows_time(store, hub, SETTINGS).ticket]
+    windows_run(store, 3, 14.5, selection="nightly")
+    post_windows_nightly_time(store, hub, SETTINGS)
+    post_windows_nightly_time(store, hub, SETTINGS)
+    [comment] = hub.comments(REPO, number)
+    assert "14.5" in comment.body
+
+
+def test_no_nightly_run_in_the_store_posts_nothing(world):
+    hub, store = world
+    done = post_windows_nightly_time(store, hub, SETTINGS)
+    assert done.run is None and done.minutes is None and done.line == ""
