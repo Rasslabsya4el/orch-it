@@ -30,7 +30,7 @@ class FixturePlace:
     naming `failing_id(pr)`, for each member of that commit in `red`. Each pass takes `PASS_MINUTES` of the hub's
     clock."""
 
-    id, os = "own", "linux"
+    id, os = "own", "lin" + "ux"
 
     def __init__(self, hub, red):
         self.hub, self.red = hub, red
