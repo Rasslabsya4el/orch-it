@@ -10,6 +10,10 @@ line and kind, never the value; each hit is a `guard.fired` deny and a scanned c
 pass. A hook that crashes lets the push through and writes `error.raised` with `failed_open`
 true (decision 7): a pre-push that always blocks would wedge every push. A scan that finds
 something is the guard working, not a crash, and refuses even when the store cannot be written.
+
+Every push also reads the message of each commit it sends for a closing keyword before a ticket
+reference (`marks.closing_keywords`, #422): a hit refuses the push whatever the remote's visibility,
+and a failure of that read is written and lets the push on to the private-data scan.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ EXIT_REFUSED = 1
 # lines of hits printed to the person pushing; the rest is counted
 SHOWN_HITS = 50
 PATH_BOUND = 200
+# characters of the commit line a closing refusal quotes
+LINE_BOUND = 200
 
 _SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _GITHUB_REMOTE = re.compile(
@@ -127,6 +133,48 @@ def _refusal(hits: list[scanner.Hit]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _closing_refusal(closing: list[tuple[str, int, str, str]]) -> str:
+    lines = ["orch-it: push refused, a commit message holds a closing keyword before a ticket reference"
+             " (GitHub closes the ticket when the commit reaches its default branch):"]
+    lines += [f'  {sha}, line {number}, "{text[:LINE_BOUND]}", {" ".join(hit.split())}'
+              for sha, number, text, hit in closing[:SHOWN_HITS]]
+    if len(closing) > SHOWN_HITS:
+        lines.append(f"  ... and {len(closing) - SHOWN_HITS} more")
+    lines.append("write `Refs <URL>` or `Ticket: <URL>` in its place (amend or rebase) and push again")
+    return "\n".join(lines) + "\n"
+
+
+def _closing_in(sha: str, message: str, marks) -> list[tuple[str, int, str, str]]:
+    """(sha, 1-based line, that line's text, hit) for each closing keyword hit of one message. A hit
+    is located from a cursor that moves past the one before, so two hits of one text are told apart."""
+
+    found, cursor = [], 0
+    lines = message.split("\n")
+    for hit in marks.closing_keywords(message):
+        at = message.index(hit, cursor)
+        cursor = at + len(hit)
+        number = message.count("\n", 0, at) + 1
+        found.append((sha, number, lines[number - 1].rstrip("\r"), hit))
+    return found
+
+
+def _closing_hits(work_tree: Path, commits: list[str], store, repo: str) -> list[tuple[str, int, str, str]]:
+    """The closing keyword hits in the messages of the commits this push sends. The import of the
+    matcher is inside the fail-open read, so a failure of it is written like any other. A git failure
+    of a batch ends the read there: the hits of the batches before it still refuse, and the unread
+    rest is written as `error.raised` and fails open (the private-data scan still runs)."""
+
+    found = []
+    try:
+        from orch_it.merge import marks
+
+        for sha, message in scanner.messages_of_commits(work_tree, commits):
+            found += _closing_in(sha, message, marks)
+    except Exception as exc:
+        _write_crash(store, exc, repo)
+    return found
+
+
 def _say(text: str) -> None:
     """To stderr; a console that cannot show a file name's letters shows them escaped."""
 
@@ -155,22 +203,38 @@ def run_pre_push(raw_stdin: str, store, *, remote_url: str, remote_name: str,
         commits = list(dict.fromkeys(
             sha for local, remote in _pushes(raw_stdin)
             for sha in _new_commits(work_tree, local, remote, remote_name)))
-        if not commits or _is_private(visibility or visibility_of, remote_url):
-            return "", 0
-        if patterns is None:
-            patterns = scanner.Patterns.of_machine(allowed_emails=_profile_emails(repo))
-        hits = scanner.scan_commits(work_tree, commits, patterns)
     except Exception as exc:  # a guard that crashes lets the push through, and says so
         _write_crash(store, exc, repo)
         return "", 0
-    fired = ([_fired(hit) for hit in hits] if hits
-             else [hook.Fired(GUARD, "pass", "clean", f"{len(commits)} commits scanned", None)])
+    if not commits:
+        return "", 0
+    # the closing check applies to every push, the private-data scan only to a public remote; a
+    # failure of one never skips the other, and a hit of either always refuses
+    closing = _closing_hits(work_tree, commits, store, repo)
+    hits, scanned = [], False
     try:
-        hook._write_events(store, hook.Decision(bool(hits), None, fired), repo=repo, session=None)
-    except Exception:  # the store never decides a push
-        pass
-    if hits:
-        _say(_refusal(hits))
+        if not _is_private(visibility or visibility_of, remote_url):
+            if patterns is None:
+                patterns = scanner.Patterns.of_machine(allowed_emails=_profile_emails(repo))
+            hits = scanner.scan_commits(work_tree, commits, patterns)
+            scanned = True
+    except Exception as exc:  # a guard that crashes lets the push through, and says so
+        _write_crash(store, exc, repo)
+    # a closing hit writes no guard.fired: the store's closed guard set names no code for it, and
+    # a clean scan of a refused push is no pass
+    fired = [_fired(hit) for hit in hits]
+    if scanned and not hits and not closing:
+        fired = [hook.Fired(GUARD, "pass", "clean", f"{len(commits)} commits scanned", None)]
+    if fired:
+        try:
+            hook._write_events(store, hook.Decision(bool(hits), None, fired), repo=repo, session=None)
+        except Exception:  # the store never decides a push
+            pass
+    if hits or closing:
+        if hits:
+            _say(_refusal(hits))
+        if closing:
+            _say(_closing_refusal(closing))
         return "", EXIT_REFUSED
     return "", 0
 
