@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 from fake_hub import REPO, FakeHub
 from test_hook_decide import FakeWorld
+from ticket_fixtures import fixture
 
 from orch_it import language, settings
 from orch_it.guards import hook, install, prepush, scanner
@@ -271,7 +272,7 @@ def test_the_shape_check_comment_on_github_takes_its_words_from_the_table(tmp_pa
                  "issue": {"number": 1, "labels": [{"name": "ready-for-agent"}]},
                  "label": {"name": "ready-for-agent"}}
         gh_check.check_event(event, hub, env={}, run=None, home=None, host=None)
-        return hub.comments(REPO, 1)[-1]
+        return hub.comments(REPO, 1)[-1].body
 
     texts = in_each_language(tmp_path, monkeypatch, make)
     english = ("The shape check took `ready-for-agent` off this ticket. Write it again with the `write-ticket`"
@@ -311,6 +312,12 @@ def test_the_tickets_hook_internal_error_is_said_in_the_table_words(tmp_path, mo
           german=[DE["ticket_hook_internal"].format(error="RuntimeError: boom")])
 
 
+TRANSCRIPTS = Path(__file__).parent / "fixtures" / "transcripts"
+WITH_SKILL = TRANSCRIPTS / "write_ticket_called.jsonl"  # a session that called `write-ticket`
+WITHOUT_SKILL = TRANSCRIPTS / "write_ticket_not_called.jsonl"
+GOOD_BODY = fixture("good_basic")[1]  # a body that passes the shape rules, so only the tested reason is refused
+PARKED = "Parked: pr_ended #12 until 2026-11-30"
+
 # (site key, the argv of the command, its English reason as the hook wrote it before, its German reason)
 TICKET_REASONS = [
     ("ticket_unreadable_word", ["gh", "issue", "edit", "1", None],
@@ -324,9 +331,11 @@ TICKET_REASONS = [
      " write the body to a file and pass --body-file with its path",
      DE["ticket_body_way"].format(problem=DE["ticket_body_stdin"])),
     ("ticket_body_file_unreadable", ["gh", "issue", "create", "--body-file", "missing.md", "--title", "t"],
-     "body_unreadable: the body file missing.md cannot be read",
-     DE["ticket_body_file_unreadable"].format(name="missing.md", error="FileNotFoundError")),
-    ("ticket_park_by_hand", ["gh", "issue", "create", "--label", "parked", "--title", "t", "--body", "x"],
+     "body_unreadable: the body file missing.md cannot be read (FileNotFoundError); write the body to a file"
+     " and pass --body-file with its path",
+     DE["ticket_body_way"].format(problem=DE["ticket_body_file_unreadable"].format(
+         name="missing.md", error="FileNotFoundError"))),
+    ("ticket_park_by_hand", ["gh", "issue", "create", "--label", "parked", "--title", "t", "--body", GOOD_BODY],
      "park_by_hand: a park is written only by `python -m orch_it tickets park`",
      DE["ticket_park_by_hand"]),
     ("ticket_parked_label", ["gh", "issue", "edit", "5", "--add-label", "parked"],
@@ -338,10 +347,10 @@ TICKET_REASONS = [
     ("ticket_not_read", ["gh", "issue", "edit", "5", "--add-label", "ready-for-agent"],
      "issue_unreadable: #5 could not be read from GitHub to judge the edit",
      DE["ticket_not_read"].format(number=5)),
-    ("ticket_parked_line", ["gh", "issue", "edit", "5", "--body", "Parked: pr 1\n"],
+    ("ticket_parked_line", ["gh", "issue", "edit", "5", "--body", f"{PARKED}\n\n{GOOD_BODY}"],
      "park_by_hand: the `Parked:` line is written and taken off only by `tickets park` and `unpark`; keep it as it is",
      DE["ticket_parked_line"]),
-    ("ticket_write_ticket_missing", ["gh", "issue", "create", "--title", "t", "--body", "x"],
+    ("ticket_write_ticket_missing", ["gh", "issue", "create", "--title", "t", "--body", GOOD_BODY],
      "write_ticket_missing: call the Skill tool with `write-ticket` before `gh issue create`, then write the ticket again",
      DE["ticket_write_ticket_missing"].format(skill="write-ticket")),
 ]
@@ -354,10 +363,16 @@ def test_a_tickets_hook_reason_takes_its_words_from_the_table(tmp_path, monkeypa
             "ticket_parked_line": SimpleNamespace(issue=lambda repo, number: SimpleNamespace(
                 body="", title="t", labels=[], is_pr=False))}
 
+    # every case runs in a session that called `write-ticket`, except the case that tests its absence
+    transcript = WITHOUT_SKILL if key == "ticket_write_ticket_missing" else WITH_SKILL
+
     def make():
         call = ticket_hook._Call.of(argv, str(tmp_path))
-        codes, lines, repo = call.judge({}, hubs.get(key), lambda folder: REPO, str(tmp_path), Values(), {})
+        codes, lines, repo = call.judge({"transcript_path": str(transcript)}, hubs.get(key),
+                                        lambda folder: REPO, str(tmp_path), Values(), {})
         return "\n".join(lines)
 
     texts = in_each_language(tmp_path, monkeypatch, make)
-    check(texts, english, sentences=[english.split(": ", 1)[1][:40]], german=[german])
+    # the reason under test is among the lines: the body's human block is Russian (the shipped setting), so under
+    # the English setting the shape rules add their own lines, which this test does not judge
+    check(texts, english, exact=False, sentences=[english.split(": ", 1)[1][:40]], german=[german])
