@@ -192,7 +192,7 @@ def test_red_on_the_head_returns_the_ticket_to_ready_with_the_failing_ids_and_co
     assert done.outcome == "red"
     held, issue = ticket(hub)
     assert held.ready and not held.parked and "tests/test_cart.py::test_quote" in last_comment(hub, 10)
-    assert marks.ready_since(hub.comments(REPO, pr)) is None and marks.ready_since(hub.comments(REPO, pr)) is None
+    assert marks.ready_since(hub.comments(REPO, pr)) is None
     counted = events(store, "attempt.counted")
     assert len(counted) == 1 and counted[0][4]["counted"] is True and counted[0][4]["in_a_row"] == 1
     assert ("step.ended", "pr", "failed", "red") in [row[:4] for row in events(store, "step.ended")]
@@ -303,7 +303,7 @@ def test_a_person_s_comment_on_the_pull_request_leaves_the_line_and_sends_the_ti
     hub.note(pr, "Please do not merge yet, the rates change on Monday.", author="owner-x")
     done = run(hub, store, pr)
     assert done.outcome == "commented"
-    assert marks.ready_since(hub.comments(REPO, pr)) is None and marks.ready_since(hub.comments(REPO, pr)) is None
+    assert marks.ready_since(hub.comments(REPO, pr)) is None
     held, _ = ticket(hub)
     assert "needs-triage" in held.labels and not held.parked
     rows = events(store, "pr.commented")
@@ -345,7 +345,7 @@ def test_a_ticket_closed_while_its_pull_request_waits_takes_it_out_of_the_line(t
     hub.close(10, "not_planned")
     done = run(hub, store, prs[10])
     assert done.outcome == "withdrawn"
-    assert marks.ready_since(hub.comments(REPO, prs[10])) is None and marks.ready_since(hub.comments(REPO, prs[10])) is None
+    assert marks.ready_since(hub.comments(REPO, prs[10])) is None
     assert ("step.ended", "pr", "stopped", "withdrawn") in [row[:4] for row in events(store, "step.ended")]
 
 

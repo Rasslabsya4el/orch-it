@@ -3,9 +3,9 @@ one, the oldest ready first, under the repo's line lock, run on the machine unde
 (so every update and merge starts the required checks).
 
 A member of the line is an open, non-draft pull request into the base, its head in this repo (no
-fork), with a ready mark that no left mark followed; its ready time is its ready mark's. Nothing in
-GitHub merges a pull request: the line is the only one that does (#414), so no member lands out of
-its order. One run, until the line is empty or `line_minutes` pass:
+fork), with a ready mark that no left mark followed; its ready time is its ready mark's. The line is the
+only one that merges in the line's order (#414); the follow's mark-only path (#424) merges a pull request
+that has no line. One run, until the line is empty or `line_minutes` pass:
 
 1. every conflicting member leaves the line at once and its ticket goes back to ready with the
    files (the follow's conflict rule), so a conflict never holds the members behind it;
