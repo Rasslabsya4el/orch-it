@@ -221,6 +221,7 @@ def scripted_runs(asked, listed):
 def test_the_real_hub_reads_past_a_replaced_newest_run_to_the_success_run_under_it():
     success = {"started_at": "2026-10-28T08:59:00Z", "conclusion": "success"}
     hub = GhPullHub(gh=scripted_runs([], [
+        (4119, "cancelled", (), "2026-10-28T10:30:00Z"),
         (4118, "cancelled", (NOT_STARTED,), "2026-10-28T10:00:00Z"),
         (4117, "success", (success,), "2026-10-28T09:00:00Z")]))
     assert hub.latest_workflow_runs(REPO) == [

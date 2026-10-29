@@ -1,9 +1,10 @@
 """The workflow watch's decision (https://github.com/Rasslabsya4el/orchestration-layer/issues/411 rule 3, unit 2):
 what a non-green workflow run opens, comments on or closes. `decide` reads the latest ended run of each workflow and
 the open watch issues, and returns actions; it does no I/O. A run is non-green when it ended `failure`, `cancelled`
-or `timed_out`, or when it started no job at all (a run that failed at start), unless GitHub skipped it by its `if:`.
-A run GitHub skipped is neither green nor non-green: it is passed over, and the watch reads the latest run that is
-not skipped. A run is green only when it ended `success` with a job started; any other run gets no action. The
+or `timed_out`, or when it started no job at all (a run that failed at start), unless GitHub skipped it by its `if:` or replaced it.
+A run GitHub skipped, or cancelled before any job of it started because a newer run took its place in the
+concurrency queue (a replaced run), is neither green nor non-green: it is passed over, and the watch reads the
+latest run that is neither. A run is green only when it ended `success` with a job started; any other run gets no action. The
 caller passes the workflows it leaves to other checks in `skip`.
 
 A workflow is identified by its file path (`.github/workflows/x.yml`), never by its display name: two files can
