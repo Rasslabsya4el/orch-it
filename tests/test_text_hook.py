@@ -26,7 +26,8 @@ from orch_it.guards.values import Values, read_values
 HOME_WIN = "C:\\Users\\tester9"
 REPO_ROOT = "/srv/ws/proj-y"
 REPO_ROOTS = (REPO_ROOT,)
-SESSION_SCRATCH = ("C:\\Users\\tester9\\AppData\\Local\\Temp\\claude\\proj-y\\"
+REPO_SLUG = "-srv-ws-proj-y"  # REPO_ROOT with every non-alphanumeric character turned into '-' (the project's slug)
+SESSION_SCRATCH = ("C:\\Users\\tester9\\AppData\\Local\\Temp\\claude\\" + REPO_SLUG + "\\"
                    "3f2a9c1e-8b4d-4e6f-9a1b-2c3d4e5f6a7b\\scratchpad")
 OTHER_SESSION_FILE = SESSION_SCRATCH.replace("3f2a9c1e", "7d1e0c2b") + "\\plan.md"
 RULE = "no value that differs per repo, account, machine or OS; such a value is a setting with its default"
@@ -56,7 +57,11 @@ JOB_NAMES = frozenset({"lint-and-types"})
 
 
 def context(roots=()):
-    return text_hook.Context(values=VALUES, job_names=JOB_NAMES, roots=tuple(roots))
+    """The setup of the repo at REPO_ROOT (its roots and its project's slug) when `roots` is given, else a setup
+    outside any repo."""
+
+    return text_hook.Context(values=VALUES, job_names=JOB_NAMES, roots=tuple(roots),
+                             repo=REPO_ROOT if roots else "")
 
 
 CTX = context(REPO_ROOTS)
@@ -175,6 +180,41 @@ def test_another_sessions_scratchpad_file_passes_in_a_prompt_and_a_message():
     assert judge(call("SendMessage", {"message": f"the notes are at {OTHER_SESSION_FILE}"})) == []
 
 
+def test_another_projects_scratchpad_is_refused_even_under_the_same_temp_folder():
+    other = SESSION_SCRATCH.replace(REPO_SLUG, "-srv-ws-proj-z")
+    assert "home" in kinds_of(judge(call("Agent", {"prompt": f"read {other}\\plan.md"})))
+
+
+def test_a_scratchpad_whose_slug_only_starts_with_this_projects_is_refused():
+    longer = SESSION_SCRATCH.replace(REPO_SLUG, REPO_SLUG + "-old")
+    assert "home" in kinds_of(judge(call("Agent", {"prompt": f"read {longer}\\plan.md"})))
+
+
+def test_a_scratchpad_is_no_run_time_location_outside_a_repo():
+    assert "home" in kinds_of(judge(call("Agent", {"prompt": f"read {SESSION_SCRATCH}\\plan.md"}),
+                                    context_=context()))
+
+
+def test_this_projects_worktree_form_passes_even_when_git_does_not_list_it():
+    unlisted = f"{REPO_ROOT}/.claude/worktrees/wt-9/src/x.md"
+    bare = text_hook.Context(values=VALUES, job_names=JOB_NAMES, roots=(), repo=REPO_ROOT)
+    assert judge(call("Agent", {"prompt": f"edit {unlisted}"}), context_=bare) == []
+
+
+def test_another_repos_worktree_form_is_refused():
+    assert "home" in kinds_of(judge(call("Agent", {"prompt": "edit C:\\Users\\tester9\\proj-z\\.claude\\worktrees"
+                                                                "\\wt-1\\x.md"}), context_=context(REPO_ROOTS)))
+
+
+def test_a_comma_or_a_bracket_ends_an_allowed_path_so_the_value_after_it_is_still_found():
+    comma = f"read {SESSION_SCRATCH}\\plan.md,t9@example.invalid"
+    assert "git_email" in kinds_of(judge(call("Agent", {"prompt": comma}), context_=context(REPO_ROOTS)))
+    bracket = f"read ({SESSION_SCRATCH}\\plan.md)t9@example.invalid"
+    assert "git_email" in kinds_of(judge(call("Agent", {"prompt": bracket}), context_=context(REPO_ROOTS)))
+    repo_path = f"{REPO_ROOT}/docs/x.md,t9@example.invalid"
+    assert "git_email" in kinds_of(judge(call("Agent", {"prompt": repo_path}), context_=context(REPO_ROOTS)))
+
+
 def test_a_home_path_outside_the_scratchpad_form_is_refused():
     hits = judge(call("Agent", {"prompt": "read C:\\Users\\tester9\\notes\\plan.md"}))
     assert "home" in kinds_of(hits)
@@ -182,7 +222,7 @@ def test_a_home_path_outside_the_scratchpad_form_is_refused():
 
 def test_the_run_time_locations_pass_in_a_prompt_only_when_they_are_inside_the_repo_or_a_worktree():
     worktree = f"{REPO_ROOT}/.claude/worktrees/wt-415-u4/src/orch_it/guards/text_hook.py"
-    assert judge(call("Agent", {"prompt": f"edit {worktree}"}), context_=context()) == []
+    assert judge(call("Agent", {"prompt": f"edit {worktree}"}), context_=context(REPO_ROOTS)) == []
     assert judge(call("Agent", {"prompt": f"read {REPO_ROOT}/docs/STATE.md"}), context_=context(REPO_ROOTS)) == []
     assert "projects_folder" in kinds_of(judge(call("Agent", {"prompt": "read /srv/ws/other/x.md"}),
                                                context_=context(REPO_ROOTS)))

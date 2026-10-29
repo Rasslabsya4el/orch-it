@@ -35,20 +35,29 @@ SHELL_TOOLS = ("Bash", "PowerShell")  # their commands and descriptions are othe
 FILE_KEY = "file_path"  # a write of a file: judged only when the file is inside the repo
 
 _SESSION_ID = r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
-_TOKEN = r"[^\s\"'`<>|]*"  # a path or a word of a text: up to a space, a quote, a bracket or a pipe
-# the run-time locations the harness gives a session; masked in the text that stays on this machine only
-_SCRATCHPAD = re.compile(rf"{_TOKEN}{_SESSION_ID}[\\/]+scratchpad(?![A-Za-z0-9_-]){_TOKEN}")
-_WORKTREE = re.compile(rf"{_TOKEN}[\\/]\.claude[\\/]+worktrees[\\/]+{_TOKEN}")
+_TOKEN = r"[^\s\"'`<>|,()\[\]{}]*"  # a path or a word of a text: up to a space, quote, comma, bracket or pipe
+
+
+def _scratchpad_pattern(repo: str) -> re.Pattern:
+    """A session's scratchpad of this repo: `<any folder>/<the project's slug>/<session id>/scratchpad`. The slug is
+    the repo folder path with every non-alphanumeric character turned into '-', computed from `repo`; the folder
+    before it is any. Another project's slug is no match."""
+
+    slug = re.sub(r"[^A-Za-z0-9]", "-", repo)
+    return re.compile(rf"{_TOKEN}[\\/]+{re.escape(slug)}[\\/]+{_SESSION_ID}[\\/]+scratchpad(?![A-Za-z0-9_-]){_TOKEN}",
+                      re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class Context:
-    """The setup a check judges with: the values read (`Values`), the names of the repo's workflow checks, and the
-    repo's roots (its worktrees and its common git folder, each as its real path)."""
+    """The setup a check judges with: the values read (`Values`), the names of the repo's workflow checks, the
+    repo's roots (its worktrees and its common git folder, each as its real path) and the repo's main checkout
+    (`repo`, its real path; `""` outside a repo). The main checkout gives the project's slug and its worktree folder."""
 
     values: Values
     job_names: frozenset[str]
     roots: tuple[str, ...]
+    repo: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,8 +84,10 @@ def read_context(folder: str | None) -> Context:
     from orch_it.guards.values import read_values
 
     work = folder or os.getcwd()
+    roots = repo_roots(work)
+    # git lists the main checkout first, before the linked worktrees and the common folder
     return Context(values=read_values(), job_names=read_job_names(str(Path(work) / ".github" / "workflows")),
-                   roots=repo_roots(work))
+                   roots=roots, repo=roots[0] if roots else "")
 
 
 def find_text(text: str, *, stays: bool, context: Context, path: str | None = None) -> list[Hit]:
@@ -89,7 +100,7 @@ def find_text(text: str, *, stays: bool, context: Context, path: str | None = No
     from orch_it.guards.kinds import find_in_ticket_text, find_pattern_kinds
     from orch_it.guards.values import find_in
 
-    checked = _masked(text, context.roots) if stays else text
+    checked = _masked(text, context.roots, context.repo) if stays else text
     found = [Hit(finding.kind, finding.line) for finding in find_in(checked, context.values)]
     if path is None:
         pattern = find_in_ticket_text(checked, context.job_names)
@@ -205,10 +216,11 @@ def _texts(node: object, key: str | None = None) -> Iterator[str]:
             yield from _texts(item, key)
 
 
-def _masked(text: str, roots: tuple[str, ...]) -> str:
-    """`text` with each run-time location blanked to spaces, the lines and their numbers kept."""
+def _masked(text: str, roots: tuple[str, ...], repo: str) -> str:
+    """`text` with each run-time location blanked to spaces, the lines and their numbers kept: this project's
+    scratchpads, the worktree folder of this repo, and the paths inside a root."""
 
-    patterns = [_SCRATCHPAD, _WORKTREE]
+    patterns = [_scratchpad_pattern(repo), _root_pattern(f"{repo}/.claude/worktrees")] if repo else []
     patterns += [pattern for pattern in map(_root_pattern, roots) if pattern is not None]
     for pattern in patterns:
         text = pattern.sub(lambda match: " " * len(match.group()), text)
