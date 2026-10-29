@@ -1,0 +1,6 @@
+# English: the strings orch-it writes to a human. Same keys as every other table.
+
+# The shape check of a ticket (src/orch_it/tickets/shape.py): the rule for the human block's language.
+human_field_language_rule = "the text of each human field is English"
+# A character class matching the letters of this language's script; the check counts them.
+human_field_letters = "[A-Za-z]"
