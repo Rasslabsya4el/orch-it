@@ -117,7 +117,7 @@ A research run's own session and every helper session under it; the run's cost i
 _Avoid_: session family, call tree
 
 **Model alias**:
-The short name a brief asks for (`luna`, `terra`), which the settings map to the provider's model id.
+The short name a brief asks for (`small`, `big`), which the settings map to the provider's model id.
 _Avoid_: model name, model id
 
 **Job**:

@@ -2,7 +2,8 @@
 manifest file by file and classifies each skill; `skills report`, the daily run, keeps one issue per
 upstream commit; `skills update`, run by ORCH under the owner's gh, builds the new copies and manifest on
 `origin/main` without touching the work tree, pushes them to a branch and keeps one pull request per
-upstream commit, labelled `needs-triage` when a copy is renamed, removed or changed in contract."""
+upstream commit; a change that waits for the brain (a skill added, a copy renamed, removed or changed in
+contract, or a body breaking a shape rule) opens none, its issue is labelled `needs-triage`."""
 
 import subprocess
 
@@ -162,25 +163,14 @@ def test_check_classifies_his_newer_main_with_the_renames_git_reports(world):
     assert "renamed: code-review" in text and "same: teach" in text  # the list per class
 
 
-def test_update_opens_one_pr_needing_triage_and_never_touches_the_work_tree(world):
-    up = newer(world, {"skills/engineering/zoom-out/SKILL.md": None,
-                       "skills/engineering/wizard/SKILL.md": skill("wizard")})
+def test_update_with_a_removed_copy_and_a_new_skill_opens_no_pr_and_never_touches_the_work_tree(world):
+    newer(world, {"skills/engineering/zoom-out/SKILL.md": None,
+                  "skills/engineering/wizard/SKILL.md": skill("wizard")})
     head = git(world["repo"], "rev-parse", "HEAD")
     forge = FakeForge()
     done = run_update(world, forge)
-    assert done.status == "opened"
-    [(branch, title, body)] = forge.created
-    assert branch == f"skills-upstream/{up[:12]}-{head[:8]}"
-    assert "| `zoom-out` | removed |" in body and "| `wizard` | added |" in body
-    assert "called by no role" in body
-    assert forge.labels == [(done.url, "needs-triage")]
-    clone = pushed(world, branch)
-    assert copies.verify(clone) == []
-    manifest = Manifest.load(clone)
-    assert manifest.commit == up and "wizard" in manifest.skills and "zoom-out" not in manifest.skills
-    assert manifest.gone == {"zoom-out": f"removed upstream at {up[:12]}"}
-    assert git(clone, "rev-parse", "HEAD~1") == head
-    assert "references: none outside the repo's skills" in body
+    assert (done.status, done.url, forge.created, forge.labels) == ("waits_for_brain", None, [], [])
+    assert git(world["origin"], "branch", "--list", "skills-upstream/*") == ""
     # the work tree: same branch, same commit, no change, no new local branch
     assert git(world["repo"], "rev-parse", "--abbrev-ref", "HEAD") == "main"
     assert git(world["repo"], "rev-parse", "HEAD") == head
@@ -188,13 +178,68 @@ def test_update_opens_one_pr_needing_triage_and_never_touches_the_work_tree(worl
     assert git(world["repo"], "branch", "--list", "skills-upstream/*") == ""
 
 
-def test_an_update_with_only_text_changes_and_additions_is_a_plain_pull_request(world):
+@pytest.mark.parametrize("files", [
+    {"skills/engineering/zoom-out/SKILL.md": None},                                              # removed
+    {"skills/engineering/review/SKILL.md": None,
+     "skills/engineering/code-review/SKILL.md": skill("code-review", "Two axes.\n" * 20)},       # renamed
+    {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne slice.\nAt seams.\n",
+                                              description="the tdd skill, now with seams")},    # contract_changed
+], ids=["removed", "renamed", "contract_changed"])
+def test_a_copy_removed_renamed_or_changed_in_contract_opens_no_pr(world, files):
+    newer(world, files)
+    forge = FakeForge()
+    done = run_update(world, forge)
+    assert (done.status, forge.created, forge.labels) == ("waits_for_brain", [], [])
+
+
+def test_a_text_change_whose_issue_breaks_a_shape_rule_opens_no_pr(world, monkeypatch):
+    monkeypatch.setitem(update.HUMAN_LINES, "Goal", "the copies match his upstream")  # English: the shape refuses it
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
+    forge = FakeForge()
+    done = run_update(world, forge)
+    assert (done.status, forge.created) == ("waits_for_brain", [])
+
+
+def test_a_new_skill_that_waits_for_the_brain_supersedes_the_open_pr_of_an_older_one(world):
+    up = newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    old = {"url": "u/3", "branch": "skills-upstream/aaaaaaaaaaaa-11111111", "state": "OPEN"}
+    forge = FakeForge(prs=[old])
+    done = run_update(world, forge)
+    assert (done.status, forge.created) == ("waits_for_brain", [])
+    assert forge.closed == [("u/3", f"Superseded by {up[:12]}: his upstream moved on.")]
+
+
+def test_the_issue_of_a_needs_triage_change_says_the_brain_decides_and_no_pull_request_opens(world):
+    newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
+    forge = FakeForge()
+    report(world, forge)
+    [(_, body, label)] = forge.opened
+    assert label == "needs-triage" and "the brain decides" in body
+    assert "opens no pull request" in body and "opens one pull request" not in body
+
+
+def test_the_issue_of_a_text_change_says_skills_update_opens_one_pull_request(world):
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
+    forge = FakeForge()
+    report(world, forge)
+    [(_, body, label)] = forge.opened
+    assert label == "ready-for-agent" and "opens one pull request" in body and "opens no pull request" not in body
+
+
+def test_an_update_with_only_text_changes_is_a_plain_pull_request(world):
     # run under the owner's gh, its own tests start and the normal merge applies (the brain's decision on #397)
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
+    forge = FakeForge()
+    done = run_update(world, forge)
+    assert (done.status, done.labels, forge.labels) == ("opened", [], [])
+
+
+def test_an_update_with_a_new_skill_and_a_text_change_opens_no_pr(world):
     newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n"),
                   "skills/engineering/wizard/SKILL.md": skill("wizard")})
     forge = FakeForge()
     done = run_update(world, forge)
-    assert (done.status, done.labels, forge.labels) == ("opened", [], [])
+    assert (done.status, forge.created, forge.labels) == ("waits_for_brain", [], [])
 
 
 def test_a_skill_the_layer_does_not_copy_is_listed_and_does_not_wait_for_the_brain(world):
@@ -217,15 +262,13 @@ def test_a_skill_not_copied_removed_upstream_does_not_wait_but_a_copy_does(world
     assert update.check(world["repo"], cache=world["cache"]).needs_triage
 
 
-def test_a_removed_copy_still_named_by_a_role_file_is_red_in_the_body(world):
+def test_a_removed_copy_still_named_by_a_role_file_waits_for_the_brain_and_opens_no_pr(world):
     (world["repo"] / ".claude" / "agents" / "worker.md").write_text("Call the Skill tool with `zoom-out`.\n", "utf-8")
     commit_files(world["repo"], {}, "role names zoom-out")
     git(world["repo"], "push", "-q", "origin", "HEAD:main")
     newer(world, {"skills/engineering/zoom-out/SKILL.md": None})
     forge = FakeForge()
-    run_update(world, forge)
-    [(_, _, body)] = forge.created
-    assert ".claude/agents/worker.md:1: calls `zoom-out`" in body
+    assert (run_update(world, forge).status, forge.created) == ("waits_for_brain", [])
 
 
 def test_an_open_pr_for_the_same_upstream_commit_is_brought_up_to_date_not_opened_again(world):
@@ -244,7 +287,7 @@ def test_a_pr_the_brain_closed_is_not_opened_again(world):
 
 
 def test_a_newer_upstream_commit_supersedes_the_open_pr_of_an_older_one(world):
-    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
     old = {"url": "u/3", "branch": "skills-upstream/aaaaaaaaaaaa-11111111", "state": "OPEN"}
     forge = FakeForge(prs=[old])
     done = run_update(world, forge)
@@ -252,7 +295,7 @@ def test_a_newer_upstream_commit_supersedes_the_open_pr_of_an_older_one(world):
 
 
 def test_a_branch_an_earlier_run_pushed_without_its_pr_gets_its_pr(world):
-    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
     forge = FakeForge(fail={"create_pr"})
     with pytest.raises(SkillsError):
         run_update(world, forge)
@@ -271,7 +314,7 @@ def test_our_files_beside_the_copies_keep_their_names_and_modes(world):
     git(world["repo"], "update-index", "--chmod=+x", ".claude/skills/write-ticket/run.sh")
     git(world["repo"], "commit", "-q", "-m", "ours")
     git(world["repo"], "push", "-q", "origin", "HEAD:main")
-    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
     forge = FakeForge()
     run_update(world, forge)
     [(branch, _, _)] = forge.created
@@ -279,7 +322,7 @@ def test_our_files_beside_the_copies_keep_their_names_and_modes(world):
     changed = git(world["repo"], "-c", "core.quotePath=false", "diff", "--summary", "--name-status", "origin/main",
                   "FETCH_HEAD")
     assert "write-ticket" not in changed
-    assert set(changed.split()) >= {"A", ".claude/skills/wizard/SKILL.md", "M", ".claude/skills/pocock.json"}
+    assert set(changed.split()) >= {"M", ".claude/skills/tdd/SKILL.md", ".claude/skills/pocock.json"}
 
 
 def test_older_open_prs_are_superseded_on_every_run_that_finds_a_change(world):
@@ -323,6 +366,21 @@ def test_a_copy_renamed_removed_or_changed_in_contract_labels_the_issue_needs_tr
     report(world, forge)
     [(_, _, label)] = forge.opened
     assert label == "needs-triage"
+
+
+def test_a_new_skill_labels_the_issue_needs_triage_not_ready_for_an_agent(world):
+    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge()
+    report(world, forge)
+    [(_, body, label)] = forge.opened
+    assert label == "needs-triage" and "| `wizard` | added |" in body
+
+
+def test_an_update_with_only_a_new_skill_opens_no_pull_request(world):
+    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    forge = FakeForge()
+    done = run_update(world, forge)
+    assert (done.status, forge.created, forge.labels) == ("waits_for_brain", [], [])
 
 
 def test_a_second_run_updates_the_same_issue_and_never_opens_another(world):
@@ -391,7 +449,7 @@ def test_the_update_starts_from_origin_main_whatever_the_work_tree_holds(world):
     git(world["repo"], "switch", "-q", "-c", "feature")
     commit_files(world["repo"], {"notes.md": b"mine\n"}, "unrelated")
     (world["repo"] / "stray.txt").write_text("not committed", "utf-8")
-    newer(world, {"skills/engineering/wizard/SKILL.md": skill("wizard")})
+    newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
     forge = FakeForge()
     run_update(world, forge)
     [(branch, _, _)] = forge.created

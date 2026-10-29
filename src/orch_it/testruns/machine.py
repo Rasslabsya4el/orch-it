@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from orch_it import identity
 from orch_it.testruns.config import Machine
 from orch_it.testruns.places import (LOG_TAIL_CHARS, REFUSAL_STEPS, PlaceEnd, PlaceRefused, PlaceVanished,
                                      Request)
@@ -80,6 +81,16 @@ def without_credentials(url: str) -> str:
     return url
 
 
+def _identity_of(origin: str) -> dict | None:
+    """The identity the far clone's commits carry; None when gh cannot tell it (the run goes on
+    with git's own identity there)."""
+
+    try:
+        return identity.for_origin(origin)
+    except identity.IdentityError:
+        return None
+
+
 @dataclass
 class MachinePlace:
     machine: Machine
@@ -113,6 +124,7 @@ class MachinePlace:
         origin = self.machine.origin or (without_credentials(self.origin_url) if self.origin_url else None)
         if not origin:
             raise PlaceRefused("place_off", "no origin url to clone the machine's checkout from", "clone")
+        request_line = self._request_line(origin, request)  # built before ssh starts
         argv = [*self.ssh, *self.machine.ssh_options, *SSH_OPTIONS, "--", self.machine.host,
                 self.remote_command()]
         started = time.monotonic()
@@ -126,8 +138,8 @@ class MachinePlace:
         threading.Thread(target=_read_lines, args=(ssh.stdout, lines), daemon=True).start()
         threading.Thread(target=_keep_tail, args=(ssh.stderr, stderr), daemon=True).start()
         sent = threading.Event()
-        threading.Thread(target=_send, args=(ssh.stdin, [bootstrap_line(), self._request_line(
-            origin, request)], sent), daemon=True).start()
+        threading.Thread(target=_send, args=(ssh.stdin, [bootstrap_line(), request_line], sent),
+                         daemon=True).start()
         try:
             return self._read(lines, stderr, ssh, scratch, started, request.bound_seconds)
         finally:
@@ -139,7 +151,7 @@ class MachinePlace:
             "commit": request.commit, "command": list(request.command), "test_env": request.test_env,
             "bound_seconds": request.bound_seconds,
             "stale_seconds": request.bound_seconds + self.setup_seconds,
-            "ids": request.ids}) + "\n").encode("utf-8")
+            "ids": request.ids, "identity": _identity_of(origin)}) + "\n").encode("utf-8")
 
     def _read(self, lines, stderr, ssh, scratch, started, bound_seconds) -> PlaceEnd:
         host = self.machine.host

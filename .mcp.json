@@ -5,7 +5,7 @@
       "command": "python",
       "args": ["-m", "orch_it", "research-mcp"],
       "env": {
-        "CODEX_LB_API_KEY": "${CODEX_LB_API_KEY:-}",
+        "RESEARCH_API_KEY": "${RESEARCH_API_KEY:-}",
         "ORCH_IT_SETTINGS": "${ORCH_IT_SETTINGS:-}",
         "ORCH_IT_STORE": "${ORCH_IT_STORE:-}"
       }

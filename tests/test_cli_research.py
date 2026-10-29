@@ -80,4 +80,4 @@ def test_with_no_research_settings_the_command_says_which_are_missing_in_one_lin
         assert main(bridge) == 2
         err = capsys.readouterr().err
         assert err.count("\n") == 1 and err.startswith("error: research_not_set")
-        assert "research.models" in err and "research.provider" in err and "research.key_env" in err
+        assert "research.models" in err and "research.provider" in err and "research.key_env" not in err
