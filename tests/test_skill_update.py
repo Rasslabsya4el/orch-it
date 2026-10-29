@@ -5,7 +5,9 @@ upstream commit; `skills update`, run by ORCH under the owner's gh, builds the n
 upstream commit; a change that waits for the brain (a skill added, a copy renamed, removed or changed in
 contract, or a body breaking a shape rule) opens none, its issue is labelled `needs-triage`."""
 
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -37,12 +39,19 @@ def skill(name, body="Body.\n", description=None):
             f"## Notes\n\n{body}").encode()
 
 
-@pytest.fixture
-def world(tmp_path):
-    """His upstream (a local git repo), and our repo: a bare origin and a clone whose `main` holds the
-    copies of his first commit."""
+PARTS = ("upstream", "origin.git", "repo", "cache")  # the cache: the git folder his fetches go into
 
-    upstream = tmp_path / "upstream"
+
+@pytest.fixture(scope="session")
+def template(tmp_path_factory):
+    """The world of his first commit, built once per pytest worker (#421 unit 8): his upstream (a local git repo),
+    a bare origin, and our clone whose `main` holds the copies. It is built at the folders `world` hands the tests,
+    because the manifest and the remote hold those absolute paths; a snapshot of it is what each test copies back.
+    The snapshot is never written to, so no test sees another's commits."""
+
+    live = tmp_path_factory.getbasetemp() / "world"
+    live.mkdir()
+    upstream = live / "upstream"
     upstream.mkdir()
     git(upstream, "init", "-q", "-b", "main")
     pinned = commit_files(upstream, {
@@ -51,10 +60,10 @@ def world(tmp_path):
         "skills/engineering/zoom-out/SKILL.md": skill("zoom-out"),
         "skills/productivity/teach/SKILL.md": skill("teach"),
     }, "pinned")
-    origin = tmp_path / "origin.git"
-    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
-    repo = tmp_path / "repo"
-    git(tmp_path, "clone", "-q", str(origin), str(repo))
+    origin = live / "origin.git"
+    git(live, "init", "-q", "--bare", "-b", "main", str(origin))
+    repo = live / "repo"
+    git(live, "clone", "-q", str(origin), str(repo))
     git(repo, "config", "user.name", "t")
     git(repo, "config", "user.email", "t@example.invalid")
     tree = copies.read_tree(upstream, pinned)
@@ -65,8 +74,32 @@ def world(tmp_path):
     (repo / ".claude" / "agents" / "worker.md").write_text("Call the Skill tool with `tdd`.\n", "utf-8")
     commit_files(repo, {}, "copies")
     git(repo, "push", "-q", "origin", "HEAD:main")
-    return {"upstream": upstream, "pinned": pinned, "repo": repo, "origin": origin, "cache": tmp_path / "cache",
-            "tmp": tmp_path}
+    update.fetch(live / "cache", str(upstream), "main", pinned)  # the cache a first check leaves: his commit in it
+    snapshot = tmp_path_factory.mktemp("snapshot")
+    for name in PARTS:
+        shutil.copytree(live / name, snapshot / name)
+    return {"live": live, "snapshot": snapshot, "pinned": pinned}
+
+
+def _put_back(live: Path, snapshot: Path) -> None:
+    """Make `live` a copy of `snapshot`: what a test left there (a folder, or a file where a folder goes) is gone."""
+    if live.is_dir() and not live.is_symlink():
+        update._remove_tree(live)
+    elif live.exists():
+        live.unlink()
+    shutil.copytree(snapshot, live)
+
+
+@pytest.fixture
+def world(tmp_path, template):
+    """This test's world: his upstream, our repo with its bare origin, and the cache, put back from the snapshot before
+    the test. Copying folders starts no git process; the build the snapshot replaces made one per commit step."""
+
+    for name in PARTS:
+        _put_back(template["live"] / name, template["snapshot"] / name)
+    live = template["live"]
+    return {"upstream": live / "upstream", "pinned": template["pinned"], "repo": live / "repo",
+            "origin": live / "origin.git", "cache": live / "cache", "tmp": tmp_path}
 
 
 class FakeForge:
@@ -476,9 +509,25 @@ def test_a_copy_edited_on_main_stops_the_update(world):
 
 
 def test_an_upstream_that_cannot_be_reached_is_its_own_error(world, tmp_path):
+    update._remove_tree(world["cache"])  # no cache yet: the first fetch fails on a cache built this run
     with pytest.raises(SkillsError) as e:
         update.check(world["repo"], cache=world["cache"], upstream=str(tmp_path / "nowhere"))
     assert e.value.code == "fetch_failed"
+
+
+def test_an_upstream_that_cannot_be_reached_with_a_cache_is_its_own_error(world, tmp_path):
+    # the cache exists: its first fetch fails, the cache is thrown away and built again, and that fails too
+    with pytest.raises(SkillsError) as e:
+        update.check(world["repo"], cache=world["cache"], upstream=str(tmp_path / "nowhere"))
+    assert e.value.code == "fetch_failed"
+
+
+def test_a_cache_removed_whole_is_built_again_by_the_check(world):
+    update._remove_tree(world["cache"])  # no HEAD, no folder: the check initialises the cache and fetches into it
+    found = update.check(world["repo"], cache=world["cache"])
+    assert found.new_commit == world["pinned"]
+    assert {c.cls for c in found.changes} == {"same"}
+    assert (world["cache"] / "HEAD").exists() and update.render(found).splitlines()[-1] == "no change"
 
 
 def test_a_broken_cache_is_built_again(world):
