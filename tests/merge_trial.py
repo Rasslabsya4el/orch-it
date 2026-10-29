@@ -439,6 +439,8 @@ def live_row_function(number: int) -> Callable:
             if e.name != module:  # a module the live row imports is missing, not the row's own
                 raise
             raise TrialError(f"--live: row {number} has no live form yet (tests/{module}.py is not there)") from None
+        if not callable(getattr(found, f"row_{number}_live", None)):
+            raise TrialError(f"--live: tests/{module}.py has no row_{number}_live function")
         LIVE_ROW_FUNCTIONS[number] = getattr(found, f"row_{number}_live")
     return LIVE_ROW_FUNCTIONS[number]
 
@@ -870,7 +872,11 @@ class RealTrial:
 
     def workflow_runs(self, file: str) -> list[dict]:
         # GithubError is left to propagate: `_Run.wait` reads a failed listing again, a few times
-        listed = json.loads(self.gh(["api", f"repos/{self.repo}/actions/workflows/{file}/runs?per_page=30"]))
+        text = self.gh(["api", f"repos/{self.repo}/actions/workflows/{file}/runs?per_page=30"])
+        try:
+            listed = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise GithubError("gh_bad_output", f"{self.repo}: the runs of {file} are not JSON ({e})") from None
         if not isinstance(listed, dict):
             raise GithubError("gh_bad_output", f"{self.repo}: the runs of {file} are not an object")
         return list(listed.get("workflow_runs") or [])
@@ -987,8 +993,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--check-minutes", type=float, default=30, help="the line's wait for one head's checks (30)")
     p.add_argument("--wait-minutes", type=float, default=45, help="the bound of every other wait (45)")
     p.add_argument("--live", action="store_true",
-                   help="rows 4, 5 and 6 run on the repo's own workflows (the live forms, tests/merge_trial_live_r*.py): "
-                        "the trial only waits and reads; the repo is a throwaway one of its own")
+                   help="rows 4, 5 and 6 run on the repo's own workflows (the live forms, "
+                        "tests/merge_trial_live_r*.py): the trial only waits and reads; the repo is a throwaway one")
     args = p.parse_args(argv)
     if not schema.is_repo(args.repo):
         p.error(f"--repo {args.repo!r} is no OWNER/NAME")

@@ -335,3 +335,16 @@ def test_the_real_trial_reads_the_core_rate_limit_with_one_gh_call(tmp_path):
 
     assert merge_trial.RealTrial(REPO, "main", tmp_path, None, gh=gh).rate_remaining() == 4321
     assert gh.calls == [["api", "rate_limit"]]
+
+
+def test_a_live_module_without_its_row_function_is_a_trial_error_naming_the_module(monkeypatch):
+    monkeypatch.setattr(merge_trial, "LIVE_ROW_FUNCTIONS", {})
+    monkeypatch.setitem(merge_trial.LIVE_ROW_MODULES, 5, "test_merge_trial_live")
+    with pytest.raises(merge_trial.TrialError, match="test_merge_trial_live"):
+        merge_trial.live_row_function(5)
+
+
+def test_a_listing_that_is_not_json_is_a_gh_error_the_wait_tries_again(tmp_path):
+    gh = Gh("not json")
+    with pytest.raises(merge_trial.GithubError):
+        merge_trial.RealTrial(REPO, "main", tmp_path, None, gh=gh).workflow_runs("follow.yml")
