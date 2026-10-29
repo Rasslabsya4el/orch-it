@@ -20,10 +20,12 @@ Counting never fails a call: every failure of the store is swallowed by `count_c
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import sys
 from datetime import UTC, datetime, timedelta
+from importlib import resources
 
 from orch_it import settings
 from orch_it.events import schema
@@ -31,9 +33,8 @@ from orch_it.events.store import Store
 
 KIND = "github.called"
 ROLE = "script"  # the layer's own code, not a role's session: a call's role is not known where it is made
-BUDGETS = ("account", "actions")
-THRESHOLD_KEY = "request_budget_threshold"
-DEFAULT_THRESHOLD = 0.2  # a share of the limit: a poller slows under it
+THRESHOLD_KEY = "request_budget_threshold"  # a share of the limit: a poller slows under it; its default is in the json
+DEFAULTS_FILE = "github_budget_defaults.json"
 MAX_POLL_SECONDS = 3600  # the longest a poller waits, however far under the threshold
 ACTIONS_WINDOW = timedelta(hours=1)  # an Actions reading older than this says nothing about the budget now
 _PATH_REPO = re.compile(r"repos/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:[/?]|$)")
@@ -42,12 +43,19 @@ _REPO_FLAGS = ("--repo", "-R")
 dropped_calls = 0  # calls whose count the store refused (counting never fails a call); this process's count
 
 
+def default_threshold() -> float:
+    """The default share of the limit, read from `github_budget_defaults.json` beside this module."""
+
+    text = resources.files("orch_it.events").joinpath(DEFAULTS_FILE).read_text("utf-8")
+    return float(json.loads(text)[THRESHOLD_KEY])
+
+
 def threshold(raw: dict | None = None) -> float:
     """The share of the limit under which a poller slows: the setting `request_budget_threshold` read with
-    `dict.get`, the default when absent. A value that is not a number from 0 to 1 raises `bad_setting`."""
+    `dict.get`, the default from the json when absent. A value that is not a number from 0 to 1 raises `bad_setting`."""
 
     raw = settings.load() if raw is None else raw
-    value = raw.get(THRESHOLD_KEY, DEFAULT_THRESHOLD)
+    value = raw.get(THRESHOLD_KEY, default_threshold())
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
         raise settings.SettingsError("bad_setting", f"{THRESHOLD_KEY}: a share from 0 to 1")
     return float(value)

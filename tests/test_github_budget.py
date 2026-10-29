@@ -52,14 +52,15 @@ def test_poll_wait_grows_under_the_threshold_and_stays_above_it():
 
 
 def test_poll_interval_doubles_per_halving_and_caps_at_an_hour():
-    assert github_budget.poll_interval(30, 1000, 5000, 0.2) == 30  # exactly the threshold: base
-    assert github_budget.poll_interval(30, 999, 5000, 0.2) == 60
-    assert github_budget.poll_interval(30, 0, 5000, 0.2) == 3600  # exhausted: the cap
-    assert github_budget.poll_interval(30, 1, 5000, 0.2) == 3600  # deep under: the cap, never more
+    share = github_budget.default_threshold()  # the default read from the loader: 1000 is its level of 5000
+    assert github_budget.poll_interval(30, 1000, 5000, share) == 30  # exactly the threshold: base
+    assert github_budget.poll_interval(30, 999, 5000, share) == 60
+    assert github_budget.poll_interval(30, 0, 5000, share) == 3600  # exhausted: the cap
+    assert github_budget.poll_interval(30, 1, 5000, share) == 3600  # deep under: the cap, never more
 
 
 def test_threshold_is_read_with_dict_get_and_checked():
-    assert github_budget.threshold({}) == 0.2
+    assert github_budget.threshold({}) == github_budget.default_threshold()
     assert github_budget.threshold({"request_budget_threshold": 0.5}) == 0.5
     with pytest.raises(SettingsError) as refused:
         github_budget.threshold({"request_budget_threshold": "lots"})

@@ -180,6 +180,8 @@ list's rule 5): a `reason` with no list written takes no code yet, and the part 
 | `step.progressed` | none | progress of a long step, with its run and counters |
 | `machine.resumed` | `gap_minutes`, `cause` (`resume_cause`) | a machine woke after a gap; steps that crossed it read the gap |
 
+The setting `request_budget_threshold` is the share of GitHub's limit under which a poller waits longer; its default is in `src/orch_it/events/github_budget_defaults.json`.
+
 ## Refusals
 
 `orch_it.events.schema.validate` raises `EventError` with one of these codes (its `field` names the field, dotted for a
