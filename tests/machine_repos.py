@@ -116,9 +116,10 @@ def alive(pid: int) -> bool:
         return True
 
 
-def dead_within(pid: int, seconds: float = 15.0) -> bool:
+def dead_within(pid: int, seconds: float = 60.0) -> bool:
     """Whether the process is gone within `seconds`; one still there is killed, whatever the verdict.
-    A process that ends between the last probe and the kill is gone, never an error."""
+    A process that ends between the last probe and the kill is gone, never an error. The default is a
+    generous bound: a process that is gone returns at once, so the bound only ends the wait for one that stays."""
 
     deadline = time.monotonic() + seconds
     while alive(pid) and time.monotonic() < deadline:

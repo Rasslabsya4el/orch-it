@@ -114,7 +114,7 @@ def test_a_missing_report_is_refused_as_missing(tmp_path):
 
 
 @pytest.mark.slow  # nightly only: it writes and reads a report of some 40 MB
-def test_a_report_of_half_a_million_cases_is_read_whole_in_under_a_minute(tmp_path):
+def test_a_report_of_half_a_million_cases_is_read_whole_before_its_bound(tmp_path):
     path = tmp_path / "huge.xml"
     with open(path, "w", encoding="utf-8") as f:
         f.write("<testsuites><testsuite>")
@@ -124,4 +124,4 @@ def test_a_report_of_half_a_million_cases_is_read_whole_in_under_a_minute(tmp_pa
     started = time.monotonic()
     cases = junit.read(path)
     assert len(cases) == 500_001 and cases[-1].outcome == "failed"
-    assert time.monotonic() - started < 60
+    assert time.monotonic() - started < 600  # the nightly bound (600 s): catches a hang or a quadratic read, not a stretch

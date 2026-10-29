@@ -74,18 +74,23 @@ def test_the_crossing_is_one_event_and_each_later_prompt_is_still_told(tmp_path)
     assert store.query("select count(*) from events where kind = 'context.crossed'").rows == [(1,)]
 
 
-def test_a_long_transcript_is_read_from_its_end(tmp_path):
-    import time
-
+def test_a_long_transcript_is_read_from_its_end(tmp_path, monkeypatch):
     path = tmp_path / "brain.jsonl"
     line = json.dumps({"type": "user", "message": {"role": "user", "content": "x" * 40}}) + "\n"
     with path.open("w", encoding="utf-8") as out:
         out.write(json.dumps(TITLE) + "\n")
         out.write(line * 600_000)  # about 50 MB of short records
         out.write(json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": LINE + 1}}}) + "\n")
-    started = time.monotonic()
+    parsed = []  # the records parsed, counted: a read of the whole file would parse 600 000 of them
+    real_loads = json.loads
+
+    def counting_loads(raw, *args, **kwargs):
+        parsed.append(raw)
+        return real_loads(raw, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", counting_loads)
     out, _ = run(tmp_path, payload(path), Store.open(tmp_path / "store"))
-    assert PAST in out and time.monotonic() - started < 2
+    assert PAST in out and len(parsed) < 1000, len(parsed)
 
 
 @pytest.mark.parametrize("context, title, agent", [(1000, TITLE, None), (10**6, None, "orch"),
