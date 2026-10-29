@@ -67,6 +67,17 @@ class MainRun:
     jobs: dict[str, str]  # required job name -> PENDING, PASSED, FAILED or NO_RESULT
 
 
+@dataclass(frozen=True)
+class Result:
+    """One test case of a run's JUnit reports: the job whose report holds it, its id, its outcome (`passed`, `failed`,
+    `error` or `skipped`) and whether it carries the `os_touching` marker."""
+
+    job: str
+    test_id: str
+    outcome: str
+    marked: bool
+
+
 class PullHub(Hub, Protocol):
     def pull(self, repo: str, number: int) -> Pull | None: ...
 
@@ -115,6 +126,10 @@ class PullHub(Hub, Protocol):
     def failing_ids(self, repo: str, run_id: str) -> list[str] | None:
         """The ids of the failed tests of an Actions run, from the JUnit reports its jobs upload;
         None when no report can be read."""
+
+    def results(self, repo: str, run_id: str) -> list[Result] | None:
+        """Every test case of the latest attempt of each job of an Actions run, from the JUnit reports its jobs
+        upload, one `Result` per case; None when no report can be read."""
 
     def branch_runs(self, repo: str, branch: str) -> list[MainRun]:
         """The runs of the `tests` workflow on `branch` from a push or the schedule, newest first."""
