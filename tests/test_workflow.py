@@ -205,7 +205,7 @@ def test_each_night_bound_carries_its_measurement_and_margin_beside_it():
         comment_text = "\n".join(comment)
         assert "margin 1.5" in comment_text, job
         assert MEASURED_MINUTES[job] in comment_text, job
-        assert str(NIGHT_BOUND[job]) in comment_text, job
+        assert f"gets {NIGHT_BOUND[job]} minutes" in comment_text, job
         assert all(run in comment_text for run in MEASURED_RUNS), job
         assert MEASURED_ON in comment_text, job
 

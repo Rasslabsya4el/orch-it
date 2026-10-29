@@ -32,7 +32,7 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-latest
-    # Bound: 15 minutes per change; the nightly run (the NIGHTLY condition of line 30, written out here because
+    # Bound: 15 minutes per change; the nightly run (the `env.NIGHTLY` condition, written out here because
     # `env` is not readable in a job-level timeout) gets 27 minutes = ceil(17.4 x 1.5). Measured on GitHub runners
     # in runs 40870600022 and 40870569933 (2026-10-29): full suite 17.4 and 16.7 min, pytest alone 16 m 21 s;
     # margin 1.5 on the longest full run.
@@ -82,7 +82,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    # Bound: 15 minutes per change; the nightly run (the NIGHTLY condition of line 30, written out here because
+    # Bound: 15 minutes per change; the nightly run (the `env.NIGHTLY` condition, written out here because
     # `env` is not readable in a job-level timeout) gets 59 minutes = ceil(39.3 x 1.5). Measured on GitHub runners
     # in runs 40870600022 and 40870569933 (2026-10-29): full suite 39.3 and 39.2 min, pytest alone 38 m 43 s;
     # margin 1.5 on the longest full run.
