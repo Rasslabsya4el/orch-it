@@ -971,7 +971,7 @@ def completed_before(runs, moment, since):
 
 # Runs that finish during the live test fall after the moment and are left out of the judged
 # runs; the test lists this many more than it judges, and the slack replaces them.
-LIVE_SLACK = 5
+LIVE_SLACK = 15
 
 
 def newest_judged(runs, moment, since, count):
@@ -1008,6 +1008,19 @@ def test_the_slack_keeps_n_runs_judged_when_runs_complete_after_the_moment():
             for n in range(4 + LIVE_SLACK)]  # the 3 newest completed after the moment
     assert [r["id"] for r in newest_judged(runs, moment, since, 4)] == [3, 4, 5, 6]
     assert len(newest_judged(runs[:5], moment, since, 4)) == 2  # no slack: the cut leaves fewer
+
+
+def test_the_slack_holds_when_a_busy_window_completes_six_runs_after_the_moment():
+    """#448: eight runs dispatched inside nine minutes left 6 completing after the moment, one more than the
+    old slack of 5; N runs are still judged while the completions after the moment stay within the slack."""
+
+    moment, since = "2026-10-29T13:00:00Z", "2026-10-25T20:40:00Z"
+    after = 6
+    runs = [{"id": n, "status": "completed", "created_at": f"2026-10-29T12:{59 - n:02d}:00Z",
+             "updated_at": "2026-10-29T13:05:00Z" if n < after else "2026-10-29T12:50:00Z"}
+            for n in range(20 + LIVE_SLACK)]
+    assert len(newest_judged(runs, moment, since, 20)) == 20
+    assert [r["id"] for r in newest_judged(runs, moment, since, 20)][:2] == [after, after + 1]
 
 
 def test_completed_before_keeps_the_runs_completed_before_the_moment_since_the_floor():
