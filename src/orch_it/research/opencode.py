@@ -32,6 +32,7 @@ POLL_SECONDS = 0.25
 CALL_SECONDS = 60.0
 STATUS_SECONDS = 10.0
 ANSWER_SECONDS = 3.0  # one try while the server starts
+START_TRIES = 10  # ports tried for one server: a port another program takes before the server binds it is skipped
 MAX_REPLY_BYTES = 64 * 1024 * 1024
 SHIM_SUFFIXES = (".cmd", ".bat", ".ps1")
 
@@ -39,7 +40,7 @@ SHIM_SUFFIXES = (".cmd", ".bat", ".ps1")
 class OpencodeError(Exception):
     """`code`: `opencode_missing` (no program to start: not found, or a setting that is no
     program), `server_start_failed` (the server could not be started, ended before it answered,
-    or answered on a port that was not its own), `server_no_answer` (it did not answer within the
+    or no port in `START_TRIES` tries was its own), `server_no_answer` (it did not answer within the
     start bound), `http_error` (a call got an HTTP error status), `unreachable` (a call could not
     connect or timed out), `bad_reply` (a reply that is not JSON, too big, too deeply nested or
     not of the shape asked for)."""
@@ -89,6 +90,15 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def untried_port(tried: list[int]) -> int | None:
+    """A port from `free_port` that is not in `tried`; None when `free_port` keeps giving tried ones."""
+    for _ in range(START_TRIES):
+        port = free_port()
+        if port not in tried:
+            return port
+    return None
 
 
 def _shaped(reply, kind: type, where: str):
@@ -202,7 +212,6 @@ class Server:
             raise
 
     def start(self) -> Client:
-        self.port = free_port()
         try:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             self.log = open(self.log_path, "ab")
@@ -214,20 +223,41 @@ class Server:
         env = {**self.env, "OPENCODE_SERVER_PASSWORD": password,
                "OPENCODE_CONFIG_CONTENT": json.dumps(self.config), "OPENCODE_ENABLE_EXA": "1",
                "OPENCODE_DISABLE_CLAUDE_CODE": "1"}
-        self.log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} start on port {self.port}\n".encode())
+        tried: list[int] = []
+        for _ in range(START_TRIES):
+            port = untried_port(tried)
+            if port is None:
+                break
+            tried.append(port)
+            client = self._start_on(port, password, env)
+            if client is not None:
+                return client
+        raise OpencodeError("server_start_failed", f"opencode found no free port in {START_TRIES} tries, "
+                            f"see {self.log_path}")
+
+    def _start_on(self, port: int, password: str, env: dict[str, str]) -> Client | None:
+        """One try: opencode on `port`, its client once it answers. None when the port is taken: the
+        child ended with a non-zero code before it answered, or it ended right after an answer from
+        another program on the port. The try's tree is killed before None comes back."""
+        self.port = port
+        self.log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} start on port {port}\n".encode())
         self.log.flush()
-        argv = [*self.argv_prefix, "serve", "--hostname", "127.0.0.1", "--port", str(self.port)]
+        argv = [*self.argv_prefix, "serve", "--hostname", "127.0.0.1", "--port", str(port)]
         try:
             self.tree = ProcessTree.start(argv, cwd=self.work_dir, env=env, stdout=self.log,
                                           stderr=subprocess.STDOUT)
         except (OSError, ValueError) as e:
             raise OpencodeError("server_start_failed", f"{argv[0]}: {e}") from None
         self.pid = self.tree.pid
-        client = Client(f"http://127.0.0.1:{self.port}", password, self.work_dir)
+        client = Client(f"http://127.0.0.1:{port}", password, self.work_dir)
         deadline = time.monotonic() + self.start_timeout
         last = ""
+        time.sleep(POLL_SECONDS)  # a child that ends at once (a port taken) is seen before a call waits on it
         while True:
             if self.tree.poll() is not None:
+                if self.tree.returncode != 0:  # opencode exits 1 on a port another program holds
+                    self.tree.kill()
+                    return None
                 raise OpencodeError("server_start_failed", f"opencode exited with code "
                                     f"{self.tree.returncode}, see {self.log_path}")
             try:
@@ -236,9 +266,9 @@ class Server:
                 last = str(e)
             else:
                 time.sleep(POLL_SECONDS)  # an answer from a port that was taken meanwhile comes
-                if self.tree.poll() is not None:  # from another program: the server of this run is gone
-                    raise OpencodeError("server_start_failed", f"port {self.port} answered, but opencode "
-                                        f"exited with code {self.tree.returncode}, see {self.log_path}")
+                if self.tree.poll() is not None:  # from another program: the server of this try is gone
+                    self.tree.kill()
+                    return None
                 return client
             if time.monotonic() >= deadline:
                 raise OpencodeError("server_no_answer", f"no answer in {self.start_timeout:g} s "
