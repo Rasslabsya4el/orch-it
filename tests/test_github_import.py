@@ -955,6 +955,17 @@ def completed_before(runs, moment, since):
     return sorted(judged, key=lambda r: datetime.fromisoformat(r["created_at"]), reverse=True)
 
 
+# Runs that finish during the live test fall after the moment and are left out of the judged
+# runs; the test lists this many more than it judges, and the slack replaces them.
+LIVE_SLACK = 5
+
+
+def newest_judged(runs, moment, since, count):
+    """The newest `count` of the completed runs `completed_before` keeps."""
+
+    return completed_before(runs, moment, since)[:count]
+
+
 def rows_per_run(store):
     """run id -> how many events the store holds under the keys `github:<run id>/...`."""
 
@@ -964,6 +975,15 @@ def rows_per_run(store):
         run_id = int(run.split("/")[0].removeprefix("github:"))
         counts[run_id] = counts.get(run_id, 0) + rows
     return counts
+
+
+def test_the_slack_keeps_n_runs_judged_when_runs_complete_after_the_moment():
+    moment, since = "2026-10-29T13:00:00Z", "2026-10-25T20:40:00Z"
+    runs = [{"id": n, "status": "completed", "created_at": f"2026-10-29T12:{59 - n:02d}:00Z",
+             "updated_at": "2026-10-29T13:05:00Z" if n < 3 else "2026-10-29T12:50:00Z"}
+            for n in range(4 + LIVE_SLACK)]  # the 3 newest completed after the moment
+    assert [r["id"] for r in newest_judged(runs, moment, since, 4)] == [3, 4, 5, 6]
+    assert len(newest_judged(runs[:5], moment, since, 4)) == 2  # no slack: the cut leaves fewer
 
 
 def test_completed_before_keeps_the_runs_completed_before_the_moment_since_the_floor():
@@ -986,7 +1006,7 @@ def test_completed_before_keeps_the_runs_completed_before_the_moment_since_the_f
 @pytest.mark.live
 def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as_mapped(tmp_path, capsys):
     """Runs the real `gh` against the repo (nightly only, where GH_TOKEN is set), on the newest N
-    completed runs (setting `github_live_newest_runs`, default 20) so that its `gh` calls are the
+    completed runs (setting `github_live_newest_runs`, default 20; N + LIVE_SLACK are listed) so that its `gh` calls are the
     same number whatever the history holds: each required
     job of each run completed before a moment 60 s before the first import has a pair with the
     outcome its conclusion maps to and a queue wait when it started; the test rows of the newest
@@ -1004,6 +1024,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     moment = (datetime.now(UTC) - CLOCK_SKEW_MARGIN).strftime("%Y-%m-%dT%H:%M:%SZ")
     started_at = time.monotonic()
     newest = github.newest_runs()
+    listed = newest + LIVE_SLACK
     calls = []
 
     def counted_gh(args):
@@ -1011,10 +1032,13 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
         return github.run_gh(args)
 
     store = Store.open(tmp_path / "live-store")
-    first_import = import_github(store, REPO, gh=counted_gh, since=since, newest=newest)
-    listing = json.loads(counted_gh(github._list_runs_args(REPO, github._since(since), newest)))
+    first_import = import_github(store, REPO, gh=counted_gh, since=since, newest=listed)
+    listing = json.loads(counted_gh(github._list_runs_args(REPO, github._since(since), listed)))
     runs, completed_since = listing["workflow_runs"], listing["total_count"]
-    judged = completed_before(runs, moment, since)
+    judged = newest_judged(runs, moment, since, newest)
+    if len(judged) < newest and completed_since >= newest:
+        pytest.fail(f"only {len(judged)} of the newest {listed} completed runs completed before the moment,"
+                    f" {newest} wanted")
     assert judged, "no run completed since the first pull request run and before the moment"
     required = ("linux", "windows")
     run_pairs, waits = pairs(store), pairs(store, "wait")
@@ -1048,14 +1072,14 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     assert compared, "no pull request job with a report to count"
     judged_ids = [r["id"] for r in judged]
     before = rows_per_run(store)
-    import_github(store, REPO, gh=counted_gh, since=since, newest=newest)
+    import_github(store, REPO, gh=counted_gh, since=since, newest=listed)
     after = rows_per_run(store)
     changed = {i: (before.get(i, 0), after.get(i, 0)) for i in judged_ids
                if before.get(i, 0) != after.get(i, 0)}
     assert not changed, f"a second import wrote rows of judged runs (run id: before, after): {changed}"
     with capsys.disabled():
         print(f"\nlive import test: duration {time.monotonic() - started_at:.0f} s;"
-              f" runs judged {len(judged)} of the newest {newest} asked;"
+              f" runs judged {len(judged)}; setting {newest}; slack {LIVE_SLACK};"
               f" completed tests runs since {since}: {completed_since};"
               f" gh API calls: {len(calls)}")
 
