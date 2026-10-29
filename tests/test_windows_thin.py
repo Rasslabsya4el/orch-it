@@ -4,7 +4,7 @@ on Linux and carries no marker is named in a `needs-triage` ticket (`run_unmarke
 is red on the change run. The planted tests below run in pytest's own temporary folder, never in this repo."""
 
 import tomllib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -14,7 +14,8 @@ from required_names import LINUX_CHECK, WINDOWS_CHECK
 from orch_it.events.store import Store
 from orch_it.merge.hub import Result
 from orch_it.testruns import junit
-from orch_it.testruns.windows_unmarked import run_unmarked_check
+from orch_it.testruns.config import windows_thin
+from orch_it.testruns.windows_unmarked import post_windows_time, run_unmarked_check
 
 pytest_plugins = ["pytester"]
 
@@ -147,3 +148,75 @@ def test_a_marked_test_carries_the_marker_in_its_report_and_the_reader_sees_it(p
     report = pytester.path / "report.xml"
     pytester.runpytest("--junitxml", str(report)).assert_outcomes(passed=2)
     assert {case.name: case.marked for case in junit.read(report)} == {"test_marked": True, "test_plain": False}
+
+
+# --- the per-change Windows time against its target (row 5) ---
+
+THIN = windows_thin({}, REPO)
+
+
+def envelope(**over):
+    base = {"ticket": None, "role": "github", "session": None, "parent_session": None,
+            "turn": None, "note": None, "repo": REPO}
+    return base | over
+
+
+def at_minute(minute: float) -> str:
+    moment = datetime(2026, 10, 26, 10, 0, tzinfo=UTC) + timedelta(minutes=minute)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def windows_run(store, n, minutes, *, selection="full", tests=(), os_name="windows"):
+    """An ended GitHub test run on `os_name` whose pytest took `minutes`, with a `test.result` per `tests` (id, ms)."""
+
+    run = f"gh-{os_name}-{selection}-{n}"
+    events = [envelope(kind="step.started", step="test_run", run=run, at=at_minute(10 * n),
+                       detail={"place": "github", "run_os": os_name, "selection": selection})]
+    events += [envelope(kind="test.result", step="test_run", run=run, at=at_minute(10 * n + 1),
+                        detail={"test_id": test_id, "outcome": "passed", "skip_reason": None, "ms": ms, "attempt": 1})
+               for test_id, ms in tests]
+    events.append(envelope(kind="step.ended", step="test_run", run=run, at=at_minute(10 * n + 2),
+                           detail={"outcome": "passed", "run_minutes": minutes, "reason": None}))
+    with store.writer() as writer:
+        for event in events:
+            writer.write(event)
+    return run
+
+
+def test_three_per_change_runs_under_the_target_post_nothing(world):
+    hub, store = world
+    for n in range(3):
+        windows_run(store, n, THIN.change_minutes - 0.5)
+    done = post_windows_time(store, hub, SETTINGS)
+    assert done.over is False and done.median == THIN.change_minutes - 0.5 and len(done.runs) == THIN.runs
+    assert triage(hub) == []
+
+
+def test_fewer_than_three_runs_are_no_verdict_and_a_nightly_run_is_not_a_per_change_run(world):
+    hub, store = world
+    windows_run(store, 0, 9.0)
+    windows_run(store, 1, 9.0)
+    windows_run(store, 2, 40.0, selection="nightly")
+    windows_run(store, 3, 9.0, os_name="linux")
+    done = post_windows_time(store, hub, SETTINGS)
+    assert done.median is None and done.over is False and triage(hub) == []
+
+
+def test_a_median_over_the_target_names_the_slowest_tests_in_one_ticket_and_later_comments(world):
+    hub, store = world
+    slow = [(f"tests/test_p.py::test_{n}", 1000 * n) for n in range(1, 9)]  # 1 s ... 8 s
+    for n in range(3):
+        windows_run(store, n, THIN.change_minutes + 1, tests=slow)
+    done = post_windows_time(store, hub, SETTINGS)
+    assert done.over and done.median == THIN.change_minutes + 1 and done.opened
+    [number] = triage(hub)
+    assert done.ticket == number
+    body = hub.issues[(REPO, number)].body
+    assert [test_id for test_id, _ in done.slowest] == [f"tests/test_p.py::test_{n}" for n in range(8, 8 - THIN.slowest, -1)]
+    assert "tests/test_p.py::test_8" in body and "tests/test_p.py::test_1`" not in body
+    windows_run(store, 3, THIN.change_minutes + 1, tests=slow)  # a newer run: the next check comments, opens none
+    again = post_windows_time(store, hub, SETTINGS)
+    assert again.opened is False and again.ticket == number and triage(hub) == [number]
+    assert "tests/test_p.py::test_8" in hub.comments(REPO, number)[0].body
+    post_windows_time(store, hub, SETTINGS)  # the same newest run says nothing twice
+    assert len(hub.comments(REPO, number)) == 1

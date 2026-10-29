@@ -584,6 +584,19 @@ def test_the_failed_and_errored_tests_of_the_junit_artifacts_are_listed_sorted_a
     assert not Path(gh.called("download")[0][-1]).exists()  # the temp dir is gone
 
 
+def test_the_results_of_a_run_name_the_job_of_each_report_and_whether_the_case_is_marked():
+    marked = ('<testsuites><testsuite name="s"><testcase classname="tests.t_w" name="test_path"><properties>'
+              '<property name="os_touching" value="1"/></properties><failure message="x"/></testcase>'
+              '<testcase classname="tests.t_w" name="test_plain"/></testsuite></testsuites>')
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}, {"name": "junit-windows-1"}]}),
+            downloads({"junit-linux-1": JUNIT_OTHER, "junit-windows-1": marked}))
+    found = GhPullHub(gh).results(REPO, "9")
+    assert [(r.job, r.test_id, r.outcome, r.marked) for r in found] == [
+        ("linux", "tests.t_c::test_win", "failed", False), ("linux", "tests.t_a::test_red", "failed", False),
+        ("windows", "tests.t_w::test_path", "failed", True), ("windows", "tests.t_w::test_plain", "passed", False)]
+    assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": []}))).results(REPO, "9") is None
+
+
 def test_only_the_latest_attempt_of_a_job_is_read_and_an_expired_artifact_is_not():
     gh = Gh(([ARTIFACTS, "--paginate"],
              json.dumps({"artifacts": [{"name": "junit-linux-1"}, {"name": "junit-windows-1", "expired": True}]})
