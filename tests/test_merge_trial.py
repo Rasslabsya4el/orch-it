@@ -503,6 +503,14 @@ def test_the_default_branch_is_refused_as_the_base_unless_it_is_allowed(tmp_path
     assert real(tmp_path, answers, base="main", allow_default_base=True).preflight()["base_is_default"] is True
 
 
+def test_the_preflight_keeps_the_default_branch_it_read_so_a_row_needs_no_second_read(tmp_path):
+    answers = {k.replace("trial-main", "main"): v for k, v in GOOD.items()}
+    trial = real(tmp_path, answers, base="main", allow_default_base=True)
+    trial.preflight()
+
+    assert trial.default_branch == "main"
+
+
 def test_the_new_arguments_default_to_off_and_allow_default_base_reaches_the_adapter(tmp_path):
     args = merge_trial.parse_args(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "5"])
     assert args.allow_default_base is False and args.keep is False and args.store is None
