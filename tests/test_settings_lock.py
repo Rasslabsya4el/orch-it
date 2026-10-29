@@ -21,12 +21,11 @@ def _refuse_lock_creates(monkeypatch, settings_file, times):
     """`os.mkdir` of the lock folder raises PermissionError the first `times` calls, then succeeds.
     Returns the counter of the calls made on the lock folder."""
 
-    lock = settings_file.with_name(settings_file.name + ".lock")
     real_mkdir = os.mkdir
     calls = {"lock": 0}
 
     def mkdir(path, *args, **kwargs):
-        if os.fspath(path) == os.fspath(lock):
+        if os.fspath(path).startswith(os.fspath(settings.settings_path())):  # the lock sits beside the file
             calls["lock"] += 1
             if calls["lock"] <= times:
                 raise PermissionError(13, "refused while another writer removes the folder", os.fspath(path))
@@ -38,10 +37,10 @@ def _refuse_lock_creates(monkeypatch, settings_file, times):
 
 def test_a_refused_lock_create_is_waited_out_and_the_save_lands(settings_file, monkeypatch):
     calls = _refuse_lock_creates(monkeypatch, settings_file, times=3)
-    settings.save_in_repo("owner-x/orch-it", "brain_handoff_issue", 4)
+    settings.save_in_repo("owner-x/r1", "brain_handoff_issue", 4)
     assert calls["lock"] == 4  # three refusals, then the create that takes the lock
-    assert settings.load()["repos"] == {"owner-x/orch-it": {"brain_handoff_issue": 4}}
-    assert not settings_file.with_name(settings_file.name + ".lock").exists()  # released
+    assert settings.load()["repos"] == {"owner-x/r1": {"brain_handoff_issue": 4}}
+    assert [entry.name for entry in settings_file.parent.iterdir()] == [settings_file.name]  # lock released
 
 
 def test_a_refusal_that_never_clears_ends_in_the_locks_busy_error(settings_file, monkeypatch):
