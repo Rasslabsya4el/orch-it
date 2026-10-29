@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Protocol
 
 from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun
-from orch_it.tickets.hub import Comment, Hub
+from orch_it.tickets.hub import Comment, Hub, Issue
 
 PENDING, PASSED, FAILED, NO_RESULT = "pending", "passed", "failed", "no_result"
 
@@ -120,6 +120,9 @@ class PullHub(Hub, Protocol):
 
     def issues_with_label(self, repo: str, label: str) -> list[int]:
         """The numbers of the open issues (no pull requests) carrying `label`."""
+
+    def open_issues(self, repo: str) -> list[Issue]:
+        """Every open issue of the repo whatever its labels, pull requests left out."""
 
     def create_issue(self, repo: str, title: str, body: str, labels: list[str]) -> int: ...
 

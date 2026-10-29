@@ -158,6 +158,12 @@ class GhHub:
                             f"repos/{repo}/issues?labels={quote(label, safe='')}&state=open&per_page=100"])
         return [_issue(repo, item) for item in items if "pull_request" not in item]
 
+    def open_issues(self, repo: str) -> list[Issue]:
+        """Every open issue of the repo whatever its labels, pull requests left out."""
+
+        items = self._list(["api", "--paginate", f"repos/{repo}/issues?state=open&per_page=100"])
+        return [_issue(repo, item) for item in items if "pull_request" not in item]
+
     def create(self, repo: str, title: str, body: str, labels: list[str]) -> int:
         made = json_values(self._send(["api", "-X", "POST", f"repos/{repo}/issues"],
                                       {"title": title, "body": body, "labels": labels}))
