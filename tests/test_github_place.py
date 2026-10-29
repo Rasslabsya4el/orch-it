@@ -17,7 +17,7 @@ from orch_it.testruns import place_rule
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.github import GithubError
 from orch_it.testruns.github_place import GithubPlace, oses_of_workflow
-from orch_it.testruns.places import PlaceEnd
+from orch_it.testruns.places import PlaceEnd, PlaceRefused, Request
 from orch_it.testruns.runner import offers_of, run_tests
 
 REPO = "acme-x/widgets-y"
@@ -308,3 +308,22 @@ def test_a_second_dispatch_for_the_same_sha_reads_only_its_own_run(world):
     done = run(world, forced="github")
     assert done.outcome == "passed"
     assert len(world.actions.runs[REPO]) == 2
+
+
+def test_a_request_that_selects_ids_is_refused_before_anything_is_made_on_github(world, tmp_path):
+    # the dispatch runs the whole workflow; a run of chosen ids recorded under that selection would be a false one
+    request = Request(world.repos.caller, world.repos.old, ("pytest",), {}, 900.0, ["tests/test_a.py::test_one"])
+    with pytest.raises(PlaceRefused) as refused:
+        github(world).run(request, tmp_path / "scratch")
+    assert refused.value.code == "place_off"
+    assert world.actions.calls == [] and world.actions.refs == {}
+
+
+def test_a_run_of_selected_ids_is_a_refused_run_and_the_rule_goes_to_another_place(world, tmp_path):
+    ids = tmp_path / "ids.txt"
+    ids.write_text("tests/test_a.py::test_one" + chr(10), "utf-8")
+    done = run_tests(world.store, work_tree=world.repos.caller, repo=REPO, settings=world.settings, ids_file=ids,
+                     places={"own": StubOwn(), "github": github(world)}, place="github", now=lambda: NOW,
+                     sleep=lambda seconds: None)
+    assert (done.outcome, done.reason) == ("refused", "place_off")
+    assert not any("dispatches" in " ".join(c) for c in world.actions.calls)

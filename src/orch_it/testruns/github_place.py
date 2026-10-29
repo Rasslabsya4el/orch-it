@@ -203,6 +203,8 @@ class GithubPlace:
     # --- one run ----------------------------------------------------------------------------------
 
     def run(self, request: Request, scratch: Path) -> PlaceEnd:
+        if request.ids is not None:  # the dispatch runs the whole workflow: it cannot run a selection of ids
+            raise PlaceRefused("place_off", "a selection of ids cannot run on GitHub")
         if not request.commit:
             raise PlaceRefused("place_off", "no commit to run", step="commit")
         ref = f"{REF_PREFIX}{uuid.uuid4().hex[:12]}"
