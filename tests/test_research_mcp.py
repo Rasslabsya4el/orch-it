@@ -44,8 +44,12 @@ class McpServer:
     """The server process and a JSON-RPC conversation with it, every read bounded."""
 
     def __init__(self, env: dict, cwd: Path):
-        assert ENTRY["command"] == "python" and ENTRY["args"] == ["-m", "orch_it", "research-mcp"]
-        self.process = subprocess.Popen([sys.executable, *ENTRY["args"]], cwd=cwd, env=env,
+        # the entry as `.mcp.json` names it: `sh hooks/orch-it -m orch_it research-mcp`, the shim's path
+        # made absolute here because the server runs in `cwd`, a folder of the test's own
+        assert ENTRY["command"] == "sh" and ENTRY["args"][1:] == ["-m", "orch_it", "research-mcp"]
+        # this interpreter runs the server (the shim's ORCH_IT_PYTHON), as before the shim existed
+        self.process = subprocess.Popen([ENTRY["command"], str(REPO / ENTRY["args"][0]), *ENTRY["args"][1:]],
+                                        cwd=cwd, env=env | {"ORCH_IT_PYTHON": sys.executable},
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                         creationflags=NO_WINDOW)
         self.lines: list[str] = []

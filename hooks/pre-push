@@ -3,10 +3,11 @@
 # private data. Git passes the remote's name and url as arguments and the refs on stdin.
 # Installed by `python -m orch_it guards install` (git config core.hooksPath hooks).
 #
+# The interpreter comes from the shim beside this file (hooks/orch-it: the order it finds one in).
 # Only exit 1 (the guard's own refusal) blocks the push. Any other nonzero code means the
-# launcher itself failed (python missing, the module not importable, an argparse error) — a
+# launcher itself failed (no interpreter, the module not importable, an argparse error) — a
 # guard that crashes fails OPEN (decision 7), so the push is let through rather than wedged.
-python -m orch_it hook pre-push "$@"
+sh "$(dirname "$0")/orch-it" -m orch_it hook pre-push "$@"
 code=$?
 [ "$code" = "1" ] && exit 1
 exit 0

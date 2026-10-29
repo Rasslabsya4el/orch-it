@@ -409,7 +409,7 @@ def test_the_tracked_hook_is_a_small_lf_sh_script_that_runs_the_entry_point_and_
     assert lines[0] == "#!/bin/sh"
     # runs the entry point, and only the guard's own refusal (exit 1) blocks — any other
     # nonzero code is a launcher failure and fails open (decision 7)
-    assert 'python -m orch_it hook pre-push "$@"' in lines
+    assert 'sh "$(dirname "$0")/orch-it" -m orch_it hook pre-push "$@"' in lines
     assert '[ "$code" = "1" ] && exit 1' in lines
     assert "exit 0" in lines
     assert len(lines) <= 16
@@ -425,12 +425,10 @@ def hooked(tmp_path, repo):
     """`repo` with the tracked hook installed as its hooks folder (run by this interpreter, on this
     checkout's source) and a bare remote that no one can ask GitHub about."""
 
-    exe = sys.executable.replace("\\", "/")
     hooks = tmp_path / "hooks"
     hooks.mkdir()
-    script = HOOK.read_text("utf-8").replace("python -m orch_it", f'"{exe}" -m orch_it')
-    assert exe in script
-    (hooks / "pre-push").write_bytes(script.encode("utf-8"))
+    for name in ("pre-push", "orch-it"):  # the hook and the interpreter shim it calls, beside it
+        (hooks / name).write_bytes((ROOT / "hooks" / name).read_bytes())
     (hooks / "pre-push").chmod(0o755)
     bare = tmp_path / "bare.git"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True,
@@ -438,7 +436,7 @@ def hooked(tmp_path, repo):
     repo.git("config", "core.hooksPath", str(hooks))
     repo.git("remote", "add", "origin", str(bare))
     repo.env = repo.env | {"PYTHONPATH": str(ROOT / "src"), "ORCH_IT_STORE": str(tmp_path / "hook-store"),
-                           "PYTHONIOENCODING": "utf-8"}
+                           "PYTHONIOENCODING": "utf-8", "ORCH_IT_PYTHON": sys.executable}
     return repo, bare
 
 
@@ -484,13 +482,11 @@ def test_the_pre_push_hook_script_fails_open_on_a_launcher_failure(tmp_path, fak
     if sh is None:
         pytest.skip("no POSIX sh to run the hook script")
     script = Path(__file__).resolve().parents[1] / "hooks" / "pre-push"
-    fake_dir = tmp_path / "bin"
-    fake_dir.mkdir()
-    fake = fake_dir / "python"
+    fake = tmp_path / "fake-interpreter"
     fake.write_text(f"#!/bin/sh\nexit {fake_code}\n")
     fake.chmod(0o755)
     env = dict(os.environ)
-    env["PATH"] = str(fake_dir) + os.pathsep + env["PATH"]
+    env["ORCH_IT_PYTHON"] = fake.as_posix()  # the shim runs this interpreter, whatever PATH holds
     done = _sp.run([sh, str(script), "origin", "https://x/y.git"], input="", text=True,
                    env=env, capture_output=True, timeout=30)
     assert done.returncode == expected, (fake_code, done.returncode, done.stderr)

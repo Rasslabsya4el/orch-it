@@ -1,0 +1,26 @@
+#!/bin/sh
+# The interpreter shim of orch-it (#413, unit 4): runs its arguments with the Python that runs orch_it.
+#   sh hooks/orch-it -m orch_it hook pre-push      (the git hook; `hooks/pre-push` calls it so)
+#   sh "$CLAUDE_PROJECT_DIR"/hooks/orch-it -m orch_it hook brain   (`.claude/settings.json` hooks)
+# The interpreter is found, never assumed, in this order:
+#   1. $ORCH_IT_PYTHON, one executable (a path or a command name), when this machine sets it;
+#   2. the Windows launcher `py -3`, when `py` is on PATH;
+#   3. `python3`, then `python`, the first on PATH.
+# None found: a message on stderr and exit 127 (the git hook then lets the push through, decision 7).
+# Anything else (the interpreter's own exit code) passes through unchanged. Needs only a POSIX sh, which
+# Git for Windows ships (`sh.exe` in its usr/bin folder) and every Linux has. No exec bit is needed.
+# The header is the doc of this mechanism: no other file documents how the interpreter is found.
+
+if [ -n "${ORCH_IT_PYTHON:-}" ]; then
+    exec "$ORCH_IT_PYTHON" "$@"
+fi
+if command -v py >/dev/null 2>&1; then
+    exec py -3 "$@"
+fi
+for name in python3 python; do
+    if command -v "$name" >/dev/null 2>&1; then
+        exec "$name" "$@"
+    fi
+done
+echo "orch-it: no Python interpreter found on PATH (set ORCH_IT_PYTHON to one)" >&2
+exit 127
