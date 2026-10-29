@@ -20,8 +20,8 @@ from orch_it.cli import main
 from orch_it.events import queries
 from orch_it.events.store import Store
 
-REPO = "Rasslabsya4el/orch-it"
-OTHER = "Rasslabsya4el/other"
+REPO = "acme-x/widgets-y"
+OTHER = "acme-x/other"
 COLUMNS = ["place", "os", "runs", "outcomes", "median_run_minutes", "median_queue_minutes"]
 
 

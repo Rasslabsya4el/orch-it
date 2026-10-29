@@ -17,8 +17,19 @@ from orch_it.cli import main
 from orch_it.tickets import commands, gh_check, hook
 from orch_it.tickets.hub import LAYER_MARK
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+
 WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ticket-shape.yml"
 TRANSCRIPT = Path(__file__).parent / "fixtures" / "transcripts" / "write_ticket_called.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def no_values_of_this_machine(monkeypatch):
+    """The bodies of these tests are judged as text: no value of this machine and no workflow of the
+    work tree is read (#413 unit 6)."""
+    from orch_it.guards.values import Values
+    monkeypatch.setattr("orch_it.guards.values.read_values", lambda **kwargs: Values())
+    monkeypatch.setattr("orch_it.guards.kinds.read_job_names", lambda folder: frozenset())
 
 
 def event(action, number, labels, label=None, repo=REPO):
@@ -84,7 +95,11 @@ def test_the_hook_and_the_github_check_give_the_same_violations(name, tmp_path):
     command = f"gh issue create --repo {REPO} --title {shlex.quote(title)} --body-file {shlex.quote(str(path))}"
     in_session = hook.judge({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path),
                              "transcript_path": str(TRANSCRIPT)}, hub=FakeHub(), repo_of=lambda folder: REPO)
-    assert on_github.codes == [code for code in in_session.codes if code in tickets.RULES] == EXPECTED[name]
+    # the literal codes (#413 unit 6) are compared too: the GitHub side has none of the hook-only codes, so the
+    # in-session codes minus only those give the same list; the shape codes alone are checked against EXPECTED
+    hook_only = set(hook.HOOK_CODES) - {"literal_value", "literal_pattern"}
+    assert on_github.codes == [code for code in in_session.codes if code not in hook_only]
+    assert [code for code in on_github.codes if code in tickets.RULES] == EXPECTED[name]
 
 
 @pytest.mark.parametrize("bad", [

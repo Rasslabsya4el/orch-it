@@ -103,7 +103,7 @@ with the owner at the level of the whole effort.
   written down the moment it is settled.
 - **A ticket.** Call the Skill tool with `write-ticket` before each ticket the brain opens, rewrites or parks. For a
   spec, call the Skill tool with `to-spec` and then `to-tickets` for the content: the spec keeps his rule of no file
-  paths, its tickets carry file and line; `write-ticket` gives every ticket its form, the human block in Russian
+  paths, its tickets carry file and line; `write-ticket` gives every ticket its form, the human block in the language set by `human_language`
   first. A ticket is done when the shape check passes it.
 - **Ready.** A ticket becomes ready only through the brain's writing or its sweep: a triage comment is read as input,
   and his `triage` skill stays the owner's own command. A `wayfinder` map keeps its own labels and gets the human

@@ -17,6 +17,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from orch_it import language
 from orch_it.events.ids import live_id
 from orch_it.guards import hook, scanner
 
@@ -106,7 +107,7 @@ def pre_push_present(root: Path) -> bool:
 
 
 def claude_hook_present(root: Path) -> bool:
-    """Whether `.claude/settings.json` wires `python -m orch_it hook pre-tool-use` on PreToolUse.
+    """Whether `.claude/settings.json` wires `orch_it hook pre-tool-use` (through hooks/orch-it) on PreToolUse.
     A missing, unreadable or differently shaped file holds no hook."""
 
     try:
@@ -136,7 +137,7 @@ def write_check(store, repo: str, check: str, target: str, outcome: str, finding
             writer.write(event("step.started", {"check": check, "target": target}))
             writer.write(event("step.ended", {"outcome": outcome, "findings": findings, "facts": facts}))
     except Exception as e:
-        print(f"orch-it guards: check event not written: {type(e).__name__}", file=sys.stderr)
+        print(language.text_or_refusal("check_not_written", error=type(e).__name__), file=sys.stderr)
 
 
 def install(work_tree: Path | str, store, *, repo: str) -> Installed:

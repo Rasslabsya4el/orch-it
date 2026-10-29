@@ -37,11 +37,11 @@ def test_a_name_keeps_its_spelled_case(tmp_path):
 
 
 def test_msys_and_wsl_drive_forms_are_drive_paths_only_on_windows():
-    assert paths.resolve("/c/Coding/x", "/", windows=True).lower() == r"c:\coding\x"
+    assert paths.resolve("/c/Projects/x", "/", windows=True).lower() == r"c:\projects\x"
     assert paths.resolve("/cygdrive/d/x", "/", windows=True).lower() == r"d:\x"
-    assert paths.resolve("/mnt/c/Coding/x", "/", windows=True).lower() == r"c:\coding\x"
+    assert paths.resolve("/mnt/c/Projects/x", "/", windows=True).lower() == r"c:\projects\x"
     if sys.platform != "win32":
-        assert paths.resolve("/c/Coding/x", "/", windows=False) == "/c/Coding/x"
+        assert paths.resolve("/c/Projects/x", "/", windows=False) == "/c/Projects/x"
         assert paths.resolve("/mnt/c/x", "/", windows=False) == "/mnt/c/x"
 
 

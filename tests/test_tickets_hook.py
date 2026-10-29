@@ -14,11 +14,20 @@ from ticket_fixtures import EXPECTED, fixture
 from orch_it import tickets
 from orch_it.tickets import hook
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+
 TRANSCRIPTS = Path(__file__).parent / "fixtures" / "transcripts"
 WITH_SKILL = TRANSCRIPTS / "write_ticket_called.jsonl"
 WITHOUT_SKILL = TRANSCRIPTS / "write_ticket_not_called.jsonl"
 BODY = fixture("good_basic")[1]
 PARKED = "Parked: pr_ended #12 until 2026-11-30"
+
+
+@pytest.fixture(autouse=True)
+def no_values_of_this_machine(monkeypatch):
+    """The bodies of these tests are judged as text: no value of this machine is read (#413 unit 6)."""
+    from orch_it.guards.values import Values
+    monkeypatch.setattr("orch_it.guards.values.read_values", lambda **kwargs: Values())
 
 
 @pytest.fixture
@@ -225,7 +234,9 @@ def test_the_hook_prints_a_deny_with_every_violation_and_fails_open_on_its_own_e
     monkeypatch.setattr(hook, "judge", broken)
     assert hook.main(data) == 0
     out, err = capsys.readouterr()
-    assert out == "" and "failing open" in err
+    from orch_it import language  # the words are the table's, in this module's language (ru, unit 10a)
+
+    assert out == "" and language.text("ticket_hook_internal", error="RuntimeError: a bug in the hook") in err
     assert hook.main("not json") == 0
 
 
@@ -260,7 +271,8 @@ def test_the_repo_s_claude_settings_run_the_hook_before_every_shell_command():
     settings = json.loads((Path(__file__).parents[1] / ".claude" / "settings.json").read_text("utf-8"),
                           object_pairs_hook=no_repeats)
     entries = [entry for entry in settings["hooks"]["PreToolUse"]
-               if any(h.get("command") == "python -m orch_it.tickets.hook" for h in entry["hooks"])]
+               if any(h.get("command") == 'sh "$CLAUDE_PROJECT_DIR"/hooks/orch-it -m orch_it.tickets.hook'
+                      for h in entry["hooks"])]
     assert len(entries) == 1
     assert set(entries[0]["matcher"].split("|")) >= {"Bash", "PowerShell"}
 

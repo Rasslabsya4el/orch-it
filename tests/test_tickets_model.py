@@ -1,8 +1,12 @@
 """The ticket model (#398 decision 1): one parser reads a ticket body into its fields, and
 every other part reads tickets only through it."""
 
+import pytest
+
 from orch_it import tickets
 from ticket_fixtures import fixture
+
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
 
 
 def test_a_body_is_read_into_its_fields():

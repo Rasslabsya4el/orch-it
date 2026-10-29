@@ -1,0 +1,50 @@
+#!/bin/sh
+# The interpreter shim of orch-it (#413, unit 4): runs its arguments with the Python that runs orch_it.
+#   sh hooks/orch-it -m orch_it hook pre-push      (the git hook; `hooks/pre-push` calls it so)
+#   sh "$CLAUDE_PROJECT_DIR"/hooks/orch-it -m orch_it hook brain   (`.claude/settings.json` hooks)
+# The interpreter is probed in this order, each candidate by running `-c "import orch_it"` (exit 0 = it runs
+# and imports orch_it); the first that does is used. If none imports orch_it, the first that runs at all
+# (`-c "import sys"`) is used:
+#   1. $ORCH_IT_PYTHON, one executable (a path or a command name);
+#   2. `python3` on PATH;
+#   3. `python` on PATH;
+#   4. the Windows launcher `py -3`, when `py` is on PATH.
+# ORCH_IT_PYTHON is the setting the MCP entry of `.mcp.json` reads (its command is "${ORCH_IT_PYTHON}"), so on a
+# machine it must name that machine's interpreter. The hooks of `.claude/settings.json` and the git hook run
+# through the shell, taken to be Git Bash on Windows (an assumption: another POSIX sh is meant to run them the same).
+# None runs: a message on stderr and exit 127 (the git hook then lets the push through, decision 7).
+# Anything else (the interpreter's own exit code) passes through unchanged. Needs only a POSIX sh, which
+# Git for Windows ships (`sh.exe` in its usr/bin folder) and every Linux has. No exec bit is needed.
+# The header is the doc of this mechanism: no other file documents how the interpreter is found.
+
+# runs N CODE: exit 0 when candidate N (the order above) runs CODE with `-c`
+runs() {
+    case "$1" in
+        1) [ -n "${ORCH_IT_PYTHON:-}" ] && "$ORCH_IT_PYTHON" -c "$2" >/dev/null 2>&1 ;;
+        2) command -v python3 >/dev/null 2>&1 && python3 -c "$2" >/dev/null 2>&1 ;;
+        3) command -v python >/dev/null 2>&1 && python -c "$2" >/dev/null 2>&1 ;;
+        4) command -v py >/dev/null 2>&1 && py -3 -c "$2" >/dev/null 2>&1 ;;
+    esac
+}
+
+# run N ARGS...: replaces this shell with candidate N running ARGS
+run() {
+    idx=$1
+    shift
+    case "$idx" in
+        1) exec "$ORCH_IT_PYTHON" "$@" ;;
+        2) exec python3 "$@" ;;
+        3) exec python "$@" ;;
+        4) exec py -3 "$@" ;;
+    esac
+}
+
+for code in "import orch_it" "import sys"; do
+    for n in 1 2 3 4; do
+        if runs "$n" "$code"; then
+            run "$n" "$@"
+        fi
+    done
+done
+echo "orch-it: no Python interpreter found on PATH (set ORCH_IT_PYTHON to one)" >&2
+exit 127

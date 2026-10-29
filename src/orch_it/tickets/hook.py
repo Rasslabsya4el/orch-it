@@ -8,6 +8,10 @@ Refused, with every reason at once:
 - the shape rules' codes (`shape.violations`): the body a create writes, the body an edit
   writes, or, for an edit that only adds `ready-for-agent`, the body the ticket already holds;
   for an edit of the title alone, the title rules;
+- `literal_value` / `literal_pattern` (`shape.literal_violations`, #413 unit 6): on the same body,
+  a value of this machine's setup (account, repo, host, home, user, projects folder, git name or
+  e-mail) or a pattern kind (bare python, a one-OS call, a check name of the work tree's
+  workflows) written in it; the refusal ends with the `not checked` line when a kind had no value;
 - `park_by_hand`: a create whose body holds a `Parked:` line or that sets the `parked` label; an
   edit that adds or removes the `parked` label, or whose body adds, changes or removes the
   ticket's `Parked:` line (only `python -m orch_it tickets park` and `unpark` write them);
@@ -39,9 +43,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from orch_it import language
+
 HOOK = "tickets"
 WRITE_TICKET = "write-ticket"
-HOOK_CODES = ("write_ticket_missing", "park_by_hand", "body_unreadable", "command_unreadable", "issue_unreadable")
+HOOK_CODES = ("write_ticket_missing", "park_by_hand", "body_unreadable", "command_unreadable", "issue_unreadable",
+              "literal_value", "literal_pattern")
 _QUICK = re.compile(r"issue", re.IGNORECASE)  # no `gh issue` call without the word: the rest is passed at once
 _ISSUE_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/([1-9][0-9]*)(?:[/?#]\S*)?",
                         re.IGNORECASE)
@@ -71,10 +78,11 @@ class Refusal:
         return bool(self.codes)
 
 
-def judge(payload: dict, *, hub, repo_of) -> Refusal | None:
+def judge(payload: dict, *, hub, repo_of, values=None) -> Refusal | None:
     """None when the tool call in `payload` writes no issue; else its `Refusal`, which is false
     (no codes) when the issue it writes is good. `repo_of(folder)` gives a work tree's GitHub
-    `owner/name`, or None."""
+    `owner/name`, or None. `values` is the setup's values for the literal check (None: this
+    machine's, read only when a body is judged)."""
 
     command = (payload.get("tool_input") or {}).get("command") if isinstance(payload, dict) else None
     if payload.get("tool_name") not in ("Bash", "PowerShell") or not isinstance(command, str):
@@ -93,10 +101,15 @@ def judge(payload: dict, *, hub, repo_of) -> Refusal | None:
     codes: list[str] = []
     said: list[str] = []
     repo = None
+    memo: dict = {}  # the setup's values and check names, read once, when the first body is judged
     for call in judged:
-        found, lines, repo = call.judge(payload, hub, repo_of, cwd)
+        found, lines, repo = call.judge(payload, hub, repo_of, cwd, values, memo)
         codes += [code for code in found if code not in codes]
         said += [line for line in lines if line not in said]
+    if codes and "values" in memo:  # a refusal whose literal check ran ends with what that check could not check
+        tail = memo["values"].render_not_checked()
+        if tail:
+            said.append(tail)
     return Refusal(codes, "\n".join(said), repo)
 
 
@@ -221,7 +234,8 @@ class _Call:
         action = {"create": "create", "new": "create", "edit": "edit"}.get(rest[0] if rest and rest[0] else "")
         return cls(action, before + rest[1:], cwd) if action else None
 
-    def judge(self, payload: dict, hub, repo_of, cwd: str | None) -> tuple[list[str], list[str], str | None]:
+    def judge(self, payload: dict, hub, repo_of, cwd: str | None, values, memo: dict
+              ) -> tuple[list[str], list[str], str | None]:
         from orch_it.tickets import shape
         from orch_it.tickets.model import PARKED_LABEL, READY_LABEL, parse
 
@@ -230,7 +244,8 @@ class _Call:
         repo = (flags.get("repo", [None])[-1] or next((t[0] for t in targets if t and t[0]), None)
                 or os.environ.get("GH_REPO") or None)  # as gh itself picks the repo
         if unreadable:
-            return ["command_unreadable"], [f"command_unreadable: {unreadable}: write it as a literal"], repo
+            return (["command_unreadable"],
+                    [language.text_or_refusal("ticket_command_unreadable", reason=unreadable)], repo)
         body, problem = self._body(flags, here)
         title = flags.get("title", [None])[-1]
         labels = {label.strip().lower() for value in flags.get("label", []) for label in value.split(",")}
@@ -242,19 +257,22 @@ class _Call:
             lines.append(f"{code}: {line}")
 
         if problem:
-            refuse("body_unreadable", f"{problem}; write the body to a file and pass --body-file with its path")
+            refuse("body_unreadable", language.text_or_refusal("ticket_body_way", problem=problem))
         if self.action == "create":
             if not _write_ticket_called(payload.get("transcript_path")):
-                refuse("write_ticket_missing", f"call the Skill tool with `{WRITE_TICKET}` before `gh issue create`, "
-                                               "then write the ticket again")
+                refuse("write_ticket_missing",
+                       language.text_or_refusal("ticket_write_ticket_missing", skill=WRITE_TICKET))
             if PARKED_LABEL in labels or (body is not None and parse(body).park_lines):
-                refuse("park_by_hand", "a park is written only by `python -m orch_it tickets park`")
+                refuse("park_by_hand", language.text_or_refusal("ticket_park_by_hand", python=sys.executable))
             if not problem:
-                for violation in shape.violations(parse(body or "", title=title)):
+                found = shape.violations(parse(body or "", title=title))
+                found += shape.literal_violations(body or "", values=_values_of(values, memo),
+                                                  checks=_checks(here, memo))
+                for violation in found:
                     refuse(violation.code, violation.rule)
-            return codes, lines, repo or repo_of(here)
+            return list(dict.fromkeys(codes)), lines, repo or repo_of(here)
         if PARKED_LABEL in labels | unlabels:
-            refuse("park_by_hand", "the `parked` label is set and taken off only by `tickets park` and `unpark`")
+            refuse("park_by_hand", language.text_or_refusal("ticket_parked_label"))
         needs_ticket = body is not None or READY_LABEL in labels
         if not needs_ticket:
             if title is not None:
@@ -263,20 +281,20 @@ class _Call:
             return codes, lines, repo
         repo = repo or repo_of(here)
         if not targets:
-            refuse("issue_unreadable", "the edit names no ticket the hook can read")
+            refuse("issue_unreadable", language.text_or_refusal("ticket_no_ticket"))
         for target_repo, number in targets:
             current = _current(hub, target_repo or repo, number)
             if current is None:
-                refuse("issue_unreadable", f"#{number} could not be read from GitHub to judge the edit")
+                refuse("issue_unreadable", language.text_or_refusal("ticket_not_read", number=number))
                 continue
             if body is not None and parse(body).park_lines != parse(current.body).park_lines:
-                refuse("park_by_hand", "the `Parked:` line is written and taken off only by `tickets park` and "
-                                       "`unpark`; keep it as it is")
+                refuse("park_by_hand", language.text_or_refusal("ticket_parked_line"))
             if problem:
                 continue
-            judged = parse(body if body is not None else current.body,
-                           title=title if title is not None else current.title)
-            for violation in shape.violations(judged):
+            text = body if body is not None else current.body
+            found = shape.violations(parse(text, title=title if title is not None else current.title))
+            found += shape.literal_violations(text, values=_values_of(values, memo), checks=_checks(here, memo))
+            for violation in found:
                 refuse(violation.code, violation.rule)
         return list(dict.fromkeys(codes)), list(dict.fromkeys(lines)), repo
 
@@ -291,7 +309,7 @@ class _Call:
         while i < len(words):
             word = words[i]
             if word is None:
-                return flags, targets, "a word built by a substitution or a variable"
+                return flags, targets, language.text_or_refusal("ticket_unreadable_word")
             name, value = word, None
             if word.startswith("--") and "=" in word:
                 name, value = word.split("=", 1)
@@ -305,7 +323,7 @@ class _Call:
                     value = words[i] if i < len(words) else None
                     if i < len(words) and value is None:
                         if known[name] not in ("body", "body_file"):
-                            return flags, targets, f"the value of {name}"
+                            return flags, targets, language.text_or_refusal("ticket_unreadable_value", name=name)
                         flags.setdefault("body_file", []).append(UNREADABLE_BODY)  # a body built by the shell
                 if known[name] and value is not None:
                     flags.setdefault(known[name], []).append(value)
@@ -326,14 +344,15 @@ class _Call:
         if "body_file" in flags:
             name = flags["body_file"][-1]
             if name in ("-", UNREADABLE_BODY):
-                return None, "the body comes from stdin, an editor, the browser or a word the shell builds"
+                return None, language.text_or_refusal("ticket_body_stdin")
             path = Path(name)
             if not path.is_absolute():
                 path = Path(here or os.getcwd()) / path
             try:
                 return path.read_text("utf-8"), None
             except (OSError, UnicodeDecodeError) as e:
-                return None, f"the body file {name} cannot be read ({type(e).__name__})"
+                return None, language.text_or_refusal("ticket_body_file_unreadable", name=name,
+                                                      error=type(e).__name__)
         if "body" in flags:
             return flags["body"][-1], None
         return None, None
@@ -348,6 +367,30 @@ def _current(hub, repo: str | None, number: int):
         return hub.issue(repo, number)
     except GithubError:
         return None
+
+
+def _values_of(given, memo: dict):
+    """The setup's values for the literal check: the caller's when it gave them, else this machine's, read
+    the first time a body is judged (the hook reads nothing for a command that judges no body)."""
+
+    if "values" not in memo:
+        if given is not None:
+            memo["values"] = given
+        else:
+            from orch_it.guards.values import read_values
+
+            memo["values"] = read_values()
+    return memo["values"]
+
+
+def _checks(folder: str | None, memo: dict) -> frozenset[str]:
+    """The GitHub check names of the work tree's workflows, read the first time a body is judged."""
+
+    if "checks" not in memo:
+        from orch_it.guards.kinds import read_job_names
+
+        memo["checks"] = read_job_names(str(Path(folder or os.getcwd()) / ".github" / "workflows"))
+    return memo["checks"]
 
 
 def _write_ticket_called(transcript: object) -> bool:
@@ -421,14 +464,14 @@ def main(text: str | None = None) -> int:
             return 0
         refusal = judge(payload, hub=make_hub(), repo_of=repo_of)
     except Exception as e:  # noqa: BLE001 - a broken hook fails open, and says so
-        print(f"tickets hook: internal error, failing open: {type(e).__name__}: {e}", file=sys.stderr)
+        print(language.text_or_refusal("ticket_hook_internal", error=f"{type(e).__name__}: {e}"), file=sys.stderr)
         _record(None, None, error=type(e).__name__)
         return 0
     if refusal is None:  # no issue written: nothing to record
         return 0
     _record(payload, refusal)
     if refusal.codes:
-        reason = "The tickets hook refused this command:\n" + refusal.message
+        reason = language.text_or_refusal("ticket_hook_refused") + "\n" + refusal.message
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": reason}}))
     return 0

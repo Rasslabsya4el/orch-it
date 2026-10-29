@@ -2,7 +2,7 @@
   "mcpServers": {
     "orch-it-research": {
       "type": "stdio",
-      "command": "python",
+      "command": "${ORCH_IT_PYTHON}",
       "args": ["-m", "orch_it", "research-mcp"],
       "env": {
         "RESEARCH_API_KEY": "${RESEARCH_API_KEY:-}",

@@ -19,35 +19,36 @@ import pytest
 
 from orch_it.events.store import Store
 from orch_it.guards import prepush, scanner
-from orch_it.guards.scanner import Patterns
 from orch_it.testruns import github
-from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, NO_WINDOW,
-                        OPENAI_KEY, PRIVATE_KEY, Repo, make_template)
+from scan_setup import invented_setup, with_values  # noqa: F401  (invented_setup: an autouse fixture)
+from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, MAC_HOME, MSYS_HOME,
+                        NO_WINDOW, OPENAI_KEY, PRIVATE_KEY, SOMEONE_HOME, WIN_HOME, WIN_TAIL, Repo,
+                        default_host, invented_host, make_template)
 
 ROOT = Path(__file__).resolve().parent.parent
 ZEROS = "0" * 40
 HOME_SPELLINGS = {
-    "windows_back": "C:" + "\\Us" + "ers\\someone",
-    "windows_forward": "C:" + "/Us" + "ers/someone",
-    "msys": "/c/Us" + "ers/someone",
-    "wsl": "/mn" + "t/c/Us" + "ers/someone",
-    "linux": "/ho" + "me/someone",
-    "mac": "/Us" + "ers/someone",
+    "windows_back": WIN_HOME,
+    "windows_forward": WIN_HOME.replace("\\", "/"),
+    "msys": MSYS_HOME,
+    "wsl": "/mnt/c/" + WIN_TAIL,
+    "linux": SOMEONE_HOME,
+    "mac": MAC_HOME,
     "root": "/ro" + "ot",
 }
 MACHINE_HOME = "D:" + "\\bo" + "b"
-MACHINE_HOST = "Lab-Pc" + "-42"
+MACHINE_HOST = invented_host()
 MACHINE_WORD = "Blue" + "Heron"
-DEFAULT_HOST = "WI" + "N-OHK3JQ5AM84"
+DEFAULT_HOST = default_host("WIN", 12)
 # what the hook reads off the machine, put together by hand so no test depends on this one
-PATTERNS = Patterns(homes=(MACHINE_HOME,), host=MACHINE_HOST, words=(MACHINE_WORD,))
+PATTERNS = with_values(home=MACHINE_HOME, host=MACHINE_HOST, words=(MACHINE_WORD,))
 
 # kind -> the value, for the places a value can be put (content and message take any; a path
 # takes what a file name can hold on every OS)
 IN_CONTENT = {
     **{f"home_path:{name}": ("home_path", value) for name, value in HOME_SPELLINGS.items()},
-    "home_path:machine": ("home_path", MACHINE_HOME + "\\work"),
-    "host_name:machine": ("host_name", MACHINE_HOST),
+    "home:machine": ("home", MACHINE_HOME + "\\work"),
+    "host:machine": ("host", MACHINE_HOST),
     "host_name:default": ("host_name", DEFAULT_HOST),
     "github_token": ("github_token", GITHUB_TOKEN),
     "github_token:fine": ("github_token", GITHUB_FINE_TOKEN),
@@ -58,12 +59,13 @@ IN_CONTENT = {
     "email": ("email", EMAIL),
     "private_word": ("private_word", MACHINE_WORD),
 }
-IN_PATH = {name: case for name, case in IN_CONTENT.items() if not name.startswith("home_path")}
+IN_PATH = {name: case for name, case in IN_CONTENT.items() if not name.startswith(("home_path", "home:"))}
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    (tmp_path / "settings.json").write_text('{"repo": "acme-x/widgets-y"}', "utf-8")  # the repo the events are written under
     monkeypatch.delenv("ORCH_IT_STORE", raising=False)
 
 
@@ -124,10 +126,24 @@ def test_a_push_of_each_kind_in_content_is_refused_to_a_public_repo_naming_file_
         (text, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert (text, code) == ("", 1), name
-        assert f"{sha[:12]} content notes.txt:2 {kind}\n" in err, (name, err)
+        assert f"{sha[:12]} content notes.txt:2 {kind}{scanner.cited(kind)}\n" in err, (name, err)
         assert value not in err, name
     assert value not in event_text(store)
     assert MACHINE_HOME not in event_text(store)
+
+
+def test_a_push_with_no_repo_known_is_still_decided_writes_no_event_and_says_so(repo, store, tmp_path, capsys):
+    (tmp_path / "settings.json").write_text("{}", "utf-8")  # no setting `repo`; the work tree has no origin
+    value = IN_CONTENT["email"][1]
+    sha = repo.commits_on(repo.base, [{"files": {"notes.txt": f"fine\nsee {value} here\n"},
+                                       "message": "add email"}])[0]
+    (text, code), _ = push(repo, store, line(sha, repo.base))
+    err = capsys.readouterr().err
+    assert (text, code) == ("", 1)
+    assert f"{sha[:12]} content notes.txt:2 email\n" in err
+    assert "no repo is known" in err
+    assert value not in err
+    assert events(store) == []
 
 
 def test_a_push_of_each_kind_in_a_file_path_is_refused_and_the_path_is_shown_without_it(
@@ -139,7 +155,7 @@ def test_a_push_of_each_kind_in_a_file_path_is_refused_and_the_path_is_shown_wit
         (_, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert code == 1, name
-        assert f"{sha[:12]} path data/<{kind}>:- {kind}\n" in err, (name, err)
+        assert f"{sha[:12]} path data/<{kind}>:- {kind}{scanner.cited(kind)}\n" in err, (name, err)
         assert value not in err, name
     assert value not in event_text(store)
 
@@ -152,7 +168,7 @@ def test_a_push_of_each_kind_in_a_commit_message_is_refused(repo, store, capsys)
         (_, code), _ = push(repo, store, line(sha, repo.base))
         err = capsys.readouterr().err
         assert code == 1, name
-        assert f"{sha[:12]} message -:2 {kind}\n" in err, (name, err)
+        assert f"{sha[:12]} message -:2 {kind}{scanner.cited(kind)}\n" in err, (name, err)
         assert value not in err, name
     assert value not in event_text(store)
 
@@ -171,7 +187,7 @@ def test_a_non_noreply_author_or_committer_email_is_refused(repo, store, capsys)
 
 def test_the_same_pushes_to_a_private_repo_pass_and_say_nothing(repo, store, capsys):
     cases = [(visibility, name, value) for visibility in ("private", "internal")
-             for name, (_, value) in IN_CONTENT.items()]
+             for name, (_, value) in IN_CONTENT.items() if not name.startswith(("home:", "host:"))]
     shas = repo.commits_on(repo.base, [{"files": {"notes.txt": f"see {value}\n"},
                                         "message": f"add {name} {value}"} for _, name, value in cases])
     for (visibility, name, _), sha in zip(cases, shas):
@@ -180,7 +196,8 @@ def test_the_same_pushes_to_a_private_repo_pass_and_say_nothing(repo, store, cap
         assert capsys.readouterr().err == ""
     bad_author = repo.commit({"a.txt": "x\n"}, author=EMAIL)
     assert push(repo, store, line(bad_author, repo.base), visibility="private")[0] == ("", 0)
-    assert events(store) == []
+    # the kinds of #413 run on every push, so a clean scan of a private remote writes its pass; never a deny
+    assert "deny" not in event_text(store)
 
 
 def test_a_clean_push_to_a_public_repo_passes_and_writes_one_pass(repo, store, capsys):
@@ -191,7 +208,7 @@ def test_a_clean_push_to_a_public_repo_passes_and_writes_one_pass(repo, store, c
     assert seen == ["https://example.invalid/o/n.git"]
     [row] = store.query("SELECT kind, guard, verdict, rule_id, path, repo, role FROM events").rows
     assert row == ("guard.fired", "private_data_public", "pass", "clean", None,
-                   "Rasslabsya4el/orch-it", "hook")
+                   "acme-x/widgets-y", "hook")
 
 
 @pytest.mark.parametrize("unreadable", ["unknown", "", "mystery", None, 7,
@@ -312,7 +329,8 @@ def test_a_git_that_cannot_be_read_is_a_crash_not_a_refusal(repo, store):
 def test_an_unreadable_private_words_file_is_a_crash_that_fails_open(repo, store, tmp_path, monkeypatch):
     broken = tmp_path / "words.txt"
     broken.write_bytes(b"\xff\xfe\x00 not utf-8 \xc3\x28")
-    (tmp_path / "settings.json").write_text(json.dumps({"private_words_file": str(broken)}))
+    (tmp_path / "settings.json").write_text(json.dumps(
+        {"private_words_file": str(broken), "repo": "acme-x/widgets-y"}))
     sha = repo.commit({"a.txt": f"token {GITHUB_TOKEN}\n"})
     result = prepush.run_pre_push(line(sha, repo.base), store, remote_url="x", remote_name="origin",
                                   work_tree=repo.path, visibility=lambda _: "public")
@@ -409,7 +427,7 @@ def test_the_tracked_hook_is_a_small_lf_sh_script_that_runs_the_entry_point_and_
     assert lines[0] == "#!/bin/sh"
     # runs the entry point, and only the guard's own refusal (exit 1) blocks — any other
     # nonzero code is a launcher failure and fails open (decision 7)
-    assert 'python -m orch_it hook pre-push "$@"' in lines
+    assert 'sh "$(dirname "$0")/orch-it" -m orch_it hook pre-push "$@"' in lines
     assert '[ "$code" = "1" ] && exit 1' in lines
     assert "exit 0" in lines
     assert len(lines) <= 16
@@ -425,12 +443,10 @@ def hooked(tmp_path, repo):
     """`repo` with the tracked hook installed as its hooks folder (run by this interpreter, on this
     checkout's source) and a bare remote that no one can ask GitHub about."""
 
-    exe = sys.executable.replace("\\", "/")
     hooks = tmp_path / "hooks"
     hooks.mkdir()
-    script = HOOK.read_text("utf-8").replace("python -m orch_it", f'"{exe}" -m orch_it')
-    assert exe in script
-    (hooks / "pre-push").write_bytes(script.encode("utf-8"))
+    for name in ("pre-push", "orch-it"):  # the hook and the interpreter shim it calls, beside it
+        (hooks / name).write_bytes((ROOT / "hooks" / name).read_bytes())
     (hooks / "pre-push").chmod(0o755)
     bare = tmp_path / "bare.git"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True,
@@ -438,7 +454,7 @@ def hooked(tmp_path, repo):
     repo.git("config", "core.hooksPath", str(hooks))
     repo.git("remote", "add", "origin", str(bare))
     repo.env = repo.env | {"PYTHONPATH": str(ROOT / "src"), "ORCH_IT_STORE": str(tmp_path / "hook-store"),
-                           "PYTHONIOENCODING": "utf-8"}
+                           "PYTHONIOENCODING": "utf-8", "ORCH_IT_PYTHON": sys.executable}
     return repo, bare
 
 
@@ -484,13 +500,12 @@ def test_the_pre_push_hook_script_fails_open_on_a_launcher_failure(tmp_path, fak
     if sh is None:
         pytest.skip("no POSIX sh to run the hook script")
     script = Path(__file__).resolve().parents[1] / "hooks" / "pre-push"
-    fake_dir = tmp_path / "bin"
-    fake_dir.mkdir()
-    fake = fake_dir / "python"
-    fake.write_text(f"#!/bin/sh\nexit {fake_code}\n")
+    fake = tmp_path / "fake-interpreter"
+    # the probe `-c "import orch_it"` exits 0 so the shim picks this fake; the run then exits with fake_code
+    fake.write_text(f'#!/bin/sh\ncase "$*" in\n  *"import orch_it"*) exit 0 ;;\nesac\nexit {fake_code}\n')
     fake.chmod(0o755)
     env = dict(os.environ)
-    env["PATH"] = str(fake_dir) + os.pathsep + env["PATH"]
+    env["ORCH_IT_PYTHON"] = fake.as_posix()  # the shim runs this interpreter, whatever PATH holds
     done = _sp.run([sh, str(script), "origin", "https://x/y.git"], input="", text=True,
                    env=env, capture_output=True, timeout=30)
     assert done.returncode == expected, (fake_code, done.returncode, done.stderr)
