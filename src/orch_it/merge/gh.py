@@ -46,7 +46,7 @@ from orch_it.events import schema
 from orch_it.merge import git as merge_git
 from orch_it.merge.git import GitDone, GitError
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
-from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, workflow_of
+from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, skipped, workflow_of
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
     REPORT_FILE,
@@ -60,6 +60,7 @@ from orch_it.tickets.hub import Comment, GhHub, _moment, _text
 
 CACHE_FOLDER = "merge-cache"
 RUN_OUTCOMES = ("success", "failure", "cancelled", "timed_out", "skipped")  # a run's conclusion the watch keeps
+RUNS_SCANNED = 10  # the newest completed runs of a workflow the watch reads for its latest run not skipped
 EVENTS_ARTIFACT_PREFIX = "orch-it-events-"
 EVENT_ARTIFACT_PAGES = 3  # of 100 artifacts each, newest first
 BASE_REF, PULL_REF = "refs/orch/base", "refs/orch/pr"
@@ -361,26 +362,35 @@ class GhPullHub(GhHub):
         return [workflow.path for workflow in self._workflows(repo)]
 
     def latest_workflow_runs(self, repo: str) -> list[WorkflowRun]:
+        """The latest run of each workflow on the default branch that is not skipped by its `if:`: the newest
+        `RUNS_SCANNED` completed runs are read, and the first one not skipped is the workflow's run."""
+
         branch = quote(self._default_branch(repo), safe="")
         found = []
         for workflow in self._workflows(repo):
             runs = self._pages(["api", f"repos/{repo}/actions/workflows/{workflow.id}/runs?status=completed"
-                                f"&branch={branch}&per_page=1"], "workflow_runs")
-            if not runs:
-                continue  # a workflow with no completed run on the default branch is left out
-            run = runs[0]
-            run_id = run.get("id")
-            if type(run_id) is not int or not _text(run.get("updated_at")):
-                raise GithubError("gh_bad_output",
-                                  f"{repo}: workflow `{workflow.path}` has a run with no id or end time")
-            jobs = self._pages(["api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"], "jobs")
-            conclusion = run.get("conclusion")
-            found.append(WorkflowRun(
-                workflow=workflow.path, run_id=run_id, url=_text(run.get("html_url")), ended_at=run["updated_at"],
-                outcome=conclusion if conclusion in RUN_OUTCOMES else "other",
-                jobs_started=sum(1 for job in jobs
-                                 if job.get("started_at") is not None and job.get("conclusion") != "skipped")))
+                                f"&branch={branch}&per_page={RUNS_SCANNED}"], "workflow_runs")
+            for run in runs:  # a workflow with no completed run on the default branch is left out
+                built = self._workflow_run(repo, workflow.path, run)
+                if not skipped(built):
+                    found.append(built)
+                    break
         return found
+
+    def _workflow_run(self, repo: str, path: str, run: dict) -> WorkflowRun:
+        run_id = run.get("id")
+        if type(run_id) is not int or not _text(run.get("updated_at")):
+            raise GithubError("gh_bad_output", f"{repo}: workflow `{path}` has a run with no id or end time")
+        conclusion = run.get("conclusion")
+        # a run GitHub already concluded `skipped` is passed over without reading its jobs
+        jobs = [] if conclusion == "skipped" else self._pages(
+            ["api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"], "jobs")
+        return WorkflowRun(
+            workflow=path, run_id=run_id, url=_text(run.get("html_url")), ended_at=run["updated_at"],
+            outcome=conclusion if conclusion in RUN_OUTCOMES else "other",
+            jobs_started=sum(1 for job in jobs
+                             if job.get("started_at") is not None and job.get("conclusion") != "skipped"),
+            jobs_skipped=sum(1 for job in jobs if job.get("conclusion") == "skipped"))
 
     def watch_issues(self, repo: str) -> list[WatchIssue]:
         """The open issues (no pull requests) whose body holds a workflow watch mark, whatever labels they carry."""

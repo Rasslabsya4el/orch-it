@@ -1,9 +1,10 @@
 """The workflow watch's decision (https://github.com/Rasslabsya4el/orchestration-layer/issues/411 rule 3, unit 2):
 what a non-green workflow run opens, comments on or closes. `decide` reads the latest ended run of each workflow and
 the open watch issues, and returns actions; it does no I/O. A run is non-green when it ended `failure`, `cancelled`
-or `timed_out`, or when it started no job at all whatever GitHub labels its outcome. A run is green only when it
-ended `success` with a job started; any other run gets no action. The caller passes the workflows it leaves to other
-checks in `skip`.
+or `timed_out`, or when it started no job at all (a run that failed at start), unless GitHub skipped it by its `if:`.
+A run GitHub skipped is neither green nor non-green: it is passed over, and the watch reads the latest run that is
+not skipped. A run is green only when it ended `success` with a job started; any other run gets no action. The
+caller passes the workflows it leaves to other checks in `skip`.
 
 A workflow is identified by its file path (`.github/workflows/x.yml`), never by its display name: two files can
 share a name. A watch ticket is written in #398's shape and checked by `tickets.violations` before it is returned, as
@@ -46,6 +47,7 @@ class WorkflowRun:
     ended_at: str
     outcome: str  # success, failure, cancelled, timed_out, skipped or other
     jobs_started: int
+    jobs_skipped: int = 0  # jobs GitHub skipped by their `if:`; they neither start nor fail
 
 
 @dataclass(frozen=True)
@@ -80,8 +82,15 @@ class Close:
 Action = Open | Comment | Close
 
 
+def skipped(run: WorkflowRun) -> bool:
+    """A run GitHub skipped by its `if:`: its conclusion is `skipped`, or no job of it started and every job of
+    it was skipped with no non-green conclusion. Neither green nor non-green; the watch looks past it."""
+
+    return run.outcome == "skipped" or (run.outcome not in NON_GREEN and run.jobs_started == 0 and run.jobs_skipped > 0)
+
+
 def non_green(run: WorkflowRun) -> bool:
-    return run.jobs_started == 0 or run.outcome in NON_GREEN
+    return not skipped(run) and (run.jobs_started == 0 or run.outcome in NON_GREEN)
 
 
 def green(run: WorkflowRun) -> bool:
@@ -191,12 +200,12 @@ def latest_per_workflow(runs: list[WorkflowRun]) -> list[WorkflowRun]:
 
 
 def decide(latest: list[WorkflowRun], open_issues: list[WatchIssue], *, skip: frozenset[str]) -> list[Action]:
-    """The actions for the latest ended run of each workflow: a non-green one opens its watch or comments on
-    the lowest-numbered open one (no comment for a run it already names); a green one closes every open watch
-    of its workflow; any other run, and a workflow in `skip`, gets nothing."""
+    """The actions for the latest ended run of each workflow that is not skipped: a non-green one opens its watch or
+    comments on the lowest-numbered open one (no comment for a run it already names); a green one closes every
+    open watch of its workflow; any other run, and a workflow in `skip`, gets nothing."""
 
     actions: list[Action] = []
-    for run in latest_per_workflow([run for run in latest if run.workflow not in skip]):
+    for run in latest_per_workflow([run for run in latest if run.workflow not in skip and not skipped(run)]):
         watches = sorted((issue for issue in open_issues if issue.workflow == run.workflow),
                          key=lambda issue: issue.number)
         if green(run):
