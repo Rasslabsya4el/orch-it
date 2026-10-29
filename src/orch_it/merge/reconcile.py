@@ -46,7 +46,7 @@ _STORE_FILE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}/[A-Za-z0-9._-]{1,120}\.jso
 _REPAIR = {"closed": "closed", "closed_skills": "closed", "rerun": "rerun", "stuck": "rerun"}
 # a follow that changed nothing of its ticket; every other outcome returned it or sent it to the brain
 _NO_REPAIR = ("idle", "waiting", "green", "behind", "raced", "merged_alone", "merged_other", "already_closed",
-              "withdrawn")
+              "already_landed", "withdrawn")
 IMPORTED_FILE = ".imported-artifacts"  # in the store's folder, out of the index's `<day>/<writer>.jsonl`
 
 
@@ -74,7 +74,7 @@ def reconcile(hub: PullHub, store: Store, repo: str, base: str, *, settings: Mer
     for number in _to_follow(hub, repo, base, owner):
         try:
             done = follow(hub, store, repo, number, base=base, settings=settings, now=now, role=role,
-                          required=required, owner=owner)
+                          required=required, owner=owner, merge=True)  # the backstop of a dropped workflow run
         except Exception as e:  # one pull request that cannot be followed never ends the sweep
             failed.append(_failed(store, repo, role, run, f"#{number}", e))
             continue

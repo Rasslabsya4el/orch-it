@@ -2,12 +2,15 @@
 
 - `pr open <ticket> --acceptance <file> [--notes <file>] [--branch B] [--base main] [--work-tree .] [--repo R]`: ORCH's
   acceptance step (decision 1, `orch_it.merge.pr_open`): the measured rows checked against the
-  ticket's, the branch pushed, one pull request per ticket opened with `Refs #N` (or its own reused),
+  ticket's, the branch pushed, one OPEN pull request per ticket at a time opened with `Refs #N` (or its own reused;
+  a merged one never refuses the next; `--part K/N` writes `Part: K of N` beside it),
   the acceptance comment, the ready mark, auto-merge on, the ticket parked on the pull request; prints
   `pr #<n> opened|reused at <head>: <park line>`. `--branch` defaults to the work tree's branch;
 - `follow [<pr>] [--event <file>] [--base main] [--repo R] [--role github]`: the ticket follows its
   pull request (decision 3, `orch_it.merge.follow`): the pull request named, or the one a GitHub event
-  of the `follow` workflow is about; prints `#<pr> <outcome> ticket=#<n> <detail>` or `skipped: <why>`;
+  of the `follow` workflow is about; prints `#<pr> <outcome> ticket=#<n> <detail>` (`merged_by_follow` after it
+  when the follow merged the pull request, #424) or `skipped: <why>`; a `workflow_run` event (the end of a `tests`
+  run) follows every open pull request whose head is the run's commit, one line each;
 - `merge line [--base main] [--repo R]`: one run of the repo's merge line (decision 2,
   `orch_it.merge.line`); prints `waits: the line of <repo> is held by <holder>` at once when another
   line holds it, then one line per head, `#<pr> <result> waited <minutes> min updates <n> <why>`, and
@@ -44,13 +47,13 @@ from orch_it.events.store import Store
 from orch_it.merge import closing_check
 from orch_it.merge import git as merge_git
 from orch_it.merge import lock
-from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_event
+from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_event, prs_of_workflow_run
 from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitError
 from orch_it.merge.line import holder_of, run_line
 from orch_it.merge.main_check import check_main
 from orch_it.merge.reconcile import reconcile
-from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr
+from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr, parse_part
 from orch_it.merge.settings import MergeSettings
 from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, REQUIRED_JOBS_SETTING
 from orch_it.tickets.commands import OWNER_SETTING
@@ -74,11 +77,13 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p.add_argument("--base", default="main", help="the branch the line merges into (default: main)")
     group = commands.add_parser("pr", help="the pull request of a ticket").add_subparsers(dest="command",
                                                                                           required=True)
-    p = group.add_parser("open", parents=[repo], help="ORCH's acceptance step: one pull request per ticket")
+    p = group.add_parser("open", parents=[repo], help="ORCH's acceptance step: one open pull request per ticket")
     p.add_argument("ticket", type=int)
     p.add_argument("--acceptance", required=True, metavar="FILE",
                    help="the measured rows: a table with the columns row, result, evidence")
     p.add_argument("--notes", metavar="FILE", help="ORCH's report lines for the body of a new pull request")
+    p.add_argument("--part", metavar="K/N", help="this pull request is part K of N of the ticket (#434): "
+                   "its body says `Part: K of N`")
     p.add_argument("--branch", help="the ticket's branch (default: the work tree's)")
     p.add_argument("--base", default="main", help="the branch it merges into (default: main)")
     p.add_argument("--work-tree", default=".", metavar="PATH")
@@ -135,6 +140,7 @@ def _unlock(args, store_of, repo_of, now: datetime) -> str:
 
 
 def _pr_open(args, store_of, repo_of, now: datetime) -> str:
+    part = parse_part(args.part) if args.part else None
     repo = args.repo or repo_of(args.work_tree)
     try:
         acceptance = Path(args.acceptance).read_text("utf-8-sig")
@@ -149,9 +155,10 @@ def _pr_open(args, store_of, repo_of, now: datetime) -> str:
         branch = args.branch or git(["rev-parse", "--abbrev-ref", "HEAD"]).strip()
     except GitError as e:
         raise PrError("git_failed", str(e)) from None
+    raw = settings.load()
     done = open_pr(GhPullHub(), store_of(), repo, args.ticket, acceptance=acceptance, branch=branch, base=args.base,
-                   git=git, settings=MergeSettings.from_settings(settings.load(), repo), now=now, role=args.role,
-                   notes=notes)
+                   required=required_jobs(raw), git=git, settings=MergeSettings.from_settings(raw, repo), now=now,
+                   role=args.role, notes=notes, part=part)
     return f"pr #{done.pr} {'reused' if done.reused else 'opened'} at {done.head[:12]}: {done.park}\n"
 
 
@@ -160,14 +167,24 @@ def _follow(args, store_of, repo_of, now: datetime) -> str:
     hub = GhPullHub()
     if (args.pr is None) == (args.event is None):
         raise FollowError("bad_options", "give a pull request or --event, not both")
-    number, why = (args.pr, "") if args.pr is not None else pr_of_event(read_event(args.event), hub, repo)
-    if number is None:
+    event = read_event(args.event) if args.pr is None else {}
+    if "workflow_run" in event:
+        numbers, why = prs_of_workflow_run(event, hub, repo, args.base)
+    else:
+        number, why = (args.pr, "") if args.pr is not None else pr_of_event(event, hub, repo)
+        numbers = [] if number is None else [number]
+    if not numbers:
         return f"skipped: {why}\n"
     raw = settings.load()
-    done = follow(hub, store_of(), repo, number, base=args.base, settings=MergeSettings.from_settings(raw, repo),
-                  now=now, role=args.role, required=required_jobs(raw), owner=owner_login(raw))
-    ticket = f"#{done.ticket}" if done.ticket else "-"
-    return f"#{done.pr} {done.outcome} ticket={ticket} {done.detail}".rstrip() + "\n"
+    lines = []
+    for number in numbers:
+        done = follow(hub, store_of(), repo, number, base=args.base, settings=MergeSettings.from_settings(raw, repo),
+                      now=now, role=args.role, required=required_jobs(raw), owner=owner_login(raw),
+                      merge=args.pr is None)  # only the workflow's `--event` merges; a bare `follow <pr>` never does
+        ticket = f"#{done.ticket}" if done.ticket else "-"
+        said = f"#{done.pr} {done.outcome} ticket={ticket} {done.detail}".rstrip()
+        lines.append(said + (" merged_by_follow" if done.merged_by_follow else ""))
+    return "".join(f"{line}\n" for line in lines)
 
 
 def _main_check(args, store_of, repo_of, now: datetime) -> str:

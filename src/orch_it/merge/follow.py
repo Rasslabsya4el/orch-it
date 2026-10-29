@@ -10,7 +10,9 @@ whose park waits on this pull request; with none, the open ticket parked on it. 
 request (branch `skills-upstream/<commit>-<base>`) with none of these is followed through the issue `skills
 report` opened for its commit, on a red or no result only: that issue goes to the brain (#412).
 
-Merged (`close` rules): the ticket is closed with its acceptance rows (`closed`), or, when the ticket
+Merged (`close` rules; a pull request whose body says `Part: k of n` with k < n only lands that part
+(`part_landed`, #434; `already_landed` when the ticket already says so): its park comes off, one comment
+says so, the ticket stays open and nothing is judged or closed; the last part, or a pull request with no such line, goes by these rules): the ticket is closed with its acceptance rows (`closed`), or, when the ticket
 has rows marked `after merge`, its park comes off and it goes back to ready for those rows only
 (`after_merge`); with no acceptance comment for this pull request (`acceptance_missing`), a failed
 row (`row_failed`), a body changed since the rows were checked (`ticket_changed`) or a person's
@@ -38,7 +40,15 @@ files, not counted; then the required checks of the head sha only (MERGE-12):
 - a check pending longer than `check_stuck_minutes` is cancelled (`stuck`), so it ends with no result;
 - open past `pr_max_hours` from its ready mark: out of the line, to the brain (`timeout`);
 - else `waiting` (a check pending or missing: no check is never green, MERGE-1), `behind` or `green`:
-  nothing changes, the line brings it up to date and merges it.
+  nothing changes, the line brings it up to date and merges it. One exception, the mark-only class (#424): a
+  green, up to date, non-draft pull request of this repo with a ready mark and no auto-merge, into a base
+  that does not require every required job, is merged by the follow itself (`merged_by_follow`): its title
+  and body pass the merge line's closing-keyword check (else it leaves the line, `refused`), then
+  `merge` at the head sha the follow read; GitHub refusing it is `waiting`, and the next follow reads again.
+  The same run then goes by the `merged` rules above. On a base that requires every job the line owns
+  merging and the follow never merges; the line itself follows with `merge=False`. The follow merges only when
+  called with `merge=True`: by the `follow` workflow (`--event`) and the hourly `reconcile`, never by the park reader,
+  the merge line or a bare `follow <pr>`.
 
 "To ready" is the park off and `ready-for-agent` on; "to the brain" the park off, `needs-triage` on,
 the ready labels off; "out of the line" auto-merge off and a left mark on the pull request. The
@@ -54,7 +64,7 @@ request with no ticket only leaves the line.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from orch_it.events.store import Store
@@ -97,15 +107,18 @@ class FollowReport:
     ticket: int | None
     outcome: str
     detail: str = ""
+    merged_by_follow: bool = False  # the follow merged the pull request in this run (the mark-only class)
 
 
 def follow(hub: PullHub, store: Store, repo: str, number: int, *, base: str = "main", settings: MergeSettings,
            now: datetime, role: str = ROLE, required: tuple[str, ...] = tuple(DEFAULT_REQUIRED_JOBS),
-           owner: str | None = None) -> FollowReport:
+           owner: str | None = None, merge: bool = False) -> FollowReport:
     """Move the ticket of pull request `number` as its pull request stands now; see the module text.
-    `owner`: the login whose comment is the owner's and the layer's (default: the repo's owner)."""
+    `owner`: the login whose comment is the owner's and the layer's (default: the repo's owner).
+    `merge`: True only for a machine-free actor (the `follow` workflow's `--event`, the hourly `reconcile`), which lets
+    the follow merge a mark-only pull request; the merge line, the park reader and a bare `follow <pr>` leave it False."""
 
-    one = _Follow.of(hub, store, repo, number, settings, now, role, owner, required)
+    one = _Follow.of(hub, store, repo, number, settings, now, role, owner, required, merge)
     try:
         if one.pull.state == "merged":
             return one.merged()
@@ -193,6 +206,25 @@ def pr_of_event(event: dict, hub: PullHub, repo: str) -> tuple[int | None, str]:
     return ref.number, ""
 
 
+def prs_of_workflow_run(event: dict, hub: PullHub, repo: str, base: str) -> tuple[list[int], str]:
+    """The open pull requests whose head is the commit a `tests` run of a `workflow_run` event ran on, and why none
+    when there is none: the pull requests the event lists, else the open ones into `base` with that head branch and
+    head sha. A pull request that moved on to another head, or ended, is not named."""
+
+    run = event.get("workflow_run")
+    sha = run.get("head_sha") if isinstance(run, dict) else None
+    if not isinstance(sha, str) or not sha:
+        return [], "no workflow run with a head sha in the event"
+    named = [p["number"] for p in run.get("pull_requests") or [] if isinstance(p, dict) and isinstance(p.get("number"), int)]
+    if named:
+        pulls = [pull for number in named if (pull := hub.pull(repo, number)) is not None]
+    else:
+        branch = run.get("head_branch")
+        pulls = [pull for pull in hub.open_pulls(repo, base) if branch is None or pull.branch == branch]
+    found = [pull.number for pull in pulls if pull.state == "open" and pull.head_sha == sha]
+    return found, "" if found else f"no open pull request of {repo} has the head {sha[:SHORT_SHA]}"
+
+
 def _parked_on(issue: Issue, repo: str, pr: int) -> bool:
     found = park.held_park(parse(issue.body).park_lines)
     ref = found.ticket if found is not None and found.kind == "pr_ended" else None
@@ -211,21 +243,24 @@ def _listed(ids: list[str]) -> str:
 
 class _Follow:
     def __init__(self, hub: PullHub, store: Store, repo: str, pull: Pull, issue: Issue | None,
-                 settings: MergeSettings, now: datetime, role: str, owner: str, required: tuple[str, ...]):
+                 settings: MergeSettings, now: datetime, role: str, owner: str, required: tuple[str, ...],
+                 merge: bool = False):
         self.hub, self.store, self.repo, self.pull, self.issue = hub, store, repo, pull, issue
         self.settings, self.now, self.role, self.owner, self.required = settings, now, role, owner, required
         self.said = hub.pull_comments(repo, pull.number)
         started = marks.last_ready(marks.of_layer(self.said, owner))
         self.run = record.pr_run(repo, pull.number, started.at if started else None)
         self.skills = False  # the ticket is the issue of a skills update (`skills_issue_of`)
+        self.merge = merge  # the follow may merge a mark-only pull request (`follow(merge=)`)
+        self.merged_by_follow = False  # this run merged the pull request
 
     @classmethod
-    def of(cls, hub, store, repo, number, settings, now, role, owner, required) -> _Follow:
+    def of(cls, hub, store, repo, number, settings, now, role, owner, required, merge: bool = False) -> _Follow:
         pull = hub.pull(repo, number)
         if pull is None:
             raise FollowError("pr_missing", f"{repo}#{number} is no pull request")
         return cls(hub, store, repo, pull, ticket_of(hub, repo, pull), settings, now, role,
-                   (owner or repo.split("/")[0]).lower(), required)
+                   (owner or repo.split("/")[0]).lower(), required, merge)
 
     @property
     def ticket(self) -> int | None:
@@ -237,7 +272,7 @@ class _Follow:
     # merged: the close rules
 
     def merged(self) -> FollowReport:
-        merge = {"merge_sha": self.pull.merge_sha}
+        merge = {"merge_sha": self.pull.merge_sha, **({"merged_by": "follow"} if self.merged_by_follow else {})}
         if self.issue is None and self._adopt_skills_issue():
             return self._closed_skills(merge)
         if self.issue is None:
@@ -251,6 +286,9 @@ class _Follow:
         if (held.parked or held.park_lines) and not _parked_on(self.issue, self.repo, self.pull.number):
             self._end_pr("passed", "merged", merge)
             return self.report("merged_other", f"#{self.issue.number} waits on another pull request")
+        part = marks.part_of(self.pull.body)
+        if part and part[0] < part[1]:
+            return self._part_landed(*part, merge)
         accepted, why = self._acceptance_judged()
         if why:
             self._to_brain(why[0], f"#{self.pull.number} merged, but the ticket is not closed: {why[1]}.", "other_way")
@@ -279,6 +317,27 @@ class _Follow:
         self._close_step("passed", None)
         self._end_pr("passed", "merged", merge)
         return self.report("closed", f"rows {passed}/{len(accepted.rows)}")
+
+    def _part_landed(self, k: int, n: int, merge: dict) -> FollowReport:
+        """A merged part before the last (#434): the ticket's park on this pull request ends so the
+        next part's `pr open` is not refused; no acceptance is judged and nothing is closed."""
+
+        said = f"part {k} of {n}"
+        issue = self._fresh()
+        if issue is None or not issue.open:
+            return self.report("already_closed")
+        said_on_ticket = marks.of_layer(self.hub.comments(self.repo, issue.number), self.owner)
+        if marks.part_landed(said_on_ticket, self.pull.number):
+            return self.report("already_landed", said)
+        self._end_park(issue, "due", write=lambda: park.take_off(self.hub, issue))
+        sha = (self.pull.merge_sha or "")[:SHORT_SHA]
+        self.hub.comment(self.repo, issue.number,
+                         f"{marks.follow_mark('part_landed', self.pull.number)}{said} landed: "
+                         f"#{self.pull.number} merged at `{sha}`. The ticket stays open for the next part.")
+        self._write(None, None, [("comment.written", {"comment_kind": "machine"})])
+        self._close_step("passed", None)
+        self._end_pr("passed", "merged", merge)
+        return self.report("part_landed", said)
 
     def _closed_skills(self, merge: dict) -> FollowReport:
         """A skills update's pull request merged: its skills issue (no acceptance table to judge) gets the closing
@@ -385,7 +444,30 @@ class _Follow:
                                                     c.state == PENDING))
         if self.pull.behind:
             return self.report("behind", f"{self.pull.behind} commits")
-        return self.report("green")
+        return self._merge_mark_only(ready) or self.report("green")
+
+    def _merge_mark_only(self, ready) -> FollowReport | None:
+        """A green, up to date pull request in the mark-only class (a ready mark, no auto-merge, a base that does
+        not require every required job) merged here: the merge line's closing-keyword check on its text as it is
+        now, then `merge` at the head sha this follow read. None when it is not that class, so the line (or
+        auto-merge) owns it. The workflow's token starts no workflow, so the merged rules run in this same run."""
+
+        pull = self.pull
+        if (not self.merge or ready is None or pull.auto_merge is not None or pull.draft
+                or (pull.head_repo or "").lower() != self.repo.lower()
+                or set(self.required) <= self.hub.required_checks_of(self.repo, pull.base)):
+            return None
+        fresh = self.hub.pull(self.repo, pull.number)  # an edit after `pr open` counts
+        if fresh is None:  # never merged without the closing check
+            return self.report("waiting", "pull request not readable: the next follow reads it again")
+        why = marks.closing_refusal(pull.number, fresh.title, fresh.body)
+        if why:
+            self.hub.comment(self.repo, pull.number, marks.left_comment("closing_keyword", why))
+            return self.report("refused", why)
+        if not self.hub.merge(self.repo, pull.number, pull.head_sha, self.settings.merge_method):
+            return self.report("waiting", "GitHub refused the merge: the next follow reads it again")
+        self.pull, self.merged_by_follow = self.hub.pull(self.repo, pull.number) or pull, True
+        return replace(self.merged(), merged_by_follow=True)
 
     def conflict(self, files: list[str], other_pr: int | None = None) -> FollowReport:
         shown = "\n".join(f"- `{name[:ID_CHARS]}`" for name in files[:IDS_SHOWN]) or "- (GitHub names no file)"

@@ -9,7 +9,9 @@ appends a run of it and follows the open pull requests, as the sweep does. The h
 
 import importlib
 import itertools
+import tomllib
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import merge_trial
 import pytest
@@ -270,6 +272,61 @@ def test_a_successful_reconcile_run_that_leaves_the_red_ticket_not_moved_fails_t
     assert row["red"]["run_conclusion"] == "success" and row["red"]["error"] is None
     assert row["red"]["passed"] is False  # the ticket is not where the red end puts it
     assert row["passed"] is False and all(row[end]["passed"] for end in ENDS if end != "red")
+
+
+PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
+MIN_SLOW_SECONDS = 100  # the settle wait (about a minute) and the follow run of the comment both fit in the test run
+
+
+def record_pull_requests(monkeypatch, wrap=None):
+    """Each `_Run.pull_request` call by its label: the files it was given. `wrap(self, label, made)` runs after it."""
+
+    made, original = {}, merge_trial._Run.pull_request
+
+    def recording(self, label, files, **kwargs):
+        made[label] = files
+        result = original(self, label, files, **kwargs)
+        if wrap is not None:
+            wrap(self, label, result)
+        return result
+
+    monkeypatch.setattr(merge_trial._Run, "pull_request", recording)
+    return made
+
+
+def test_the_comment_pull_request_carries_an_unmarked_slow_test_within_the_change_run_bound(live, world, monkeypatch):
+    FollowWorkflow(world)
+    made = record_pull_requests(monkeypatch)
+    row = run_row(live, world)
+
+    slow = [path for path in made["comment"] if path.startswith("tests/test_trial_slow_")]
+    assert len(slow) == 1, sorted(made["comment"])
+    body = made["comment"][slow[0]]
+    assert "pytest.mark" not in body  # no marker: the change run (`-m not serial`, the slow and live left out) runs it
+    bound = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["orch_it"]["tests"]["per_change_timeout_seconds"]
+    assert MIN_SLOW_SECONDS <= live.SLOW_SECONDS < bound, (live.SLOW_SECONDS, bound)  # the per-test bound is not hit
+    assert f"time.sleep({live.SLOW_SECONDS})" in body
+    assert row["comment"]["passed"] is True and row["passed"] is True
+
+
+def test_a_comment_end_whose_pull_request_merged_before_the_comment_fails_the_end(live, world, monkeypatch):
+    FollowWorkflow(world)
+
+    def merge_before_the_comment(self, label, made):
+        if label != "comment":
+            return
+        pr = made[2].pr
+        head = world.hub.pull(REPO, pr).head_sha
+        world.hub.checks_on(head)  # the required checks green on the head: the auto-merge's own condition
+        sha = world.hub.merge(REPO, pr, head, "squash")
+        assert sha is not None, "the trial's precondition: the comment pull request lands before the comment"
+
+    record_pull_requests(monkeypatch, wrap=merge_before_the_comment)
+    row = run_row(live, world)
+
+    assert row["comment"]["pr_state"] == "merged"
+    assert row["comment"]["passed"] is False
+    assert row["passed"] is False and all(row[end]["passed"] for end in ENDS if end != "comment")
 
 
 def test_the_registry_returns_the_live_row_4_for_row_4(live, monkeypatch):

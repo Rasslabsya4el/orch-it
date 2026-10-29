@@ -67,6 +67,7 @@ EVENT_ARTIFACT_PAGES = 3  # of 100 artifacts each, newest first
 BASE_REF, PULL_REF = "refs/orch/base", "refs/orch/pr"
 BRANCH_RUN_EVENTS = ("push", "schedule", "workflow_dispatch")
 METHODS = ("merge", "squash", "rebase")
+DISABLE_REFUSAL = "can't disable auto-merge"  # GitHub's text when a disable finds no auto-merge to turn off
 _RUN_OF_JOB = re.compile(r"/actions/runs/(\d+)/job/")
 _PULL_URL = re.compile(r"/pull/(\d+)/?$")
 
@@ -162,6 +163,35 @@ class GhPullHub(GhHub):
     def close_pull(self, repo: str, number: int) -> None:
         self._send(["api", "-X", "PATCH", f"repos/{repo}/pulls/{number}"], {"state": "closed"})
 
+    def required_checks_of(self, repo: str, base: str) -> set[str]:
+        """The names a base requires, from its classic protection (`contexts` and `checks`) and from its rulesets
+        (the `required_status_checks` rule). A 403 or 404 on either route (not protected, or a plan without it) is
+        no requirement on that route; any other refusal raises."""
+
+        names = set()
+        try:
+            found = self._object(["api", f"repos/{repo}/branches/{quote(base, safe='')}/protection"], missing_ok=True)
+        except GithubError as e:
+            if not _unprotected(e):
+                raise
+            found = None
+        section = (found or {}).get("required_status_checks")
+        if isinstance(section, dict):
+            names |= {name for name in section.get("contexts") or [] if _text(name)}
+            names |= {_text(check.get("context")) for check in section.get("checks") or [] if isinstance(check, dict)}
+        try:
+            rules = self._list(["api", f"repos/{repo}/rules/branches/{quote(base, safe='')}"])
+        except GithubError as e:
+            if not _unprotected(e):
+                raise
+            rules = []
+        for rule in rules:
+            if rule.get("type") != "required_status_checks":
+                continue
+            checks = (rule.get("parameters") or {}).get("required_status_checks") or []
+            names |= {_text(check.get("context")) for check in checks if isinstance(check, dict)}
+        return names - {""}
+
     def set_auto_merge(self, repo: str, number: int, method: str | None) -> None:
         if method is None:
             args, already = ["--disable-auto"], ("not enabled", "not on", "already disabled", "already off")
@@ -172,8 +202,18 @@ class GhPullHub(GhHub):
         try:
             self.gh(["pr", "merge", str(number), "--repo", repo, *args])
         except GithubError as e:
-            if not any(phrase in str(e).lower() for phrase in already):
-                raise
+            if any(phrase in str(e).lower() for phrase in already):
+                return
+            if method is None and DISABLE_REFUSAL in str(e).lower() and self._auto_merge_is_off(repo, number):
+                return
+            raise
+
+    def _auto_merge_is_off(self, repo: str, number: int) -> bool:
+        """After GitHub refused a disable: True when the pull request has no auto-merge on (it was landed or closed
+        meanwhile, or never had it), so the refusal is the state the caller wanted."""
+
+        found = self.pull(repo, number)
+        return found is None or found.state != "open" or found.auto_merge is None
 
     def update_branch(self, repo: str, number: int, head_sha: str) -> bool:
         try:
@@ -493,6 +533,19 @@ class GhPullHub(GhHub):
         if len(values) != 1 or not isinstance(values[0], dict):
             raise GithubError("gh_bad_output", f"{' '.join(args[:3])}: expected one object")
         return values[0]
+
+
+_NO_PROTECTION_403 = ("Upgrade to GitHub Pro", "Branch not protected")
+
+
+def _unprotected(error: GithubError) -> bool:
+    """GitHub's refusal to say what a base requires: 404 (not protected), or a 403 whose message says the plan
+    or the branch has no protection. Any other 403 (rate limit, abuse, no permission) is a failure, not a base
+    that requires nothing."""
+    text = str(error)
+    if "HTTP 404" in text:
+        return True
+    return "HTTP 403" in text and any(words in text for words in _NO_PROTECTION_403)
 
 
 def _auto_merge(repo: str, value: object) -> str | None:

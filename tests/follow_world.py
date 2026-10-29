@@ -3,7 +3,7 @@ follow, the line and the holes table start from."""
 
 from datetime import UTC, datetime
 
-from fake_github import REPO, FakeGitHub
+from fake_github import REPO, REQUIRED, FakeGitHub
 from ticket_fixtures import fixture
 
 from orch_it.events.store import Store
@@ -34,11 +34,12 @@ class Git:
         return f"{self.hub.branches[args[-1].removesuffix('^{commit}')][-1]}\n" if args[0] == "rev-parse" else ""
 
 
-def world(tmp_path, *, body=NO_AFTER_MERGE, rows=ROWS_NO_AFTER, tickets=(10,), now=NOW):
-    """A hub with one open, ready ticket per number and its pull request opened by `pr open`;
+def world(tmp_path, *, body=NO_AFTER_MERGE, rows=ROWS_NO_AFTER, tickets=(10,), now=NOW, part=None):
+    """A hub with one open, ready ticket per number and its pull request opened by `pr open` (`part`: its (k, n), #434);
     returns (hub, store, {ticket: pr})."""
 
     hub = FakeGitHub(now)
+    hub.required_by_base = {"main": set(REQUIRED)}  # main requires every job: `pr open` turns auto-merge on
     store = Store.open(tmp_path / "events")
     prs = {}
     for number in tickets:
@@ -46,8 +47,8 @@ def world(tmp_path, *, body=NO_AFTER_MERGE, rows=ROWS_NO_AFTER, tickets=(10,), n
         branch = f"ticket-{number}"
         hub.branches[branch] = [*hub.branches["main"], hub.sha(f"t{number}-")]
         prs[number] = open_pr(hub, store, REPO, number, acceptance=rows, branch=branch, base="main", git=Git(hub),
-                              settings=MergeSettings(), now=hub.now).pr
+                              settings=MergeSettings(), now=hub.now, part=part).pr
     return hub, store, prs
 
 
-__all__ = ["BODY", "NO_AFTER_MERGE", "NOW", "REPO", "ROWS", "ROWS_NO_AFTER", "TITLE", "world"]
+__all__ = ["BODY", "Git", "NO_AFTER_MERGE", "NOW", "REPO", "ROWS", "ROWS_NO_AFTER", "TITLE", "world"]

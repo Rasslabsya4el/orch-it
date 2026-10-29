@@ -5,6 +5,8 @@ the case scripts for it. With `pr_noise`, each base run is listed under a skippe
 the way a pull request's own test run starts one inside the same window."""
 
 import importlib
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import merge_trial
 import pytest
@@ -16,6 +18,7 @@ from orch_it.merge.main_check import check_main
 MAIN = merge_trial.MAIN_CHECK_WORKFLOW
 DEFAULT_BRANCH = "main"
 PR_BRANCH = "trial-pr-noise"
+STALE_SHA = "5eed0001" + "0" * 32  # the base head before the merge: a skipped run on the base's branch carries it
 
 
 class LiveTrial(FakeTrial):
@@ -45,10 +48,10 @@ class LiveWorld(World):
     `duplicate` runs it and opens a second red ticket of the same tests, `none` does nothing. With `pr_noise`, a
     skipped run of the pull request branch `PR_BRANCH` is listed above each run of the base."""
 
-    def __init__(self, tmp_path, script=(), default=DEFAULT_BRANCH, pr_noise=False):
+    def __init__(self, tmp_path, script=(), default=DEFAULT_BRANCH, pr_noise=False, stale_noise=False):
         super().__init__(tmp_path)
         self.listings: dict[str, list[dict]] = {}
-        self.script, self.counter, self.pr_noise = list(script), 0, pr_noise
+        self.script, self.counter, self.pr_noise, self.stale_noise = list(script), 0, pr_noise, stale_noise
         self.trial = LiveTrial(self.hub, tmp_path / "locks", self.listings, default)
         self.ci.red = RedByFiles(self.hub, self.trial)
         self.hub.on_merge.append(self._push_main_check)
@@ -81,6 +84,11 @@ class LiveWorld(World):
             runs.insert(0, {"id": f"pr-check-{self.counter}", "created_at": stamp, "status": "completed",
                             "conclusion": "skipped", "event": "workflow_run", "head_sha": sha,
                             "head_branch": PR_BRANCH})
+        if self.stale_noise:  # the live case of #411: a skipped run on the base's branch with the base head from before
+            # the merge, created in the same window and listed above the base's run (the fix pull request's own run)
+            runs.insert(0, {"id": f"stale-check-{self.counter}", "created_at": stamp, "status": "completed",
+                            "conclusion": "skipped", "event": "workflow_run", "head_sha": STALE_SHA,
+                            "head_branch": DEFAULT_BRANCH})
 
 
 @pytest.fixture
@@ -131,6 +139,40 @@ def test_only_a_skipped_base_run_fails_the_step_even_with_a_pull_request_run_lis
     assert out["failed_step"] == {"step": "first", "run_id": "main-check-1", "conclusion": "skipped"}
     assert out["main_check_runs"] == [{"step": "first", "run_id": "main-check-1", "conclusion": "skipped"}]
     assert "second_check" not in out and "third_check" not in out
+
+
+def test_a_skipped_base_branch_run_with_an_old_head_sha_is_not_the_steps_run_and_the_merge_sha_run_is_taken(row5,
+                                                                                                          tmp_path):
+    # #411: the fix pull request's own run is a skipped run on the base's branch with the base head from before the
+    # merge, created in the same window and listed above the base's run: each step takes the run with its merge sha
+    world = LiveWorld(tmp_path, stale_noise=True)
+    out = world.run(row5)
+
+    assert out["passed"] is True, out
+    assert [r["run_id"] for r in out["main_check_runs"]] == ["main-check-1", "main-check-2", "main-check-3"]
+    assert [r["conclusion"] for r in out["main_check_runs"]] == ["success", "success", "success"]
+
+
+def test_the_only_run_with_the_merge_sha_skipped_fails_its_step_beside_an_old_sha_run(row5, tmp_path):
+    world = LiveWorld(tmp_path, script=[("skipped", "none")], stale_noise=True)
+    out = world.run(row5)
+
+    assert out["passed"] is False
+    assert out["failed_step"] == {"step": "first", "run_id": "main-check-1", "conclusion": "skipped"}
+    assert out["main_check_runs"] == [{"step": "first", "run_id": "main-check-1", "conclusion": "skipped"}]
+    assert "second_check" not in out and "third_check" not in out
+
+
+def test_a_step_that_ends_without_its_head_sha_is_an_error_and_waits_for_no_run(tmp_path):
+    # no silent fallback to "any run": a step whose block set no sha raises before any run is looked for
+    module = importlib.import_module("merge_trial_live_r5")
+    run = SimpleNamespace(clock=lambda: datetime.now(UTC))
+    out = {"main_check_runs": []}
+
+    with pytest.raises(merge_trial.TrialError, match="head sha"):
+        with module._main_check_step(run, out, "first"):
+            pass
+    assert out["main_check_runs"] == []
 
 
 def test_a_main_check_run_that_ends_skipped_is_not_a_pass_and_the_step_fails(row5, tmp_path):

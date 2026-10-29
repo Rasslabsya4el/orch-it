@@ -6,14 +6,14 @@ pull request and puts it back in the line."""
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fake_github import REPO, FakeGitHub
+from fake_github import REPO, REQUIRED, FakeGitHub
 from ticket_fixtures import fixture
 
 from orch_it import tickets
 from orch_it.events.store import Store
 from orch_it.merge import marks, pr_open
 from orch_it.merge.git import GitError
-from orch_it.merge.pr_open import PrError, open_pr
+from orch_it.merge.pr_open import PrError, open_pr, parse_part
 from orch_it.merge.settings import MergeSettings
 
 TITLE, BODY = fixture("good_basic")
@@ -51,16 +51,17 @@ class Git:
 def world(tmp_path):
     hub = FakeGitHub(NOW)
     hub.add(10, BODY, ["ready-for-agent"], title=TITLE)
+    hub.required_by_base = {"main": set(REQUIRED)}  # main requires every job, as the protection of the layer's repo
     return hub, Store.open(tmp_path / "events")
 
 
-def opened(world, acceptance=GOOD, *, git=None, branch="ticket-10", number=10, **settings):
+def opened(world, acceptance=GOOD, *, git=None, branch="ticket-10", number=10, part=None, **settings):
     hub, store = world
     hub.branches.setdefault(branch, [*hub.branches["main"], hub.sha("h")])
     git = git or Git()
     git.hub = hub
     return open_pr(hub, store, REPO, number, acceptance=acceptance, branch=branch, base="main", git=git,
-                   settings=MergeSettings(**settings), now=hub.now)
+                   settings=MergeSettings(**settings), now=hub.now, part=part)
 
 
 def test_it_opens_one_pull_request_with_refs_parks_the_ticket_and_turns_auto_merge_on(world):
@@ -83,9 +84,35 @@ def test_pr_open_hands_the_ready_mark_and_auto_merge_to_after_open(world, monkey
     calls = []
     monkeypatch.setattr(pr_open, "after_open", lambda *args: calls.append(args))
     done = opened(world)
-    [(hub, repo, pr, head, ticket, now, method)] = calls
-    assert (repo, pr, head, ticket, method) == (REPO, done.pr, done.head, 10, "merge")
+    [(hub, repo, pr, head, ticket, now, method, base, required)] = calls
+    assert (repo, pr, head, ticket, method, base) == (REPO, done.pr, done.head, 10, "merge", "main")
+    assert tuple(required) == REQUIRED
     assert now == world[0].now and hub is world[0]
+
+
+@pytest.mark.parametrize("requires, on", [(set(REQUIRED), True), (set(), False), ({REQUIRED[0]}, False)])
+def test_after_open_turns_auto_merge_on_only_where_the_base_requires_every_job(requires, on):
+    hub = FakeGitHub(NOW)
+    hub.required_by_base = {"main": requires}
+    pr = hub.open_pull(branch="feature")
+    pr_open.after_open(hub, REPO, pr, hub.head(pr), None, NOW, "merge", "main", REQUIRED)
+    assert marks.ready_since(hub.comments(REPO, pr)) is not None  # the mark is written on every base
+    assert hub.pull(REPO, pr).auto_merge == ("merge" if on else None)
+    assert [c for c in hub.calls if c[0] == "auto_merge"] == ([("auto_merge", pr, "merge")] if on else [])
+
+
+@pytest.mark.parametrize("requires, on", [(set(REQUIRED), True), (set(), False)])
+def test_after_open_with_the_mark_already_at_the_head_writes_no_second_mark_and_keeps_the_auto_merge_rule(requires,
+                                                                                                        on):
+    hub = FakeGitHub(NOW)
+    hub.required_by_base = {"main": requires}
+    pr = hub.open_pull(branch="feature")
+    head = hub.head(pr)
+    pr_open.after_open(hub, REPO, pr, head, None, NOW, "merge", "main", REQUIRED)
+    written = len(hub.comments(REPO, pr))
+    pr_open.after_open(hub, REPO, pr, head, None, NOW, "merge", "main", REQUIRED, mark_written=True)
+    assert len(hub.comments(REPO, pr)) == written  # the mark stands at the head: no second one
+    assert hub.pull(REPO, pr).auto_merge == ("merge" if on else None)
 
 
 def test_the_acceptance_comment_on_the_ticket_holds_every_row_and_the_body_it_was_checked_on(world):
@@ -299,3 +326,70 @@ def test_the_park_lasts_past_the_pr_s_bound(world):
     done = opened(world, pr_max_hours=72)
     hub, _ = world
     assert tickets.parse(hub.issues[(REPO, 10)].body).park_lines == (f"Parked: pr_ended #{done.pr} until 2026-11-06",)
+
+
+@pytest.mark.parametrize("body, found", [
+    ("Refs #10\nPart: 1 of 2\n\nTitle\n", (1, 2)),
+    ("Refs #10\nPart: 2 of 2", (2, 2)),
+    ("Refs #10\r\nPart: 1 of 3\r\n", (1, 3)),
+    ("Part: 3 of 2\n", None),
+    ("Part: 0 of 2\n", None),
+    ("Refs #10\n\nno part line here\n", None),
+    ("Part: one of two\n", None),
+    ("Part: 1/2\n", None),
+    ("see Part: 1 of 2 in the middle\n", None),
+    ("", None),
+])
+def test_part_of_reads_the_part_line_and_refuses_anything_else(body, found):
+    assert marks.part_of(body) == found
+
+
+@pytest.mark.parametrize("text", ["3/2", "0/2", "1/0", "1-2", "a/b", "", "1/2/3", "-1/2"])
+def test_a_bad_part_is_refused_before_anything_is_written(text):
+    with pytest.raises(PrError) as caught:
+        parse_part(text)
+    assert caught.value.code == "bad_part"
+
+
+@pytest.mark.parametrize("part", [(3, 2), (0, 2), (1, 0), (-1, 2)])
+def test_the_library_refuses_a_part_outside_one_to_n_and_writes_nothing(world, part):
+    hub, _ = world
+    with pytest.raises(PrError) as caught:
+        opened(world, part=part)
+    assert caught.value.code == "bad_part" and not hub.pulls and not hub.writes
+
+
+def test_a_good_part_argument_is_read_as_k_and_n():
+    assert parse_part("1/2") == (1, 2) and parse_part("2/2") == (2, 2)
+
+
+def test_a_part_pull_request_says_part_k_of_n_after_refs(world):
+    hub, _ = world
+    done = opened(world, part=(1, 2))
+    body = hub.pull(REPO, done.pr).body
+    assert body.startswith("Refs #10\nPart: 1 of 2\n") and marks.part_of(body) == (1, 2)
+
+
+def test_a_one_part_pull_request_writes_no_part_line(world):
+    hub, _ = world
+    done = opened(world)
+    assert "Part:" not in hub.pull(REPO, done.pr).body and marks.part_of(hub.pull(REPO, done.pr).body) is None
+
+
+def test_a_reused_pull_request_keeps_its_body_when_run_again_with_a_part(world):
+    hub, _ = world
+    first = opened(world, part=(1, 2))
+    before = hub.pull(REPO, first.pr).body
+    again = opened(world, part=(2, 2))
+    assert again.reused and again.pr == first.pr
+    assert hub.pull(REPO, again.pr).body == before
+
+
+def test_a_merged_earlier_pull_request_of_the_ticket_does_not_refuse_the_next_part(world):
+    hub, _ = world
+    old = hub.open_pull(branch="ticket-10-part-1", body="Refs #10\nPart: 1 of 2\n", title=TITLE)
+    hub.pulls[old].state = "merged"
+    hub.pulls[old].merged_at = hub.now
+    done = opened(world, branch="ticket-10-part-2", part=(2, 2))
+    assert done.pr != old and not done.reused
+    assert marks.part_of(hub.pull(REPO, done.pr).body) == (2, 2)
