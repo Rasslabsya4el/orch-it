@@ -42,6 +42,18 @@ class PlaceEnd:
     log_tail: str = ""
 
 
+@dataclass(frozen=True)
+class Availability:
+    """What a place whose room is not in the store tells the rule at a decision (the `github` place: its machines
+    are the account's, read from GitHub). `on`: it may be offered. `busy` of `limit`: its machines in use and all
+    it has. `note`: the words the decision carries for it (`18 busy of 20`, or why it is off)."""
+
+    on: bool
+    busy: int
+    limit: int
+    note: str
+
+
 REFUSAL_CODES = ("busy", "os_missing", "place_off", "out_of_minutes")
 # where a place stopped when it refused (`refused_step` of the run's end): the far side's setup
 # steps, and the two ways a connection fails before the run starts
