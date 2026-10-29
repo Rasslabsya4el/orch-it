@@ -10,6 +10,13 @@ is never edited. Any other event, a ticket no longer ready, or a pull request is
 The literal check (#413 unit 6) judges the same body with this run's values (`read_values`: on GitHub Actions
 the runner's own environment, the repo, owner and actor, the home folder, and the checkout's git setting) and
 the check names of the workflows in the workspace. A values line that is not checked is the comment's last line.
+
+A ticket the layer's own code opened (the skills issue, the red-on-main, no-result and workflow-watch tickets) is
+written on the writer's machine, in the writer's `human_language` and with the layer's own commands in it, and
+judged there when it is written. A runner has neither that language nor those values, so on GitHub such a ticket is
+judged by the shape rules alone, without the language rule and the literal rules (#424 unit 8). It is such a ticket
+when its body carries `CODE_WRITTEN_MARK` and its author is a bot or the repo's owner; a person's ticket is judged in
+full whatever its body says.
 """
 
 from __future__ import annotations
@@ -21,10 +28,11 @@ from pathlib import Path
 
 from orch_it import language
 from orch_it.tickets.hub import LAYER_MARK, Hub
-from orch_it.tickets.model import READY_LABEL, parse
+from orch_it.tickets.model import CODE_WRITTEN_MARK, READY_LABEL, parse
 from orch_it.tickets.shape import literal_violations, violations
 
 CHECK_ERROR_CODES = ("event_unreadable",)
+WRITER_BOUND_CODES = frozenset({"human_field_wrong_language"})  # judged where the ticket is written, not on a runner
 
 
 class CheckError(ValueError):
@@ -88,7 +96,10 @@ def check_event(event: object, hub: Hub, *, env=None, run=None, home=None, host=
     values = read_values(env=env, run=run, home=home, host=host)
     checks = read_job_names(str(Path(workspace) / ".github" / "workflows"))
     found = violations(parse(issue.body, title=issue.title, labels=issue.labels))
-    found += literal_violations(issue.body, values=values, checks=checks)
+    if _opened_by_the_layer(event, issue.body):
+        found = [v for v in found if v.code not in WRITER_BOUND_CODES]
+    else:
+        found += literal_violations(issue.body, values=values, checks=checks)
     if not found:
         return CheckResult(number, "kept")
     # the comment's words are read before the label moves: a language that cannot be read never leaves a label
@@ -100,6 +111,21 @@ def check_event(event: object, hub: Hub, *, env=None, run=None, home=None, host=
     hub.remove_label(repo, number, ready[0])
     hub.comment(repo, number, f"{LAYER_MARK}\n{notice}\n\n{listed}\n" + (f"{tail}\n" if tail else ""))
     return CheckResult(number, "removed", list(dict.fromkeys(v.code for v in found)))
+
+
+def _opened_by_the_layer(event: dict, body: str) -> bool:
+    """The layer's own code opened the ticket: its body has the mark, and the event (GitHub's own data) names a
+    bot or the repo's owner (the layer's commands run under the owner's `gh`) as the author."""
+
+    if CODE_WRITTEN_MARK not in body:
+        return False
+    author, owner = event["issue"].get("user"), event["repository"].get("owner")
+    login = author.get("login") if isinstance(author, dict) else None
+    if not isinstance(login, str) or not login:
+        return False
+    if author.get("type") == "Bot":
+        return True
+    return isinstance(owner, dict) and isinstance(owner.get("login"), str) and login.lower() == owner["login"].lower()
 
 
 def _quiet(text: str) -> str:

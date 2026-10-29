@@ -23,6 +23,7 @@ from urllib.parse import quote, unquote
 
 from orch_it import language
 from orch_it.tickets import parse, violations
+from orch_it.tickets.model import CODE_WRITTEN_MARK
 from orch_it.tickets.reader import TRIAGE_LABEL
 
 LABELS = (TRIAGE_LABEL,)
@@ -169,6 +170,7 @@ def build(run: WorkflowRun) -> tuple[str, str]:
         "Undo": language.text("watch_undo", shown=shown),
     }.items())
     body = f"""{mark(name)}
+{CODE_WRITTEN_MARK}
 ## For the human
 {human}
 

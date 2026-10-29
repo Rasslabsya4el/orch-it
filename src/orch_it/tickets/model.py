@@ -28,6 +28,9 @@ HUMAN_HEADING = "## For the human"
 AGENT_HEADING = "## For the agent"
 HUMAN_FIELDS = ("What", "Goal", "Plan", "Result", "Undo")
 PARK_PREFIX = "Parked:"
+# the line the layer's own code puts at the top of a ticket body it opens (the skills issue, the red-on-main,
+# no-result and workflow-watch tickets); the shape check on GitHub reads it (`tickets.gh_check`)
+CODE_WRITTEN_MARK = "<!-- orch-it written-by-code -->"
 
 READY_LABEL = "ready-for-agent"
 PARKED_LABEL = "parked"

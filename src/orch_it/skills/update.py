@@ -47,6 +47,7 @@ from orch_it.skills import copies, references
 from orch_it.skills.classify import Change, classify
 from orch_it.skills.copies import GIT_TIMEOUT_SECONDS, NO_WINDOW, Manifest, SkillsError, Tree
 from orch_it.tickets import model, shape
+from orch_it.tickets.model import CODE_WRITTEN_MARK
 
 BRANCH_PREFIX = "skills-upstream/"
 BASE_REF = "main"
@@ -347,7 +348,7 @@ def issue(found: Check, *, waits: bool = False) -> tuple[str, str]:
         "Not in this ticket: which role calls an added skill (the brain decides)",
         f"Weight: {WEIGHT_TRIAGE if waiting else WEIGHT_PLAIN}",
         "Written by `python -m orch_it skills report` (the daily `skills-update` workflow)."])
-    return ISSUE_TITLE + new, f"## For the human\n\n{human}\n\n## For the agent\n\n{agent}\n"
+    return ISSUE_TITLE + new, f"{CODE_WRITTEN_MARK}\n## For the human\n\n{human}\n\n## For the agent\n\n{agent}\n"
 
 
 def checked_issue(found: Check) -> tuple[str, str, list[str]]:
