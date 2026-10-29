@@ -452,12 +452,18 @@ def test_an_unprotected_branch_with_the_empty_contexts_object_requires_nothing()
 @pytest.mark.parametrize("answer", [{"name": "main", "protected": False},
                                     {"name": "main", "protected": False, "protection": {
                                         "required_status_checks": {"contexts": [FIRST], "checks": []}}},
-{"name": "main", "protection": None},
+                                    {"name": "main", "protection": None},
                                     {"name": "main", "protected": True, "protection": {"enabled": True}},
                                     {"name": "main", "protection": {"required_status_checks": None}}])
 def test_an_answer_with_no_protection_or_no_required_checks_requires_nothing(answer):
     gh = Gh(([BRANCH], answer), ([RULES], []))
     assert GhPullHub(gh).required_checks_of(REPO, "main") == set()
+
+
+def test_a_base_with_a_slash_is_encoded_in_both_routes():
+    base = "release/1"
+    gh = Gh(([f"repos/{REPO}/branches/release%2F1"], classic(FIRST)), ([f"repos/{REPO}/rules/branches/release%2F1"], []))
+    assert GhPullHub(gh).required_checks_of(REPO, base) == {FIRST}
 
 
 def test_the_admin_only_protection_route_is_never_called():
