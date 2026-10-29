@@ -1,0 +1,10 @@
+{
+  "research": {
+    "provider": {
+      "id": "acme-llm",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {"baseURL": "https://api.acme-llm.example/v1"}
+    },
+    "models": {"small": "acme-llm/acme-1"}
+  }
+}
