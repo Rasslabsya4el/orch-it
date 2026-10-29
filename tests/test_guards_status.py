@@ -24,6 +24,9 @@ FACTS = ("required_checks", "strict", "enforce_admins", "force_push_and_deletion
          "claude_hook")
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def protection(**changes):
     """What `gh api repos/<repo>/branches/main/protection` answers for orch-it's own protection."""
 

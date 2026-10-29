@@ -32,6 +32,9 @@ GREEN = [("tests.test_a", "test_one", "passed"), ("tests.test_a", "test_two", "p
 RED = [("tests.test_a", "test_one", "passed"), ("tests.test_a", "test_two", "failed")]
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def stamp(base, seconds):
     return None if seconds is None else (base + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 

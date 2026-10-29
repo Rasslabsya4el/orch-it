@@ -9,6 +9,9 @@ caller never gets a partial list.
 
 A case's outcome is `failed` with a `<failure>` child, `error` with an `<error>` child (either
 one wins over `<skipped>`), `skipped` with a `<skipped>` child, else `passed`.
+
+A case is `marked` when it has a `<property name="os_touching">` child under `<properties>`: the repo's
+conftest writes it for a test carrying the `os_touching` marker (#414 unit 4).
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ _TIME = re.compile(r"\d+(\.\d*)?([eE][+-]?\d+)?|\d{1,3}(,\d{3})+(\.\d*)?")
 REPORT_ERROR_CODES = ("missing", "broken")
 _RANK = {"passed": 0, "skipped": 1, "error": 2, "failed": 3}
 _CHILD_OUTCOME = {"failure": "failed", "error": "error", "skipped": "skipped"}
+MARKER_PROPERTY = "os_touching"  # the name of the `<property>` a marked test's case carries
 
 
 class ReportUnreadable(Exception):
@@ -49,6 +53,7 @@ class Case:
     outcome: str  # passed, failed, error or skipped
     seconds: float | None
     skip_reason: str | None  # the `message` (else `type`) of a skipped case's <skipped>
+    marked: bool = False  # the case has the `os_touching` property
 
     @property
     def test_id(self) -> str:
@@ -111,9 +116,11 @@ class _Reader:
                 self.open_case = {"classname": (attrs.get("classname") or "")[:NAME_CHARS],
                                   "name": (attrs.get("name") or "")[:NAME_CHARS],
                                   "outcome": "passed", "seconds": _seconds(attrs.get("time")),
-                                  "skip_reason": None}
+                                  "skip_reason": None, "marked": False}
             elif tag in ("failure", "error") and self.suites and self.depth == self.suites[-1].depth + 1:
                 self._suite_red(self.suites[-1])
+        elif tag == "property" and self.depth == self.case_depth + 2 and attrs.get("name") == MARKER_PROPERTY:
+            self.open_case["marked"] = True
         elif self.depth == self.case_depth + 1 and tag in _CHILD_OUTCOME:
             outcome = _CHILD_OUTCOME[tag]
             case = self.open_case

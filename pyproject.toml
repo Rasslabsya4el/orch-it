@@ -25,6 +25,7 @@ markers = [
     "slow: long; the workflow leaves it out of pull request and push runs (#394 decision 8)",
     "live: reads a live outside service; the workflow leaves it out of pull request and push runs",
     "serial: cannot share a machine with other tests; the workflow runs it after the parallel phase, in the same job (#421; the target is zero such tests)",
+    "os_touching: touches paths, processes, shells, locks or hooks; the Windows change run takes only these (#414 unit 4)",
 ]
 
 # The per-test time bound of each run kind, in seconds, read by the `tests` workflow (#421 rule 3): a test over the

@@ -14,7 +14,7 @@ from ticket_fixtures import EXPECTED, fixture
 from orch_it import tickets
 from orch_it.tickets import hook
 
-pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+pytestmark = [pytest.mark.usefixtures("ticket_language_ru"), pytest.mark.os_touching]  # Russian ticket bodies (#413 unit 10a); hooks (#414 unit 4)
 
 TRANSCRIPTS = Path(__file__).parent / "fixtures" / "transcripts"
 WITH_SKILL = TRANSCRIPTS / "write_ticket_called.jsonl"

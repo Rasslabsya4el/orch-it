@@ -109,6 +109,9 @@ RED_ON_PR = "def test_red():\n    assert False, 'the trial: a pull request that 
 RED_ON_PUSH = ("import os\n\n\ndef test_red_on_a_push():\n"
                "    assert os.environ.get('GITHUB_EVENT_NAME') not in ('push', 'workflow_dispatch'), "
                "'the trial: red only on the base'\n")
+# the fix of that merge: the same test, passing, so the next push run runs it and holds it passed (a red-on-main ticket
+# closes only on a run whose reports hold each of its ids passed, #414 unit 4; a deleted test is never run again)
+GREEN_ON_PUSH = "def test_red_on_a_push():\n    pass\n"
 ROWS_ALL = (2, 3, 4, 5, 6)
 OPEN_WORKERS = 4
 READY_WITHIN_S = 60
@@ -377,7 +380,7 @@ def row_5(trial: Trial, hub: PullHub, store: Store, clock: Callable[[], datetime
         out["second_check"] = {"outcome": two.outcome, "attempt": again.attempt, "opened": two.opened,
                                "red_tickets": run.red_tickets_of(ids, settle=True)}
         run.say(f"second main check: {two.outcome} opened {two.opened}")
-        fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: None})
+        fix_ticket, fix_branch, fixed = run.pull_request("fix", {path: GREEN_ON_PUSH})
         fix_merge = run.land(fixed.pr)
         run.follow(fixed.pr)
         green = run.ended_run(fix_merge.merge_sha)

@@ -17,7 +17,7 @@ from pathlib import Path
 from fake_hub import REPO, FakeHub
 
 from orch_it.merge import workflow_watch as watch
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
 from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
 from orch_it.testruns.github import GithubError
 from orch_it.tickets.hub import Comment
@@ -59,6 +59,22 @@ class FakeRun:
     sha: str
     attempt: int = 1
     failing: list[str] | None = field(default_factory=list)  # None: no report to read
+    passed: list[str] = field(default_factory=list)  # the ids every job's report holds passed
+    jobs: dict[str, str] = field(default_factory=dict)  # job -> its state; the jobs whose reports the run holds
+    reports: list[Result] | None = None  # the run's reports as given; else built from `failing` and `passed`
+
+    def results(self) -> list[Result] | None:
+        """The run's reports: `reports` when given; else each of `passed` in every job and each of `failing` in the
+        jobs that failed (every job when none did); None when the run has no report to read."""
+
+        if self.failing is None:
+            return None
+        if self.reports is not None:
+            return list(self.reports)
+        jobs = self.jobs or {name: PASSED for name in REQUIRED}
+        red = [job for job, state in jobs.items() if state == FAILED] or list(jobs)
+        return ([Result(job, test_id, "passed", False) for job in jobs for test_id in self.passed]
+                + [Result(job, test_id, "failed", False) for job in red for test_id in self.failing])
 
 
 class FakeGitHub(FakeHub):
@@ -77,7 +93,7 @@ class FakeGitHub(FakeHub):
         self.next_number = 100
         self.event_files: dict[str, dict[str, str]] = {}  # artifact name -> {relative path: text}
         self.flows: list[FakeFlow] = []  # the workflows GitHub lists, in the order they were listed
-        self.default_branch = DEFAULT_BRANCH
+        self.main_branch = DEFAULT_BRANCH  # the repo's default branch, as `default_branch` reads it
         self.required_by_base: dict[str, set[str]] = {}  # base -> the check names its protection requires
         self.required = REQUIRED  # the check names a merge is held to (a test may name its own)
         self._shas = 0
@@ -123,9 +139,15 @@ class FakeGitHub(FakeHub):
             self.check_runs.setdefault(sha, {})[name] = Check(name, state, run_id, attempt, started or self.now)
         return run_id
 
-    def main_run(self, sha, jobs, *, event="push", attempt=1, run_id=None, failing=()):
+    def main_run(self, sha, jobs, *, event="push", attempt=1, run_id=None, failing=(), passed=(), results=None):
+        """A run of the `tests` workflow on a branch. `passed`: ids every job's report holds passed; `results`: the
+        reports as `Result`s, which then name the failing ids too."""
+
         run_id = run_id or f"main-{sha}-{attempt}"
-        self.runs_by_id[run_id] = FakeRun(run_id, sha, attempt, None if failing is None else list(failing))
+        if results is not None:
+            failing = sorted({r.test_id for r in results if r.outcome in ("failed", "error")})
+        self.runs_by_id[run_id] = FakeRun(run_id, sha, attempt, None if failing is None else list(failing),
+                                          list(passed), dict(jobs), None if results is None else list(results))
         self.main_runs.insert(0, MainRun(run_id, sha, event, attempt, self.now, dict(jobs)))
         return run_id
 
@@ -239,8 +261,15 @@ class FakeGitHub(FakeHub):
         run = self.runs_by_id.get(run_id)
         return None if run is None or run.failing is None else sorted(run.failing)
 
+    def results(self, repo, run_id):
+        run = self.runs_by_id.get(run_id)
+        return None if run is None else run.results()
+
+    def default_branch(self, repo):
+        return self.main_branch
+
     def branch_runs(self, repo, branch):
-        return list(self.main_runs)
+        return list(self.main_runs) if branch == self.main_branch else []
 
     def pulls_of_commit(self, repo, sha):
         return list(self.commit_pulls.get(sha, []))
@@ -296,7 +325,7 @@ class FakeGitHub(FakeHub):
         found = []
         for flow in self.flows:
             on_default = [run for run, branch in flow.runs
-                          if branch == self.default_branch and not watch.skipped(run)]
+                          if branch == self.main_branch and not watch.skipped(run)]
             if on_default:
                 found.append(on_default[0])
         return found

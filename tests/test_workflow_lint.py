@@ -41,6 +41,9 @@ jobs:
 MISSING = 'actionlint is not installed: pip install -e ".[test]" installs it (actionlint-py)'
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def linter() -> str:
     """actionlint on the PATH, or the one pip put beside this interpreter. Missing: a failure when the CI
     variable is set (GitHub Actions sets it), a skip on a machine of one's own."""

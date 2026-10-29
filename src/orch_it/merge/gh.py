@@ -45,7 +45,7 @@ from orch_it import settings
 from orch_it.events import schema
 from orch_it.merge import git as merge_git
 from orch_it.merge.git import GitDone, GitError
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
 from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, skipped, workflow_of
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
@@ -264,6 +264,21 @@ class GhPullHub(GhHub):
                 raise
 
     def failing_ids(self, repo: str, run_id: str) -> list[str] | None:
+        reports = self._case_reports(repo, run_id)
+        if reports is None:
+            return None
+        return sorted({c.test_id for _, cases in reports for c in cases if c.outcome in ("failed", "error")})
+
+    def results(self, repo: str, run_id: str) -> list[Result] | None:
+        reports = self._case_reports(repo, run_id)
+        if reports is None:
+            return None
+        return [Result(job, c.test_id, c.outcome, c.marked) for job, cases in reports for c in cases]
+
+    def _case_reports(self, repo: str, run_id: str) -> list[tuple[str, list[junit.Case]]] | None:
+        """(job, cases) of each readable JUnit report of the latest attempt of each job of the run; None when the
+        run has no artifacts or none of its reports can be read."""
+
         try:
             artifacts = self._pages(
                 ["api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100"], "artifacts")
@@ -273,18 +288,18 @@ class GhPullHub(GhHub):
             raise
         names = _latest_reports([a["name"] for a in artifacts
                                  if _text(a.get("name")).startswith("junit-") and not a.get("expired")])
-        failing, readable = set(), 0
+        reports = []
         for name in names:
+            match = _JUNIT_NAME.fullmatch(name)
+            job = match.group(1) if match else name
             with tempfile.TemporaryDirectory(prefix="orch-it-gh-") as folder:
                 self.gh(["run", "download", str(run_id), "--repo", repo, "-n", name, "-D", folder])
                 for report in sorted(Path(folder).rglob(REPORT_FILE)):
                     try:
-                        cases = junit.read(report)
+                        reports.append((job, junit.read(report)))
                     except junit.ReportUnreadable:
                         continue
-                    readable += 1
-                    failing |= {c.test_id for c in cases if c.outcome in ("failed", "error")}
-        return sorted(failing) if readable else None
+        return reports or None
 
     def branch_runs(self, repo: str, branch: str) -> list[MainRun]:
         required = required_checks(settings.load(), repo)
@@ -385,7 +400,7 @@ class GhPullHub(GhHub):
         replaced (cancelled before any job started): the newest `RUNS_SCANNED` completed runs are read, and the first
         one neither is the workflow's run."""
 
-        branch = quote(self._default_branch(repo), safe="")
+        branch = quote(self.default_branch(repo), safe="")
         found = []
         for workflow in self._workflows(repo):
             runs = self._pages(["api", f"repos/{repo}/actions/workflows/{workflow.id}/runs?status=completed"
@@ -429,7 +444,9 @@ class GhPullHub(GhHub):
             found.append(WatchIssue(issue["number"], workflow, last_run_id(texts)))
         return found
 
-    def _default_branch(self, repo: str) -> str:
+    def default_branch(self, repo: str) -> str:
+        """The repo's default branch as GitHub reports it."""
+
         found = self._object(["api", f"repos/{repo}"])
         branch = _text(found.get("default_branch")) if found else ""
         if not branch:

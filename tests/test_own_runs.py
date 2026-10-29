@@ -22,6 +22,9 @@ from orch_it.testruns.runner import run_tests
 REPO = "acme-x/widgets-y"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def suite(tmp_path, **files: str):
     root = tmp_path / "repo"
     root.mkdir(exist_ok=True)

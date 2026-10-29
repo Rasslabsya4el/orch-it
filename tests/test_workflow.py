@@ -31,6 +31,9 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def without_comments(text: str) -> list[str]:
     lines = []
     for line in text.splitlines():
@@ -178,6 +181,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         "@pytest.mark.serial\ndef test_serial():\n    pass\n\n"
         "@pytest.mark.slow\n"
         "@pytest.mark.serial\ndef test_slow_serial():\n    pass\n\n"
+        "@pytest.mark.os_touching\ndef test_touching():\n    pass\n\n"
         "def test_plain():\n    pass\n", "utf-8")
     for job in job_lines(WORKFLOW.read_text("utf-8")):
         done, calls = run_pytest_step(tmp_path, job, nightly)
@@ -192,10 +196,13 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
                 env=os.environ | {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
             assert collected.returncode in (0, 5), collected.stdout + collected.stderr
             ids += [line.strip() for line in collected.stdout.splitlines() if "::" in line]
-        expected = ["suite/test_marks.py::test_plain", "suite/test_marks.py::test_serial"]
+        expected = ["suite/test_marks.py::test_plain", "suite/test_marks.py::test_serial",
+                    "suite/test_marks.py::test_touching"]
         if nightly == "true":
             expected += ["suite/test_marks.py::test_live", "suite/test_marks.py::test_slow",
                          "suite/test_marks.py::test_slow_serial"]
+        if job == WINDOWS_CHECK and nightly == "false":  # the Windows change run takes only the marked tests (#414 unit 4)
+            expected = ["suite/test_marks.py::test_touching"]
         assert sorted(ids) == sorted(expected), job
         assert len(ids) == len(set(ids)), job  # no test runs in both phases
 

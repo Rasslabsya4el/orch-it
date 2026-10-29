@@ -34,6 +34,9 @@ LINE_OF = {"issue": "Issue file:", "diff": "Diff file:", "unit": "Unit:", "workt
 PLAN = "Plan.\n\n| unit | what | its test |\n|---|---|---|\n| u1 | the parser | `test_parser_reads_x` |\n"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def fake_gh(calls: list, *, body="The ticket's spec.", plan=PLAN):
     def gh(args):
         calls.append(args)

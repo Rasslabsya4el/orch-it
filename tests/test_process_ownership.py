@@ -4,8 +4,12 @@ agent process, or the store recorded it as a `process` this session started with
 start time. Nothing proven is foreign. The rule is pure over a `Facts` reading of the process
 tree, faked here; the psutil reading is tested against real processes elsewhere."""
 
+import pytest
 from orch_it.guards import processes
 from orch_it.guards.processes import Proc
+
+
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
 
 
 class FakeFacts:

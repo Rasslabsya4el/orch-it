@@ -20,6 +20,9 @@ from required_names import LINUX_CHECK, WINDOWS_CHECK
 REPO = "owner-x/repo-y"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 class Gh:
     """Answers `gh` calls by the first matching (words, answer) pair; an answer may be a function
     of the call. Records each call and the JSON of any `--input` file as it stood when called."""
@@ -107,7 +110,7 @@ def test_a_pull_request_that_merged_between_the_list_and_its_read_is_not_listed_
 
 def test_the_events_artifacts_are_the_layer_s_own_unexpired_ones_from_the_newest_pages():
     page = [{"name": "orch-it-events-follow-7-1", "expired": False, "workflow_run": {"id": 7}},
-            {"name": "junit-linux-1", "expired": False, "workflow_run": {"id": 7}},
+            {"name": artifact(LINUX_CHECK, 1), "expired": False, "workflow_run": {"id": 7}},
             {"name": "orch-it-events-follow-6-1", "expired": True, "workflow_run": {"id": 6}},
             {"name": "orch-it-events-main-5-1", "expired": False, "workflow_run": None}]
     gh = Gh(([f"repos/{REPO}/actions/artifacts?per_page=100&page=1"], {"artifacts": page}))
@@ -527,6 +530,12 @@ JUNIT_OTHER = ('<testsuites><testsuite name="s"><testcase classname="tests.t_c" 
 ARTIFACTS = f"repos/{REPO}/actions/runs/9/artifacts?per_page=100"
 
 
+def artifact(job, attempt):
+    """The name of a job\'s JUnit artifact, as the workflow uploads it."""
+
+    return f"junit-{job}-{attempt}"
+
+
 def downloads(files):
     """A `gh run download` that writes `files` (artifact name -> junit text) where it is told."""
 
@@ -540,40 +549,53 @@ def downloads(files):
 
 
 def test_the_failed_and_errored_tests_of_the_junit_artifacts_are_listed_sorted_and_unique():
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}, {"name": "junit-windows-1"},
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}, {"name": artifact(WINDOWS_CHECK, 1)},
                                          {"name": "coverage"}]}),
-            downloads({"junit-linux-1": JUNIT, "junit-windows-1": JUNIT_OTHER}))
+            downloads({artifact(LINUX_CHECK, 1): JUNIT, artifact(WINDOWS_CHECK, 1): JUNIT_OTHER}))
     found = GhPullHub(gh).failing_ids(REPO, "9")
     assert found == ["tests.t_a::test_red", "tests.t_b::test_boom", "tests.t_c::test_win"]
     assert [c[:6] for c in gh.called("download")] == [
         ["run", "download", "9", "--repo", REPO, "-n"], ["run", "download", "9", "--repo", REPO, "-n"]]
-    assert [c[c.index("-n") + 1] for c in gh.called("download")] == ["junit-linux-1", "junit-windows-1"]
+    assert [c[c.index("-n") + 1] for c in gh.called("download")] == [artifact(LINUX_CHECK, 1), artifact(WINDOWS_CHECK, 1)]
     assert not Path(gh.called("download")[0][-1]).exists()  # the temp dir is gone
+
+
+def test_the_results_of_a_run_name_the_job_of_each_report_and_whether_the_case_is_marked():
+    marked = ('<testsuites><testsuite name="s"><testcase classname="tests.t_w" name="test_path"><properties>'
+              '<property name="os_touching" value="1"/></properties><failure message="x"/></testcase>'
+              '<testcase classname="tests.t_w" name="test_plain"/></testsuite></testsuites>')
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}, {"name": artifact(WINDOWS_CHECK, 1)}]}),
+            downloads({artifact(LINUX_CHECK, 1): JUNIT_OTHER, artifact(WINDOWS_CHECK, 1): marked}))
+    found = GhPullHub(gh).results(REPO, "9")
+    assert [(r.job, r.test_id, r.outcome, r.marked) for r in found] == [
+        (LINUX_CHECK, "tests.t_c::test_win", "failed", False), (LINUX_CHECK, "tests.t_a::test_red", "failed", False),
+        (WINDOWS_CHECK, "tests.t_w::test_path", "failed", True), (WINDOWS_CHECK, "tests.t_w::test_plain", "passed", False)]
+    assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": []}))).results(REPO, "9") is None
 
 
 def test_only_the_latest_attempt_of_a_job_is_read_and_an_expired_artifact_is_not():
     gh = Gh(([ARTIFACTS, "--paginate"],
-             json.dumps({"artifacts": [{"name": "junit-linux-1"}, {"name": "junit-windows-1", "expired": True}]})
-             + json.dumps({"artifacts": [{"name": "junit-linux-2"}]})),
-            downloads({"junit-linux-1": JUNIT, "junit-linux-2": JUNIT_OTHER}))
+             json.dumps({"artifacts": [{"name": artifact(LINUX_CHECK, 1)}, {"name": artifact(WINDOWS_CHECK, 1), "expired": True}]})
+             + json.dumps({"artifacts": [{"name": artifact(LINUX_CHECK, 2)}]})),
+            downloads({artifact(LINUX_CHECK, 1): JUNIT, artifact(LINUX_CHECK, 2): JUNIT_OTHER}))
     assert GhPullHub(gh).failing_ids(REPO, "9") == ["tests.t_a::test_red", "tests.t_c::test_win"]
-    assert [c[c.index("-n") + 1] for c in gh.called("download")] == ["junit-linux-2"]
+    assert [c[c.index("-n") + 1] for c in gh.called("download")] == [artifact(LINUX_CHECK, 2)]
 
 
 def test_a_green_report_is_an_empty_list_not_none():
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}]}),
-            downloads({"junit-linux-1": '<testsuite><testcase classname="a" name="b"/></testsuite>'}))
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}]}),
+            downloads({artifact(LINUX_CHECK, 1): '<testsuite><testcase classname="a" name="b"/></testsuite>'}))
     assert GhPullHub(gh).failing_ids(REPO, "9") == []
 
 
 def test_no_junit_artifact_or_no_readable_report_is_none():
     assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": [{"name": "coverage"}]}))).failing_ids(REPO, "9") is None
     assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": []}))).failing_ids(REPO, "9") is None
-    assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1", "expired": True}]}))
+    assert GhPullHub(Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1), "expired": True}]}))
                      ).failing_ids(REPO, "9") is None
     assert GhPullHub(Gh(([f"repos/{REPO}/actions/runs/9/artifacts?per_page=100"], NOT_FOUND))
                      ).failing_ids(REPO, "9") is None
-    broken = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}]}), downloads({"junit-linux-1": "<testsuite"}))
+    broken = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}]}), downloads({artifact(LINUX_CHECK, 1): "<testsuite"}))
     assert GhPullHub(broken).failing_ids(REPO, "9") is None
 
 
@@ -581,15 +603,15 @@ def test_an_artifact_with_no_report_file_is_unreadable_and_one_good_report_is_en
     def empty(args):
         return ""
 
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}]}), (["run", "download"], empty))
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}]}), (["run", "download"], empty))
     assert GhPullHub(gh).failing_ids(REPO, "9") is None
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}, {"name": "junit-windows-1"}]}),
-            downloads({"junit-linux-1": "<broken", "junit-windows-1": JUNIT}))
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}, {"name": artifact(WINDOWS_CHECK, 1)}]}),
+            downloads({artifact(LINUX_CHECK, 1): "<broken", artifact(WINDOWS_CHECK, 1): JUNIT}))
     assert GhPullHub(gh).failing_ids(REPO, "9") == ["tests.t_a::test_red", "tests.t_b::test_boom"]
 
 
 def test_a_failed_download_and_a_bad_artifact_list_raise():
-    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": "junit-linux-1"}]}),
+    gh = Gh(([ARTIFACTS], {"artifacts": [{"name": artifact(LINUX_CHECK, 1)}]}),
             (["run", "download"], GithubError("gh_failed", "run download: no artifact")))
     with pytest.raises(GithubError):
         GhPullHub(gh).failing_ids(REPO, "9")

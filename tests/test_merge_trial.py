@@ -138,7 +138,7 @@ class World:
         self.ci = CI(self.hub)
         self.ci.red = RedByFiles(self.hub, self.trial)
         self.store = Store.open(tmp_path / "events")
-        self.base_files: set[str] = set()
+        self.base_files: dict[str, str] = {}  # path -> text of the trial test files on the base
         self.hub.on_merge.append(self._pushed)
         self.rows = Locked(self.hub)
 
@@ -155,10 +155,15 @@ class World:
     def _pushed(self, number):
         pull = self.hub.pulls[number]
         for path, text in self.trial.files.get(pull.branch, {}).items():
-            (self.base_files.discard if text is None else self.base_files.add)(path)
-        red = sorted(path for path in self.base_files if path.startswith(RED_MAIN))
+            if text is None:
+                self.base_files.pop(path, None)
+            else:
+                self.base_files[path] = text
+        trial_tests = sorted(path for path in self.base_files if path.startswith(RED_MAIN))
+        red = [path for path in trial_tests if self.base_files[path] == merge_trial.RED_ON_PUSH]
         jobs = {name: FAILED if red else PASSED for name in (LINUX_CHECK, WINDOWS_CHECK)}
-        self.hub.main_run(pull.merge_sha, jobs, failing=[f"{path}::test_red_on_a_push" for path in red])
+        self.hub.main_run(pull.merge_sha, jobs, failing=[f"{path}::test_red_on_a_push" for path in red],
+                          passed=[f"{path}::test_red_on_a_push" for path in trial_tests if path not in red])
 
     def run(self, row, **plan):
         return row(self.trial, self.rows, self.store, self.clock, self.sleep, merge_trial.Plan(**plan))

@@ -24,6 +24,9 @@ ENTRY = json.loads((REPO / ".mcp.json").read_text("utf-8"))["mcpServers"]["orch-
 KEY_ENV_IN_MCP = next(name for name in ENTRY["env"] if not name.startswith("ORCH_IT_"))
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def fill(text: str, base: dict) -> str:
     """`text` with each `${VAR}` / `${VAR:-default}` filled from `base`, as Claude Code fills `.mcp.json`."""
 

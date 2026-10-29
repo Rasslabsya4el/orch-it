@@ -15,6 +15,9 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 UPSTREAM = "https://github.com/mattpocock/skills"
 
 
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+
+
 def git(cwd, *args):
     return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
                           cwd=cwd, capture_output=True, check=True, creationflags=NO_WINDOW).stdout
