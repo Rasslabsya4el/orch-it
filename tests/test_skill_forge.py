@@ -9,7 +9,8 @@ import pytest
 from orch_it.merge import marks
 from orch_it.skills.copies import SkillsError
 from orch_it.skills.forge import GithubForge
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS, GithubError
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
+from orch_it.testruns.github import GithubError
 
 
 class FakeGh:
@@ -118,7 +119,7 @@ NOW = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 class PullGh(FakeGh):
     """Pull request 5 of o/r at `head`: the comments posted to it are read back, `pr merge` is answered."""
 
-    def __init__(self, head, *, fail=(), required=DEFAULT_REQUIRED_JOBS, base="main"):
+    def __init__(self, head, *, fail=(), required=DEFAULT_REQUIRED_CHECKS, base="main"):
         super().__init__(fail=fail)
         # `required`: the jobs the protection of `base` requires; every other base answers 404 (not protected)
         self.head, self.posted, self.required, self.base = head, [], list(required), base
@@ -184,7 +185,7 @@ def test_mark_ready_on_a_base_that_requires_no_job_writes_the_mark_and_no_auto_m
 def test_a_re_used_pull_request_with_its_mark_at_the_head_keeps_the_mark_and_no_auto_merge_where_the_base_requires_less(
         tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "none.json"))
-    gh = PullGh(HEAD, required=DEFAULT_REQUIRED_JOBS[:1])  # the base requires one job of the two
+    gh = PullGh(HEAD, required=DEFAULT_REQUIRED_CHECKS[:1])  # the base requires one job of the two
     gh.posted.append(marks.ready_comment(None, HEAD, NOW))
     GithubForge("o/r", gh=gh).mark_ready(PULL)
     assert len(gh.posted) == 1  # the mark stands, no second one

@@ -38,6 +38,7 @@ from orch_it.merge.pr_open import PrError, open_pr
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
 from orch_it.tickets.reader import read_parks
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 WORKFLOWS = Path(__file__).parents[1] / ".github" / "workflows"
 
@@ -128,7 +129,7 @@ def test_merge_6(tmp_path):  # red only on tests red on main: parked on that tic
 
 def test_merge_7(tmp_path):  # no skip list: what is red on main is read from main's run and its ticket alone
     hub, store, prs = world(tmp_path)
-    hub.main_run(hub.land(), {"linux": FAILED, "windows": PASSED}, failing=["t::flaky"])
+    hub.main_run(hub.land(), {LINUX_CHECK: FAILED, WINDOWS_CHECK: PASSED}, failing=["t::flaky"])
     done = check_main(hub, store, REPO, "main")
     assert done.outcome == "red" and len(done.opened) == 1
     # a pull request red on a test no red-on-main ticket lists is red on its own, whatever its tree says
@@ -147,7 +148,7 @@ def test_merge_8(tmp_path):  # main's run is read after every merge
     assert "push:\n    branches: [main]" in tests  # part 0's run on every push to main, read, not changed
     hub, store, _ = world(tmp_path)
     sha = hub.land(number=57)
-    hub.main_run(sha, {"linux": FAILED, "windows": PASSED}, failing=["t::a"])
+    hub.main_run(sha, {LINUX_CHECK: FAILED, WINDOWS_CHECK: PASSED}, failing=["t::a"])
     [number] = check_main(hub, store, REPO, "main").opened
     assert "#57" in hub.issues[(REPO, number)].body
 

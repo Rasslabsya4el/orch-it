@@ -3,7 +3,7 @@ six facts, and write them as three `check` steps (`branch_protection`, `hooks_pa
 `guard_install`). Push to main without green tests is held by GitHub's own branch protection
 (part 0), so this only reads it, never changes it.
 
-The six facts: the required checks are exactly `linux` and `windows`; the branch is strict;
+The six facts: the required checks are exactly the setting `required_checks`; the branch is strict;
 admins are enforced; force push and deletion are off; the pre-push hook is installed
 (`core.hooksPath` is our hooks folder and `hooks/pre-push` is there); the Claude Code hook is
 installed. A protection that cannot be read fails its four facts and says why; nothing raises.
@@ -16,10 +16,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from orch_it import settings
 from orch_it.guards import install
 from orch_it.testruns import github
+from orch_it.testruns.config import required_checks
 
-REQUIRED_CHECKS = ("linux", "windows")
 BRANCH = "main"
 FACT_NAMES = ("required_checks", "strict", "enforce_admins", "force_push_and_deletion_off",
               "pre_push_hook", "claude_hook")
@@ -72,7 +73,7 @@ def _checks_of(protection: dict) -> tuple[list[str], bool | None]:
     return sorted(names), strict if isinstance(strict, bool) else None
 
 
-def _branch_facts(protection_reader, repo: str):
+def _branch_facts(protection_reader, repo: str, required: tuple[str, ...]):
     """(the four protection facts, the `check` findings, the `check` facts)."""
 
     try:
@@ -90,7 +91,7 @@ def _branch_facts(protection_reader, repo: str):
     admins = _enabled(protection, "enforce_admins")
     force, deletion = _enabled(protection, "allow_force_pushes"), _enabled(protection, "allow_deletions")
     found = {
-        "required_checks": (names == sorted(REQUIRED_CHECKS), "required_checks_wrong"),
+        "required_checks": (names == sorted(required), "required_checks_wrong"),
         "strict": (strict is True, "not_strict"),
         "enforce_admins": (admins is True, "admins_not_enforced"),
     }
@@ -116,7 +117,8 @@ def status(store, repo: str, work_tree: Path | str = ".", *,
     of `work_tree`, write the three checks and return the six facts. Never raises on what it
     reads: a protection or a folder that cannot be read is a failed fact."""
 
-    branch, branch_findings, branch_facts = _branch_facts(protection or read_protection, repo)
+    required = required_checks(settings.load(), repo)
+    branch, branch_findings, branch_facts = _branch_facts(protection or read_protection, repo, required)
 
     hooks_path = None
     pre_push_file = claude = False

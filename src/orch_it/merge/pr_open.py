@@ -34,8 +34,7 @@ from orch_it.events.store import Store
 from orch_it.merge import marks, record
 from orch_it.merge.git import GitError, branch_ok
 from orch_it.merge.hub import Pull, PullHub
-from orch_it.merge.settings import MergeSettings
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
+from orch_it.merge.settings import MergeSettings, required_checks_now
 from orch_it.tickets import park
 from orch_it.tickets.model import AcceptanceRow, parse
 
@@ -89,10 +88,12 @@ def parse_part(text: str) -> tuple[int, int]:
 
 def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: str, branch: str, base: str,
             git: Git, settings: MergeSettings, now: datetime, role: str = ROLE, notes: str = "",
-            part: tuple[int, int] | None = None, required: tuple[str, ...] = tuple(DEFAULT_REQUIRED_JOBS)) -> Opened:
+            part: tuple[int, int] | None = None, required: tuple[str, ...] | None = None) -> Opened:
     """`notes`: ORCH's report lines, put in the body of a pull request it opens, under its rows.
     `part`: the (k, n) of a part's pull request (#434), written as `Part: k of n` in a new body; a
-    reused pull request keeps its body. `required`: the check names of the setting `github_required_jobs`."""
+    reused pull request keeps its body. `required`: the check names (default: the setting `required_checks` of `repo`)."""
+    if required is None:
+        required = required_checks_now(repo)
     if part is not None and not 1 <= part[0] <= part[1]:
         raise PrError("bad_part", f"{part[0]}/{part[1]} is not K/N with 1 <= K <= N")
     for name in (branch, base):

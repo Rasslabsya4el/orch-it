@@ -15,6 +15,7 @@ from orch_it.merge.gh import GhPullHub
 from orch_it.merge.git import GitDone
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING
 from orch_it.testruns.github import GithubError
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 REPO = "owner-x/repo-y"
 
@@ -222,36 +223,36 @@ CHECKS = f"repos/{REPO}/commits/{'c' * 7}/check-runs?per_page=100"
     ("completed", "neutral", NO_RESULT), ("completed", "action_required", NO_RESULT),
     ("completed", "startup_failure", NO_RESULT), ("completed", None, NO_RESULT)])
 def test_every_conclusion_of_a_check_run_maps_to_one_state(status, conclusion, state):
-    gh = Gh(([CHECKS], {"check_runs": [run_of(1, "linux", status, conclusion)]}))
+    gh = Gh(([CHECKS], {"check_runs": [run_of(1, LINUX_CHECK, status, conclusion)]}))
     [check] = GhPullHub(gh).checks(REPO, "c" * 7)
-    assert (check.name, check.state, check.run_id, check.attempt) == ("linux", state, None, 1)
+    assert (check.name, check.state, check.run_id, check.attempt) == (LINUX_CHECK, state, None, 1)
 
 
 def test_the_latest_run_of_each_name_counts_across_pages_with_its_run_and_attempt_read_once():
     pages = (json.dumps({"total_count": 3, "check_runs": [
-        run_of(10, "linux", "completed", "failure", run=500), run_of(30, "windows", run=500)]})
+        run_of(10, LINUX_CHECK, "completed", "failure", run=500), run_of(30, WINDOWS_CHECK, run=500)]})
         + json.dumps({"total_count": 3, "check_runs": [
-            run_of(20, "linux", "completed", "success", run=501, started="2026-11-02T11:00:00Z"),
+            run_of(20, LINUX_CHECK, "completed", "success", run=501, started="2026-11-02T11:00:00Z"),
             run_of(5, "lint", "in_progress", None)]}))
     gh = Gh(([CHECKS, "--paginate"], pages),
             ([f"repos/{REPO}/actions/runs/500"], {"run_attempt": 2}),
             ([f"repos/{REPO}/actions/runs/501"], {"run_attempt": 3}))
     found = {c.name: c for c in GhPullHub(gh).checks(REPO, "c" * 7)}
     assert {n: (c.state, c.run_id, c.attempt) for n, c in found.items()} == {
-        "linux": (PASSED, "501", 3), "windows": (PASSED, "500", 2), "lint": (PENDING, None, 1)}
-    assert found["linux"].started_at == datetime(2026, 11, 2, 11, tzinfo=UTC)
+        LINUX_CHECK: (PASSED, "501", 3), WINDOWS_CHECK: (PASSED, "500", 2), "lint": (PENDING, None, 1)}
+    assert found[LINUX_CHECK].started_at == datetime(2026, 11, 2, 11, tzinfo=UTC)
     assert len(gh.called(f"repos/{REPO}/actions/runs/500")) == 1
 
 
 def test_two_checks_of_one_run_read_the_run_once():
-    gh = Gh(([CHECKS], {"check_runs": [run_of(1, "linux", run=9), run_of(2, "windows", run=9)]}),
+    gh = Gh(([CHECKS], {"check_runs": [run_of(1, LINUX_CHECK, run=9), run_of(2, WINDOWS_CHECK, run=9)]}),
             ([f"repos/{REPO}/actions/runs/9"], {"run_attempt": 4}))
-    assert [(c.name, c.attempt) for c in GhPullHub(gh).checks(REPO, "c" * 7)] == [("linux", 4), ("windows", 4)]
+    assert [(c.name, c.attempt) for c in GhPullHub(gh).checks(REPO, "c" * 7)] == [(LINUX_CHECK, 4), (WINDOWS_CHECK, 4)]
     assert len(gh.called(f"repos/{REPO}/actions/runs/9")) == 1
 
 
 def test_a_run_that_is_gone_or_has_no_attempt_reads_as_the_first():
-    gh = Gh(([CHECKS], {"check_runs": [run_of(1, "linux", run=9), run_of(2, "windows", run=8)]}),
+    gh = Gh(([CHECKS], {"check_runs": [run_of(1, LINUX_CHECK, run=9), run_of(2, WINDOWS_CHECK, run=8)]}),
             ([f"repos/{REPO}/actions/runs/9"], NOT_FOUND),
             ([f"repos/{REPO}/actions/runs/8"], {"status": "completed"}))
     assert [c.attempt for c in GhPullHub(gh).checks(REPO, "c" * 7)] == [1, 1]
@@ -646,26 +647,26 @@ def test_the_runs_of_the_tests_workflow_on_a_branch_come_newest_first_with_their
         workflow_run(3, "schedule", status="in_progress", created="2026-11-03T01:00:00Z"),
         workflow_run(4, "workflow_dispatch", created="2026-11-02T12:00:00Z")]}),
         ([f"repos/{REPO}/actions/runs/1/jobs?per_page=100"], {"jobs": [
-            job_of(11, "linux", conclusion="failure"), job_of(12, "windows"), job_of(13, "lint")]}),
+            job_of(11, LINUX_CHECK, conclusion="failure"), job_of(12, WINDOWS_CHECK), job_of(13, "lint")]}),
         ([f"repos/{REPO}/actions/runs/3/jobs?per_page=100"], {"jobs": [
-            job_of(31, "linux", "in_progress", None)]}),
+            job_of(31, LINUX_CHECK, "in_progress", None)]}),
         ([f"repos/{REPO}/actions/runs/4/jobs?per_page=100"], {"jobs": [
-            job_of(41, "linux", conclusion="cancelled")]}))
+            job_of(41, LINUX_CHECK, conclusion="cancelled")]}))
     found = GhPullHub(gh).branch_runs(REPO, "main")
     assert [(r.run_id, r.sha, r.event, r.attempt, r.jobs) for r in found] == [
-        ("3", "sha3", "schedule", 1, {"linux": PENDING, "windows": PENDING}),
-        ("4", "sha4", "workflow_dispatch", 1, {"linux": NO_RESULT, "windows": NO_RESULT}),
-        ("1", "sha1", "push", 2, {"linux": FAILED, "windows": PASSED})]
+        ("3", "sha3", "schedule", 1, {LINUX_CHECK: PENDING, WINDOWS_CHECK: PENDING}),
+        ("4", "sha4", "workflow_dispatch", 1, {LINUX_CHECK: NO_RESULT, WINDOWS_CHECK: NO_RESULT}),
+        ("1", "sha1", "push", 2, {LINUX_CHECK: FAILED, WINDOWS_CHECK: PASSED})]
     assert found[0].created_at == datetime(2026, 11, 3, 1, tzinfo=UTC)
     assert not gh.called(f"repos/{REPO}/actions/runs/2/jobs?per_page=100")
 
 
 def test_the_required_jobs_are_the_setting_and_the_latest_job_of_a_name_counts(tmp_path):
-    (tmp_path / "settings.json").write_text('{"github_required_jobs": ["unit", "lint"]}', "utf-8")
+    (tmp_path / "settings.json").write_text('{"required_checks": ["unit", "lint"]}', "utf-8")
     gh = Gh(([WORKFLOW_RUNS], {"workflow_runs": [workflow_run(1)]}),
             ([f"repos/{REPO}/actions/runs/1/jobs?per_page=100", "--paginate"],
              json.dumps({"jobs": [job_of(20, "unit", conclusion="failure"), job_of(10, "lint")]})
-             + json.dumps({"jobs": [job_of(30, "unit"), job_of(5, "linux")]})))
+             + json.dumps({"jobs": [job_of(30, "unit"), job_of(5, LINUX_CHECK)]})))
     [run] = GhPullHub(gh).branch_runs(REPO, "main")
     assert run.jobs == {"unit": PASSED, "lint": PASSED}
 
@@ -677,7 +678,7 @@ def test_branch_runs_with_a_bad_answer_raise_and_a_bad_setting_raises_before_any
     assert error.value.code == "gh_bad_output"
     with pytest.raises(GithubError):
         GhPullHub(Gh(([WORKFLOW_RUNS], "nope"))).branch_runs(REPO, "main")
-    (tmp_path / "settings.json").write_text('{"github_required_jobs": []}', "utf-8")
+    (tmp_path / "settings.json").write_text('{"required_checks": []}', "utf-8")
     gh = Gh()
     with pytest.raises(settings.SettingsError):
         GhPullHub(gh).branch_runs(REPO, "main")

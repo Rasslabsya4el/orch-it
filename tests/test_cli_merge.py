@@ -9,6 +9,7 @@ from orch_it.cli import main
 from orch_it.events.store import Store
 from orch_it.merge import commands, lock
 from orch_it.merge.settings import MergeSettings
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
 
 REPO = "owner-x/repo-y"
 
@@ -146,7 +147,7 @@ def test_main_check_prints_what_it_did_with_red_main(github, tmp_path, capsys):
     from fake_github import FAILED, PASSED
 
     hub, _ = github
-    hub.main_run(hub.land(number=57), {"linux": FAILED, "windows": PASSED}, failing=["t::a"])
+    hub.main_run(hub.land(number=57), dict(zip(DEFAULT_REQUIRED_CHECKS, (FAILED, PASSED))), failing=["t::a"])
     code, out, err = run(capsys, "--store", str(tmp_path / "events"), "main", "check", "--repo", REPO)
     number = max(n for (r, n) in hub.issues if not hub.issues[(r, n)].is_pr)
     assert (code, err) == (0, "") and out.startswith(f"main red at m") and out.rstrip().endswith(f"opened=#{number}")

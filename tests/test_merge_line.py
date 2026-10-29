@@ -16,6 +16,7 @@ from orch_it.merge import lock
 from orch_it.merge.line import run_line
 from orch_it.merge.pr_open import open_pr
 from orch_it.merge.settings import MergeSettings
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 
 def line(hub, store, ci, tmp_path, **settings):
@@ -76,7 +77,7 @@ def test_main_moving_under_the_head_each_time_leaves_it_to_the_next_run(tmp_path
     pr = prs[10]
 
     def push_to_main_before_each_run_ends():  # someone else pushes to main a minute before the head turns green
-        check = hub.check_runs.get(hub.head(pr), {}).get("linux")
+        check = hub.check_runs.get(hub.head(pr), {}).get(LINUX_CHECK)
         if hub.pulls[pr].state == "open" and check and check.state == "pending" \
                 and hub.now - check.started_at >= timedelta(minutes=ci.minutes - 1):
             hub.land()

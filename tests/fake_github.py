@@ -15,10 +15,11 @@ from fake_hub import REPO, FakeHub
 
 from orch_it.merge import workflow_watch as watch
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
 from orch_it.testruns.github import GithubError
 from orch_it.tickets.hub import Comment
 
-REQUIRED = ("linux", "windows")
+REQUIRED = DEFAULT_REQUIRED_CHECKS
 DEFAULT_BRANCH = "main"
 
 
@@ -76,6 +77,7 @@ class FakeGitHub(FakeHub):
         self.flows: list[FakeFlow] = []  # the workflows GitHub lists, in the order they were listed
         self.default_branch = DEFAULT_BRANCH
         self.required_by_base: dict[str, set[str]] = {}  # base -> the check names its protection requires
+        self.required = REQUIRED  # the check names a merge is held to (a test may name its own)
         self._shas = 0
 
     # building the world
@@ -200,7 +202,7 @@ class FakeGitHub(FakeHub):
             return None
         green = {c.name: c.state for c in self.checks(repo, pull.head_sha)}
         if (pull.head_sha != head_sha or pull.behind or pull.state != "open" or found.conflict
-                or any(green.get(name) != PASSED for name in REQUIRED)):
+                or any(green.get(name) != PASSED for name in self.required)):
             return None
         sha = self.land(found.base, number)
         found.state, found.merged_at, found.merge_sha, found.auto_merge = "merged", self.now, sha, None

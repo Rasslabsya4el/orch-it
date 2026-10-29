@@ -35,9 +35,8 @@ from orch_it.merge import marks, record
 from orch_it.merge.follow import FollowReport, follow
 from orch_it.merge.hub import PullHub
 from orch_it.merge.main_check import MainReport, check_main
-from orch_it.merge.settings import MergeSettings
+from orch_it.merge.settings import MergeSettings, required_checks_now
 from orch_it.merge.workflow_watch_run import checked_names, watch_workflows
-from orch_it.testruns.github import DEFAULT_REQUIRED_JOBS
 from orch_it.tickets import park
 from orch_it.tickets.model import parse
 from orch_it.tickets.park import ROLE
@@ -61,10 +60,12 @@ class ReconcileReport:
 
 
 def reconcile(hub: PullHub, store: Store, repo: str, base: str, *, settings: MergeSettings, now: datetime,
-              role: str = ROLE, required: tuple[str, ...] = tuple(DEFAULT_REQUIRED_JOBS), owner: str | None = None,
+              role: str = ROLE, required: tuple[str, ...] | None = None, owner: str | None = None,
               bring_events: bool = False) -> ReconcileReport:
     """One sweep of `repo` (its merge line into `base`); see the module text."""
 
+    if required is None:
+        required = required_checks_now(repo)
     run = f"reconcile:{repo}@{now.isoformat()}"
     record.write(store, repo, None, role, run, "reconcile", [("step.started", {"run": run})])
     actions = hub.actions_enabled(repo)
