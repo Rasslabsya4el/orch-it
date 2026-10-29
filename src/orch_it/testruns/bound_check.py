@@ -90,7 +90,7 @@ def default_bounds() -> dict:
 def _bounds(settings: dict) -> tuple[dict, float]:
     defaults = default_bounds()
     given = settings.get(BOUNDS_KEY, {})
-    return given.get("run_minutes", defaults["run_minutes"]), given.get("queue_minutes", defaults["queue_minutes"])
+    return {**defaults["run_minutes"], **given.get("run_minutes", {})}, given.get("queue_minutes", defaults["queue_minutes"])
 
 
 def _moment(text: str) -> datetime:
