@@ -51,7 +51,7 @@ def seed(store, place, minutes, *, run_os=None):
 
 @pytest.fixture
 def world(tmp_path):
-    actions = FakeActions(tmp_path, REPO, NOW - timedelta(minutes=30), jobs=dict(GREEN_JOBS))
+    actions = FakeActions(tmp_path, REPO, NOW - timedelta(minutes=30), jobs=dict(GREEN_JOBS), now=NOW)
     return SimpleNamespace(repos=Repos(tmp_path), store=Store.open(tmp_path / "store"), actions=actions,
                            settings=TestSettings(github_tests=True))
 
@@ -71,7 +71,7 @@ def run(world, place=None, *, need_os="any", forced=None, settings=None):
 def starts(store):
     return [json.loads(d) for (d,) in store.query(
         "SELECT detail FROM events WHERE kind = 'step.started' AND step = 'test_run' AND role = 'script'"
-        " ORDER BY at, id").rows]
+        " AND run NOT LIKE 'seed-%' ORDER BY at, id").rows]
 
 
 def offered(start, place="github"):
@@ -282,7 +282,7 @@ def test_a_sha_github_does_not_have_is_a_refusal_and_the_run_goes_to_the_next_pl
     done = run(world)
     assert done.place == "own"
     ends = world.store.query("SELECT outcome, reason FROM events WHERE kind = 'step.ended' AND step = 'test_run'"
-                             " AND role = 'script' ORDER BY at, id").rows
+                             " AND role = 'script' AND run NOT LIKE 'seed-%' ORDER BY at, id").rows
     assert ends == [("refused", "place_off"), ("passed", None)]
 
 

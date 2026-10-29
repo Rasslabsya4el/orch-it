@@ -340,6 +340,10 @@ def _moment(text: object) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+moment_of = _moment  # the GitHub place reads job stamps the importer's way
+items_of = _items  # and its lists of objects
+
+
 def _created(run: dict) -> datetime:
     return _moment(run.get("created_at")) or datetime.min.replace(tzinfo=UTC)
 

@@ -353,9 +353,10 @@ class FakeActions:
     of the layer's branches and a dispatch of `tests.yml` that makes a run of `dispatch_jobs`. A call is answered
     with the JSON text GitHub would give; a refusal is a `GithubError`."""
 
-    def __init__(self, tmp_path, repo, dispatched_at, *, jobs=None):
+    def __init__(self, tmp_path, repo, dispatched_at, *, jobs=None, now=None):
         self.repo = repo
         self.at = dispatched_at  # the stamps of a dispatched run count from here
+        self.now = now or dispatched_at  # the stamps of the account's other jobs (`hold`) count back from here
         self.zips = Path(tmp_path) / "zips"
         self.zips.mkdir()
         self.repos = [repo]
@@ -386,7 +387,7 @@ class FakeActions:
             self.repos.append(other_repo)
             self.runs[other_repo] = []
         run_id = self._next()
-        created = self.at - timedelta(seconds=queued_for + 60)
+        created = self.now - timedelta(seconds=queued_for + 60)
         self.runs[other_repo].append(self._run(run_id, "in_progress", None, "pull_request", "feat/x", "o1", created))
         jobs = [self._job(self._next(), f"job{n}", "in_progress", None, "ubuntu-latest", created, 5, None)
                 for n in range(running)]
