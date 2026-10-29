@@ -21,7 +21,9 @@ like any other report; the job's GitHub conclusion decides the outcome:
 
 A completed run with no job of a required name in any attempt up to its latest gets, for that
 name, a `job_missing` pair, or, when the run was cancelled, a `stopped` pair with the run's
-reason. A run still in progress is left for the next import.
+reason. A run still in progress is left for the next import. In the `newest` mode (one unpaginated
+list of the newest completed runs) only those listed runs can supersede a cancelled one, so a
+cancelled run whose superseder is still running gets reason None.
 
 Every event's id is a hash of (run id, job id or job name, attempt, kind), so a second import
 writes nothing. A run whose latest attempt already has an end stored for every required job is
@@ -60,6 +62,7 @@ JOB_TIMEOUT_SETTING = "github_job_timeout_minutes"
 DEFAULT_JOB_TIMEOUT_MINUTES = 15
 NEWEST_RUNS_SETTING = "github_live_newest_runs"  # how many of the newest runs the live import test judges
 DEFAULT_NEWEST_RUNS = 20
+MAX_PER_PAGE = 100  # GitHub's largest page: an unpaginated list of more runs would silently return 100
 TEST_STEP = "pytest"  # the step of a job that runs the tests
 REPORT_FILE = "junit.xml"
 NIGHTLY_EVENTS = ("schedule", "workflow_dispatch")
@@ -137,8 +140,10 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
     bounds which runs can have superseded a cancelled one. Bad arguments and settings raise
     before `gh` is called; so does a failure of the list of runs. A failure about one run only
     skips that run (see `ImportReport.runs_failed`). `newest`: only the newest that many completed
-    runs (created at or after `since`), read with one unpaginated list call, so the number of
-    `gh` calls is the same whatever the history holds; None: every run, page after page."""
+    runs (created at or after `since`), a whole number from 1 to `MAX_PER_PAGE`, read with one
+    unpaginated list call, so the number of `gh` calls is the same whatever the history holds;
+    None: every run, page after page. In that mode only the listed completed runs can supersede
+    a cancelled one: a cancelled run whose superseder is still running gets reason None."""
 
     gh = gh or run_gh
     if not schema.is_repo(repo):
@@ -147,8 +152,8 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
     if now.tzinfo is None:
         raise GithubError("bad_now", str(now))
     floor = _since(since)
-    if newest is not None and (isinstance(newest, bool) or not isinstance(newest, int) or newest < 1):
-        raise settings.SettingsError("bad_setting", NEWEST_RUNS_SETTING)
+    if newest is not None:
+        _check_newest(newest, "newest")
     config = settings.load()
     required = _required_jobs(config)
     job_bound = _job_timeout_minutes(config)
@@ -195,9 +200,13 @@ def newest_runs(config: dict | None = None) -> int:
     import test judges (default 20)."""
 
     count = (settings.load() if config is None else config).get(NEWEST_RUNS_SETTING, DEFAULT_NEWEST_RUNS)
-    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
-        raise settings.SettingsError("bad_setting", NEWEST_RUNS_SETTING)
+    _check_newest(count, NEWEST_RUNS_SETTING)
     return count
+
+
+def _check_newest(count: object, name: str) -> None:
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_PER_PAGE:
+        raise settings.SettingsError("bad_setting", f"{name} must be a whole number from 1 to {MAX_PER_PAGE}")
 
 
 def _stored_ends(store: Store, repo: str) -> Counter:

@@ -60,7 +60,7 @@ class FakeGh:
             return self.download(args)
         path = args[-1].partition("?")[0]
         parts = path.split("/")
-        if path.endswith("/workflows/tests.yml/runs"):
+        if path.endswith(f"/workflows/{github.WORKFLOW_FILE}/runs"):
             if "--paginate" not in args:
                 return self.first_page(args[-1].partition("?")[2])
             return self.pages("workflow_runs", self.runs)
@@ -966,6 +966,16 @@ def newest_judged(runs, moment, since, count):
     return completed_before(runs, moment, since)[:count]
 
 
+def require_enough_judged(judged, listed_runs, total_count, count):
+    """Fails when fewer than `count` runs are judged although the history held more runs than the
+    list showed; a history the list showed whole (`total_count` not above its length) may give
+    fewer, whatever completed after the moment."""
+
+    if len(judged) < count and total_count > len(listed_runs):
+        pytest.fail(f"only {len(judged)} of the {len(listed_runs)} listed completed runs ({total_count} in the"
+                    f" history) completed before the moment, {count} wanted")
+
+
 def rows_per_run(store):
     """run id -> how many events the store holds under the keys `github:<run id>/...`."""
 
@@ -1025,6 +1035,9 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     started_at = time.monotonic()
     newest = github.newest_runs()
     listed = newest + LIVE_SLACK
+    assert listed <= github.MAX_PER_PAGE, (
+        f"the setting {github.NEWEST_RUNS_SETTING} ({newest}) plus the slack ({LIVE_SLACK}) is above"
+        f" {github.MAX_PER_PAGE}, GitHub's per-page maximum")
     calls = []
 
     def counted_gh(args):
@@ -1036,9 +1049,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     listing = json.loads(counted_gh(github._list_runs_args(REPO, github._since(since), listed)))
     runs, completed_since = listing["workflow_runs"], listing["total_count"]
     judged = newest_judged(runs, moment, since, newest)
-    if len(judged) < newest and completed_since >= newest:
-        pytest.fail(f"only {len(judged)} of the newest {listed} completed runs completed before the moment,"
-                    f" {newest} wanted")
+    require_enough_judged(judged, runs, completed_since, newest)
     assert judged, "no run completed since the first pull request run and before the moment"
     required = ("linux", "windows")
     run_pairs, waits = pairs(store), pairs(store, "wait")
@@ -1085,74 +1096,105 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
 
 
 def runs_list_calls(gh):
-    return [c for c in gh.calls if c[-1].partition("?")[0].endswith("/workflows/tests.yml/runs")]
+    return [c for c in gh.calls if c[-1].partition("?")[0].endswith(f"/workflows/{github.WORKFLOW_FILE}/runs")]
+
+
+NEWEST = github.DEFAULT_NEWEST_RUNS
+SHORT_HISTORY, LONG_HISTORY = 30, 300
+FIRST_ID = 8000  # the id of the newest run of `add_history`
+RUN_SPACING_S = 1000
+CALLS_PER_RUN = 5  # jobs, artifacts and timing of the run, one download per required job
 
 
 def add_history(gh, count):
-    """`count` completed runs, one every 1000 s, run n created (count - n) * 1000 s after BASE and
-    given id 8000 + n: the ids run against the creation order (the newest run has the smallest id)."""
+    """`count` completed runs, one every `RUN_SPACING_S`, run n created (count - n) * RUN_SPACING_S
+    after BASE and given id FIRST_ID + n: the ids run against the creation order (the newest run
+    has the smallest id)."""
 
     for n in range(count):
-        gh.add_run(8000 + n, created=(count - n) * 1000, branch=f"b{n}", pr=n + 1)
+        gh.add_run(FIRST_ID + n, created=(count - n) * RUN_SPACING_S, branch=f"b{n}", pr=n + 1)
 
 
 def test_newest_asks_for_one_page_of_the_newest_completed_runs_and_not_for_every_page(store, gh):
-    add_history(gh, 30)
-    run_import(store, gh, newest=20)
+    add_history(gh, SHORT_HISTORY)
+    run_import(store, gh, newest=NEWEST)
     (listing,) = runs_list_calls(gh)
     assert "--paginate" not in listing
-    assert "per_page=20" in listing[-1] and "status=completed" in listing[-1]
+    assert f"per_page={NEWEST}" in listing[-1] and "status=completed" in listing[-1]
 
 
-@pytest.mark.parametrize("history", [30, 300])
+@pytest.mark.parametrize("history", [SHORT_HISTORY, LONG_HISTORY])
 def test_newest_makes_the_same_number_of_gh_calls_whatever_the_history(store, gh, history):
     add_history(gh, history)
-    run_import(store, gh, newest=20)
-    # one list of runs, then jobs, artifacts and timing of each of the 20 runs, one download per job
-    assert len(gh.calls) == 1 + 20 * (3 + 2)
+    run_import(store, gh, newest=NEWEST)
+    assert len(gh.calls) == 1 + NEWEST * CALLS_PER_RUN  # one list of runs, then each run's calls
 
 
 def test_newest_imports_the_newest_runs_by_creation_and_no_older_one(store, gh):
-    add_history(gh, 300)
-    report = run_import(store, gh, newest=20)
+    add_history(gh, LONG_HISTORY)
+    report = run_import(store, gh, newest=NEWEST)
     imported = {int(run.split("/")[0].removeprefix("github:")) for run in pairs(store)}
-    assert imported == set(range(8000, 8020))
-    assert report.runs_read == 20 and report.jobs == 40
+    assert imported == set(range(FIRST_ID, FIRST_ID + NEWEST))
+    assert report.runs_read == NEWEST and report.jobs == 2 * NEWEST
 
 
 def test_newest_larger_than_the_history_imports_every_run(store, gh):
-    add_history(gh, 5)
-    assert run_import(store, gh, newest=20).runs_read == 5
-    assert len(pairs(store)) == 10
+    short = NEWEST // 4
+    add_history(gh, short)
+    assert run_import(store, gh, newest=NEWEST).runs_read == short
+    assert len(pairs(store)) == 2 * short
 
 
 def test_newest_counts_completed_runs_only(store, gh):
     gh.add_run(100, created=0)
-    gh.add_run(101, created=1000, status="in_progress", conclusion=None)
-    gh.add_run(102, created=2000)
+    gh.add_run(101, created=RUN_SPACING_S, status="in_progress", conclusion=None)
+    gh.add_run(102, created=2 * RUN_SPACING_S)
     assert run_import(store, gh, newest=2).runs_read == 2
     assert {run.split("/")[0] for run in pairs(store)} == {"github:100", "github:102"}
 
 
 def test_newest_with_since_asks_only_for_the_runs_created_since_it(store, gh):
-    add_history(gh, 30)
-    report = run_import(store, gh, newest=20, since="2026-10-26T15:00:00Z")
+    add_history(gh, SHORT_HISTORY)
+    report = run_import(store, gh, newest=NEWEST, since="2026-10-26T15:00:00Z")
     (listing,) = runs_list_calls(gh)
     assert "created=>=2026-10-26T15:00:00Z" in listing[-1]
-    assert report.runs_read == 13  # created at 15:00 or later: 30 - n >= 18
+    assert report.runs_read == 13  # created at 15:00 or later, 5 h after BASE: SHORT_HISTORY - n >= 18
 
 
-@pytest.mark.parametrize("bad", [0, -1, True, 2.5, "20"])
-def test_a_newest_that_is_no_positive_whole_number_is_a_bad_setting(store, gh, bad):
-    with pytest.raises(settings.SettingsError):
+@pytest.mark.parametrize("bad", [0, -1, True, 2.5, "20", github.MAX_PER_PAGE + 1])
+def test_a_newest_that_is_no_whole_number_from_1_to_the_page_maximum_is_a_bad_setting(store, gh, bad):
+    with pytest.raises(settings.SettingsError, match=f"1 to {github.MAX_PER_PAGE}") as raised:
         run_import(store, gh, newest=bad)
-    assert gh.calls == []
+    assert raised.value.code == "bad_setting" and gh.calls == []
+
+
+def test_the_page_maximum_itself_is_a_good_newest(store, gh):
+    add_history(gh, 2)
+    assert run_import(store, gh, newest=github.MAX_PER_PAGE).runs_read == 2
 
 
 def test_the_newest_runs_setting_defaults_to_20_and_is_read_from_the_settings_file(tmp_path):
-    assert github.newest_runs() == 20
+    assert github.newest_runs() == NEWEST == 20
     (tmp_path / "settings.json").write_text(json.dumps({"github_live_newest_runs": 7}), encoding="utf-8")
     assert github.newest_runs() == 7
+
+
+@pytest.mark.parametrize("bad", [0, -3, True, "20", 2.5, github.MAX_PER_PAGE + 1])
+def test_a_stored_newest_runs_setting_that_is_no_whole_number_from_1_to_the_page_maximum_is_bad(tmp_path, bad):
+    (tmp_path / "settings.json").write_text(json.dumps({"github_live_newest_runs": bad}), encoding="utf-8")
+    with pytest.raises(settings.SettingsError, match="github_live_newest_runs") as raised:
+        github.newest_runs()
+    assert raised.value.code == "bad_setting"
+
+
+def test_the_live_selection_fails_only_when_the_list_hid_runs_that_could_have_been_judged():
+    listed = [{}] * (NEWEST + LIVE_SLACK)
+    # a history the list showed whole (NEWEST + 2 runs, one completed after the moment): fewer is fine
+    require_enough_judged([{}] * NEWEST, [{}] * (NEWEST + 2), NEWEST + 2, NEWEST)
+    require_enough_judged([{}] * (NEWEST - 1), [{}] * NEWEST, NEWEST, NEWEST)
+    # a longer history, and the list too short before the moment: fails with the counts
+    with pytest.raises(pytest.fail.Exception, match=rf"only {NEWEST - 3} of the {len(listed)} listed"):
+        require_enough_judged([{}] * (NEWEST - 3), listed, 3 * NEWEST, NEWEST)
 
 
 def test_json_values_is_public_and_reads_pages_printed_one_after_the_other():
