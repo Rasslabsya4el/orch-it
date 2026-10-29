@@ -13,9 +13,9 @@ REPO = "acme/example"
 SKIP = frozenset({"example-tests"})
 
 
-def run(workflow="example-flow", run_id=4117, outcome="failure", jobs=3, ended="2026-10-28T09:00:00Z"):
+def run(workflow="example-flow", run_id=4117, outcome="failure", jobs=3, ended="2026-10-28T09:00:00Z", skipped_jobs=0):
     url = f"https://github.com/{REPO}/actions/runs/{run_id}"
-    return watch.WorkflowRun(workflow, run_id, url, ended, outcome, jobs)
+    return watch.WorkflowRun(workflow, run_id, url, ended, outcome, jobs, skipped_jobs)
 
 
 def decide(latest, issues=(), skip=SKIP):
@@ -78,6 +78,52 @@ def test_a_run_that_is_neither_green_nor_non_green_does_nothing_with_or_without_
 
 def test_a_green_run_with_no_watch_does_nothing():
     assert decide([run(outcome="success")]) == []
+
+
+# the ticket https://github.com/Rasslabsya4el/orchestration-layer/issues/411 unit 8: a run GitHub skipped by its
+# `if:` (conclusion skipped, no job started) is neither green nor non-green; the watch looks past it to the latest
+# run that is not skipped
+def test_only_skipped_runs_do_nothing_with_or_without_a_watch():
+    skipped_runs = [run(run_id=4117, outcome="skipped", jobs=0),
+                    run(run_id=4118, outcome="skipped", jobs=0, ended="2026-10-28T10:00:00Z")]
+    assert decide(skipped_runs) == []
+    assert decide(skipped_runs, [watch.WatchIssue(7, "example-flow", last_run_id=4116)]) == []
+
+
+def test_a_skipped_run_after_an_open_watch_neither_comments_nor_closes_it():
+    actions = decide([run(run_id=4118, outcome="skipped", jobs=0)],
+                     [watch.WatchIssue(7, "example-flow", last_run_id=4117)])
+    assert actions == []
+
+
+def test_a_green_run_after_a_skipped_one_closes_the_watch():
+    skipped_later = run(run_id=4118, outcome="skipped", jobs=0, ended="2026-10-28T10:00:00Z")
+    green_earlier = run(run_id=4117, outcome="success", jobs=3, ended="2026-10-28T09:00:00Z")
+    actions = decide([skipped_later, green_earlier], [watch.WatchIssue(7, "example-flow", last_run_id=4116)])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Close)
+    assert actions[0].issue_number == 7
+    assert actions[0].run.run_id == 4117
+
+
+def test_a_failure_that_started_no_job_opens_one_watch_ticket():
+    actions = decide([run(run_id=4117, outcome="failure", jobs=0)])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Open)
+    assert actions[0].run.run_id == 4117
+    assert "no job started" in actions[0].body
+
+
+def test_a_skipped_run_newer_than_a_failure_leaves_the_failure_as_the_latest():
+    skipped_later = run(run_id=4118, outcome="skipped", jobs=0, ended="2026-10-28T10:00:00Z")
+    failed_earlier = run(run_id=4117, outcome="failure", jobs=3, ended="2026-10-28T09:00:00Z")
+    actions = decide([skipped_later, failed_earlier])
+    assert len(actions) == 1 and isinstance(actions[0], watch.Open)
+    assert actions[0].run.run_id == 4117
+
+
+def test_a_run_whose_every_job_was_skipped_is_neither_green_nor_non_green():
+    all_skipped = run(run_id=4118, outcome="other", jobs=0, skipped_jobs=2)
+    assert decide([all_skipped]) == []
+    assert decide([all_skipped], [watch.WatchIssue(7, "example-flow", last_run_id=4117)]) == []
 
 
 def test_the_skipped_workflow_does_nothing_with_or_without_a_watch():

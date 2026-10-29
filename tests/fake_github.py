@@ -287,10 +287,11 @@ class FakeGitHub(FakeHub):
         flow.runs.insert(0, (run, branch))
 
     def latest_workflow_runs(self, repo):
-        """The latest completed run of each workflow on the default branch, as GitHub lists them."""
+        """The latest completed run of each workflow on the default branch that is not skipped, as GitHub lists them."""
         found = []
         for flow in self.flows:
-            on_default = [run for run, branch in flow.runs if branch == self.default_branch]
+            on_default = [run for run, branch in flow.runs
+                          if branch == self.default_branch and not watch.skipped(run)]
             if on_default:
                 found.append(on_default[0])
         return found

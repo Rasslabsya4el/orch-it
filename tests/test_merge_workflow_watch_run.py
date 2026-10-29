@@ -22,6 +22,7 @@ X_PATH = ".github/workflows/x.yml"
 TESTS_PATH = f".github/workflows/{WORKFLOW_FILE}"
 STARTED = {"started_at": "2026-10-28T08:59:00Z", "conclusion": "failure"}
 NOT_STARTED = {"started_at": None, "conclusion": None}
+SKIPPED_JOB = {"started_at": "2026-10-28T09:59:00Z", "conclusion": "skipped"}
 
 
 @pytest.fixture
@@ -145,8 +146,9 @@ def test_a_non_green_run_on_another_branch_opens_nothing(hub):
     assert watched(hub) == []
 
 
-def scripted_gh(asked, *, run_conclusion="failure", jobs=(STARTED, NOT_STARTED)):
-    """A scripted `gh`; `asked` collects the text of every call that reads the runs of a workflow."""
+def scripted_gh(asked, *, run_conclusion="failure", jobs=(STARTED, NOT_STARTED), newer_skipped=False):
+    """A scripted `gh`; `asked` collects the text of every call that reads the runs of a workflow. With
+    `newer_skipped`, run 4118 (conclusion skipped, one skipped job) is listed above run 4117."""
 
     def scripted(args):
         text = " ".join(args)
@@ -158,11 +160,16 @@ def scripted_gh(asked, *, run_conclusion="failure", jobs=(STARTED, NOT_STARTED))
                 {"id": 2, "name": None, "path": X_PATH}]})
         if "actions/workflows/1/runs?" in text:
             asked.append(text)
-            return json.dumps({"total_count": 1, "workflow_runs": [
-                {"id": 4117, "status": "completed", "conclusion": run_conclusion,
-                 "updated_at": "2026-10-28T09:00:00Z", "html_url": URL}]})
+            listed = [{"id": 4117, "status": "completed", "conclusion": run_conclusion,
+                       "updated_at": "2026-10-28T09:00:00Z", "html_url": URL}]
+            if newer_skipped:
+                listed.insert(0, {"id": 4118, "status": "completed", "conclusion": "skipped",
+                                  "updated_at": "2026-10-28T10:00:00Z", "html_url": URL})
+            return json.dumps({"total_count": len(listed), "workflow_runs": listed})
         if "actions/workflows/2/runs?" in text:
             return json.dumps({"total_count": 0, "workflow_runs": []})
+        if "actions/runs/4118/jobs" in text:
+            return json.dumps({"total_count": 1, "jobs": [SKIPPED_JOB]})
         if "actions/runs/4117/jobs" in text:
             return json.dumps({"total_count": len(jobs), "jobs": list(jobs)})
         if "/issues/7/comments" in text:
@@ -190,8 +197,13 @@ def test_the_real_hub_reads_the_listed_workflows_their_latest_run_and_the_watch_
     assert hub.watch_issues(REPO) == [watch.WatchIssue(7, FLOW_PATH, 4120)]
 
 
-def test_the_real_hub_counts_no_started_job_for_a_run_whose_jobs_were_all_skipped():
+def test_the_real_hub_leaves_out_a_run_whose_jobs_were_all_skipped():
     skipped = {"started_at": "2026-10-28T08:59:00Z", "conclusion": "skipped"}
     hub = GhPullHub(gh=scripted_gh([], run_conclusion="success", jobs=(skipped, skipped)))
+    assert hub.latest_workflow_runs(REPO) == []
+
+
+def test_the_real_hub_reads_past_a_newer_skipped_run_to_the_latest_run_that_is_not_skipped():
+    hub = GhPullHub(gh=scripted_gh([], newer_skipped=True))
     assert hub.latest_workflow_runs(REPO) == [
-        watch.WorkflowRun(FLOW_PATH, 4117, URL, "2026-10-28T09:00:00Z", "success", 0)]
+        watch.WorkflowRun(FLOW_PATH, 4117, URL, "2026-10-28T09:00:00Z", "failure", 1)]
