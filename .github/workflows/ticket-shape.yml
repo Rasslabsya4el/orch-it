@@ -9,8 +9,8 @@ on:
     types: [labeled, edited]
 
 permissions:
-  issues: write
-  contents: read
+  issues: write  # take the ready label off a ticket and comment the violations
+  contents: read  # check out the code
 
 # one check at a time per ticket; a newer event judges the ticket as it stands then
 concurrency:
