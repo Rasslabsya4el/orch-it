@@ -111,7 +111,7 @@ DE = {
     "watch_plan": "herausfinden, warum der Lauf nicht grün ist, und die Ursache beheben; was genau, entscheidet dieses Ticket.",
     "watch_result": "der letzte Lauf von `{shown}` ist grün.",
     "watch_undo": "two-way door (ein Rollback); touches nur den Lauf von `{shown}`.",
-    "skills_what": "Pocks Upstream der Skills wechselte von `{old}` zu `{new}`: geänderte Skills: {changed}, davon in das Repo kopiert: {copies}.",
+    "skills_what": "Pocock Upstream der Skills wechselte von `{old}` zu `{new}`: geänderte Skills: {changed}, davon in das Repo kopiert: {copies}.",
     "skills_goal": "die Kopien der Skills im Repo entsprechen der neuen Version seines Upstreams, und keine Rolle verliert einen aufrufbaren Skill stillschweigend.",
     "skills_plan": "ORCH startet unter dem `gh` des Owners `python -m orch_it skills update`; das öffnet einen Pull-Request mit den neuen Kopien, und die Tests des Repos prüfen die Kopien und die Verweise auf die Skills.",
     "skills_result": "der Pull-Request ist auf beiden Systemen grün, 100 % der Kopien haben Hashes gleich dem Manifest der neuen Version, und jeder Skill darin ist seiner Klasse zugeordnet.",
@@ -131,7 +131,7 @@ DE_EXPECT = {
               "Goal": "der letzte Lauf von `example-flow` ist wieder grün, und das Ticket schließt sich beim ersten solchen Lauf von selbst.",
               "Plan": DE["watch_plan"], "Result": "der letzte Lauf von `example-flow` ist grün.",
               "Undo": "two-way door (ein Rollback); touches nur den Lauf von `example-flow`."},
-    "skills": {"What": "Pocks Upstream der Skills wechselte von `111111111111` zu `222222222222`: geänderte Skills: 1, davon in das Repo kopiert: ",
+    "skills": {"What": "Pocock Upstream der Skills wechselte von `111111111111` zu `222222222222`: geänderte Skills: 1, davon in das Repo kopiert: ",
                "Goal": DE["skills_goal"], "Plan": DE["skills_plan"], "Result": DE["skills_result"], "Undo": DE["skills_undo"]},
     "skills_brain": {"Plan": DE["skills_plan_brain"], "Result": DE["skills_result_brain"]},
 }
