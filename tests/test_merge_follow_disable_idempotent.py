@@ -1,9 +1,8 @@
 """#411 unit 11f: turning auto-merge off on a pull request whose auto-merge is already off is a no-op success.
 
-Live (run 40927387452, throwaway repo orch-it-trial-411-r4, pull request 6): a person's comment started the
-follow at 18:04:48; auto-merge merged the pull request at 18:04:57, while the follow ran; the follow's
-`gh pr merge 6 --disable-auto` then got GitHub's `Can't disable auto-merge for this pull request`, which the
-hub raised. Here the real `GhPullHub.set_auto_merge` runs over the fake GitHub, with a `gh` that refuses as
+Live (a throwaway repo of the layer ticket 411 trial): a person's comment started the follow; auto-merge
+merged the pull request nine seconds later, while the follow ran; the follow's `gh pr merge --disable-auto`
+then got GitHub's `Can't disable auto-merge for this pull request`, which the hub raised. Here the real `GhPullHub.set_auto_merge` runs over the fake GitHub, with a `gh` that refuses as
 GitHub does."""
 
 import pytest
