@@ -15,6 +15,7 @@ from orch_it.merge import marks, red_main
 from orch_it.merge.follow import follow
 from orch_it.merge.pr_open import open_pr
 from orch_it.merge.settings import MergeSettings
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 
 def run(hub, store, pr, **settings):
@@ -458,8 +459,8 @@ def test_no_result_with_no_run_to_run_again_goes_to_the_brain_at_once(tmp_path):
 def test_a_red_whose_other_job_has_no_report_returns_the_ids_it_has(tmp_path):
     hub, store, prs = world(tmp_path)
     sha = hub.head(prs[10])
-    hub.checks_on(sha, FAILED, names=("linux",), failing=["t::linux_only"], run_id="r1")
-    hub.checks_on(sha, FAILED, names=("windows",), failing=None, run_id="r2")
+    hub.checks_on(sha, FAILED, names=(LINUX_CHECK,), failing=["t::linux_only"], run_id="r1")
+    hub.checks_on(sha, FAILED, names=(WINDOWS_CHECK,), failing=None, run_id="r2")
     assert run(hub, store, prs[10]).outcome == "red"
     assert "t::linux_only" in last_comment(hub, 10)
 

@@ -14,6 +14,7 @@ from orch_it.events.store import Store
 from orch_it.merge import marks
 from orch_it.merge.line import run_line
 from orch_it.merge.settings import MergeSettings
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 URL = f"https://github.com/{REPO}/issues/10"
 
@@ -76,7 +77,7 @@ def test_a_body_edited_after_pr_open_to_resolve_the_ticket_is_refused_at_the_mer
     edited = []
 
     def edit_the_body_while_the_checks_run():  # a person edits the body after `pr open`, before the checks end
-        check = hub.check_runs.get(hub.head(pr), {}).get("linux")
+        check = hub.check_runs.get(hub.head(pr), {}).get(LINUX_CHECK)
         if not edited and check and check.state == "pending" and hub.now - check.started_at >= timedelta(
                 minutes=ci.minutes - 1):
             hub.pulls[pr].body = f"Resolves {URL}\n"

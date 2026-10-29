@@ -18,6 +18,7 @@ from line_world import CI
 from orch_it import tickets
 from orch_it.events.store import Store
 from orch_it.testruns.github import GithubError
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 OWNER = REPO.split("/")[0]
 RED_TESTS = "tests/test_trial_pr_red_"
@@ -156,7 +157,7 @@ class World:
         for path, text in self.trial.files.get(pull.branch, {}).items():
             (self.base_files.discard if text is None else self.base_files.add)(path)
         red = sorted(path for path in self.base_files if path.startswith(RED_MAIN))
-        jobs = {name: FAILED if red else PASSED for name in ("linux", "windows")}
+        jobs = {name: FAILED if red else PASSED for name in (LINUX_CHECK, WINDOWS_CHECK)}
         self.hub.main_run(pull.merge_sha, jobs, failing=[f"{path}::test_red_on_a_push" for path in red])
 
     def run(self, row, **plan):
@@ -178,7 +179,7 @@ def test_rows_2_and_3_four_merge_in_order_each_after_one_up_to_date_run_and_the_
     for served in row2["prs"]:  # the head each one merged at had one run, on a head up to date with the base
         assert served["merged"] and served["line_result"] == "merged"
         assert (served["runs_on_merged_head"], served["attempts"], served["up_to_date_at_run_start"]) == (1, 1, True)
-        assert sorted(served["checks"]) == ["linux", "windows"]
+        assert sorted(served["checks"]) == [LINUX_CHECK, WINDOWS_CHECK]
     waited = [served["waited_minutes"] for served in row2["prs"]]
     assert waited == sorted(waited) and 0 < waited[0] and waited[-1] <= 5 * 6
     assert row2["ready_span_s"] <= 60
@@ -259,7 +260,7 @@ def test_row_5_a_merge_turns_the_base_red_one_ticket_a_rerun_opens_none_and_gree
 def test_row_5_says_so_when_the_trial_test_does_not_turn_the_base_red(world):
     world.hub.on_merge.remove(world._pushed)
     world.hub.on_merge.append(lambda number: world.hub.main_run(world.hub.pulls[number].merge_sha,
-                                                                {"linux": PASSED, "windows": PASSED}))
+                                                                {LINUX_CHECK: PASSED, WINDOWS_CHECK: PASSED}))
     with pytest.raises(merge_trial.TrialError, match="not red"):
         world.run(merge_trial.row_5)
     assert world.trial.workflow_log[-1] == ("on", "main-check.yml")  # the workflow is on again after a broken row
@@ -404,7 +405,7 @@ GOOD = {
     f"api repos/{REPO}/branches/trial-main": json.dumps({"protected": True}),
     f"api repos/{REPO}/actions/workflows/tests.yml": json.dumps({"id": 1, "path": ".github/workflows/tests.yml"}),
     f"api repos/{REPO}/branches/trial-main/protection": json.dumps({"required_status_checks": {
-        "strict": True, "checks": [{"context": "windows"}, {"context": "linux"}]}}),
+        "strict": True, "checks": [{"context": WINDOWS_CHECK}, {"context": LINUX_CHECK}]}}),
 }
 
 
@@ -432,7 +433,7 @@ def real(tmp_path, answers=None, *, base="trial-main", remote=None, status="", f
 def test_the_preflight_of_a_clone_and_a_repo_it_can_run_on_says_what_it_stands_on(tmp_path):
     found = real(tmp_path).preflight()
     assert found == {"default_branch": "main", "private": False, "base_is_default": False, "base_protected": True,
-                     "strict": True, "required": ["linux", "windows"]}
+                     "strict": True, "required": [LINUX_CHECK, WINDOWS_CHECK]}
 
 
 @pytest.mark.parametrize("remote", [f"https://github.com/{REPO}.git", f"https://github.com/{REPO}",
@@ -440,7 +441,7 @@ def test_the_preflight_of_a_clone_and_a_repo_it_can_run_on_says_what_it_stands_o
                                     f"git@github.com:{REPO}.git", f"ssh://git@github.com/{REPO}.git",
                                     "https://github.com/OWNER-X/Repo-Y.git"])
 def test_the_origin_of_the_clone_names_exactly_the_repo(tmp_path, remote):
-    assert real(tmp_path, remote=remote).preflight()["required"] == ["linux", "windows"]
+    assert real(tmp_path, remote=remote).preflight()["required"] == [LINUX_CHECK, WINDOWS_CHECK]
 
 
 @pytest.mark.parametrize("remote", [f"https://github.com/{REPO}-fork.git", f"https://github.com/x{REPO}.git",
@@ -477,15 +478,15 @@ def test_a_base_without_branch_protection_or_with_protection_that_is_not_what_or
     def with_checks(checks):
         return {**GOOD, protection: json.dumps({"required_status_checks": checks})}
 
-    for checks, said in [({"strict": False, "checks": [{"context": "linux"}, {"context": "windows"}]}, "strict"),
-                         ({"strict": True, "checks": [{"context": "linux"}]}, r"\['linux'\]"),
-                         ({"strict": True, "checks": [{"context": "linux"}, {"context": "windows"},
+    for checks, said in [({"strict": False, "checks": [{"context": LINUX_CHECK}, {"context": WINDOWS_CHECK}]}, "strict"),
+                         ({"strict": True, "checks": [{"context": LINUX_CHECK}]}, rf"\['{LINUX_CHECK}'\]"),
+                         ({"strict": True, "checks": [{"context": LINUX_CHECK}, {"context": WINDOWS_CHECK},
                                                        {"context": "lint"}]}, "lint"),
-                         ({"strict": True, "contexts": ["linux", "windows"]}, None),
+                         ({"strict": True, "contexts": [LINUX_CHECK, WINDOWS_CHECK]}, None),
                          ({}, "strict")]:
         trial = real(tmp_path, with_checks(checks))
         if said is None:
-            assert trial.preflight()["required"] == ["linux", "windows"]  # the older form of the same rule
+            assert trial.preflight()["required"] == [LINUX_CHECK, WINDOWS_CHECK]  # the older form of the same rule
         else:
             with pytest.raises(merge_trial.TrialError, match=said):
                 trial.preflight()

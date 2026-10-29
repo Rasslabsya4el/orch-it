@@ -22,6 +22,7 @@ from orch_it.events.store import Store
 from orch_it.testruns import github
 from orch_it.testruns.github import GithubError, import_github
 from orch_it.tickets import hook as ticket_hook
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 REPO = "acme-x/widgets-y"
 BASE = datetime(2026, 10, 26, 10, 0, tzinfo=UTC)
@@ -102,7 +103,7 @@ class FakeGh:
     def downloads(self):
         return [c for c in self.calls if c[0] == "run"]
 
-    def add_run(self, run_id, *, jobs=("linux", "windows"), created=0, status="completed",
+    def add_run(self, run_id, *, jobs=(LINUX_CHECK, WINDOWS_CHECK), created=0, status="completed",
                 conclusion="success", event="pull_request", branch="feat/x", pr=7, attempt=1,
                 billed=True, sha=None, **per_job):
         """`per_job`: job name -> dict of `conclusion`, `cases` (the JUnit report; None: no
@@ -120,7 +121,7 @@ class FakeGh:
             spec = {"conclusion": "success", "cases": GREEN, "expired": False, "started": True,
                     "attempt": attempt, "billed_ms": 300_000, "completed": 360} | per_job.get(name, {})
             job_id = run_id * 10 + index + 1
-            labels = ["ubuntu-latest"] if name == "linux" else ["windows-latest"]
+            labels = ["ubuntu-latest"] if name == LINUX_CHECK else ["windows-latest"]
             ran = spec["conclusion"] != "skipped"
             self.jobs[run_id].append({
                 "id": job_id, "name": name, "status": "completed", "conclusion": spec["conclusion"],
@@ -181,7 +182,7 @@ def pairs(store, step="test_run"):
 def ended_of(store, job_name):
     """The ended detail of the one test_run of the job named `job_name` (by its run_os)."""
 
-    os_name = {"linux": "linux", "windows": "windows"}[job_name]
+    os_name = {LINUX_CHECK: "linux", WINDOWS_CHECK: "windows"}[job_name]
     found = [ended for started, ended in pairs(store).values() if started["run_os"] == os_name]
     assert len(found) == 1
     return found[0]
@@ -262,21 +263,21 @@ def test_the_ended_detail_gives_start_and_run_minutes_of_the_pytest_step(store, 
 def test_billed_minutes_are_the_jobs_billable_duration_rounded_up_to_whole_minutes(store, gh):
     gh.add_run(100, linux={"billed_ms": 270_001}, windows={"billed_ms": 120_000})
     run_import(store, gh)
-    assert ended_of(store, "linux")["billed_minutes"] == 5
-    assert ended_of(store, "windows")["billed_minutes"] == 2
+    assert ended_of(store, LINUX_CHECK)["billed_minutes"] == 5
+    assert ended_of(store, WINDOWS_CHECK)["billed_minutes"] == 2
 
 
 def test_billed_minutes_are_0_when_the_repo_is_not_billed(store, gh):
     gh.add_run(100, billed=False)
     run_import(store, gh)
-    assert ended_of(store, "linux")["billed_minutes"] == 0
+    assert ended_of(store, LINUX_CHECK)["billed_minutes"] == 0
 
 
 def test_a_job_that_never_reached_pytest_has_no_run_minutes(store, gh):
     gh.add_run(100, linux={"conclusion": "failure", "cases": None})
     gh.jobs[100][0]["steps"] = gh.jobs[100][0]["steps"][:1]
     run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert ended["run_minutes"] is None and ended["start_minutes"] is None
 
 
@@ -310,7 +311,7 @@ def test_each_job_writes_one_test_result_per_case_of_its_report(store, gh):
     by_run = dict(store.query("SELECT run, count(*) FROM events WHERE kind = 'test.result'"
                               " GROUP BY run").rows)
     assert by_run == {"github:100/1001/1": 3, "github:100/1002/1": 2}
-    assert ended_of(store, "linux")["collected"] == 3 and ended_of(store, "windows")["collected"] == 2
+    assert ended_of(store, LINUX_CHECK)["collected"] == 3 and ended_of(store, WINDOWS_CHECK)["collected"] == 2
 
 
 def test_a_test_result_row_has_the_cases_id_outcome_and_skip_reason(store, gh):
@@ -339,15 +340,15 @@ def test_the_test_results_are_written_before_the_end_of_the_test_run(store, gh, 
 def test_a_failed_job_with_a_red_case_is_failed_red(store, gh):
     gh.add_run(100, conclusion="failure", linux={"conclusion": "failure", "cases": RED})
     run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert (ended["outcome"], ended["reason"], ended["failed"]) == ("failed", "red", 1)
-    assert ended_of(store, "windows")["outcome"] == "passed"
+    assert ended_of(store, WINDOWS_CHECK)["outcome"] == "passed"
 
 
 def test_a_failed_job_with_no_artifact_is_no_result_summary_missing(store, gh):
     gh.add_run(100, conclusion="failure", linux={"conclusion": "failure", "cases": None})
     report = run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert (ended["outcome"], ended["reason"], ended["summary_seen"]) == ("no_result", "summary_missing", False)
     assert report.reports_missing == 1
 
@@ -355,21 +356,21 @@ def test_a_failed_job_with_no_artifact_is_no_result_summary_missing(store, gh):
 def test_a_failed_job_whose_report_is_all_green_is_no_result_summary_missing(store, gh):
     gh.add_run(100, conclusion="failure", linux={"conclusion": "failure", "cases": GREEN})
     run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert (ended["outcome"], ended["reason"]) == ("no_result", "summary_missing")
 
 
 def test_a_successful_job_is_passed_whatever_its_report_says(store, gh):
     gh.add_run(100, linux={"cases": RED})
     run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert ended["outcome"] == "passed" and ended["failed"] == 1 and ended["collected"] == 2
 
 
 def test_a_successful_job_with_no_artifact_stays_passed_with_no_rows(store, gh):
     gh.add_run(100, linux={"cases": None})
     report = run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert (ended["outcome"], ended["summary_seen"], ended["collected"]) == ("passed", False, 0)
     assert store.query("SELECT count(*) FROM events WHERE run = 'github:100/1001/1'"
                        " AND kind = 'test.result'").rows == [(0,)]
@@ -405,7 +406,7 @@ def test_a_run_created_after_now_does_not_supersede(store, gh):
 def test_a_timed_out_job_is_no_result_cut_even_when_its_partial_report_holds_a_red_case(store, gh):
     gh.add_run(100, linux={"conclusion": "timed_out", "cases": RED})
     run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert (ended["outcome"], ended["reason"]) == ("no_result", "cut")
     assert store.query("SELECT count(*) FROM events WHERE outcome = 'failed' AND kind = 'step.ended'"
                        ).rows == [(0,)]
@@ -415,7 +416,7 @@ def test_a_timed_out_job_is_no_result_cut_even_when_its_partial_report_holds_a_r
 def test_any_other_conclusion_is_no_result_summary_missing(store, gh, conclusion):
     gh.add_run(100, linux={"conclusion": conclusion, "cases": None})
     run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert (ended["outcome"], ended["reason"]) == ("no_result", "summary_missing")
 
 
@@ -429,7 +430,7 @@ def test_a_skipped_job_is_not_a_run_and_writes_nothing(store, gh):
 # --- the runs ------------------------------------------------------------------------------------
 
 def test_a_run_holding_only_linux_gets_a_job_missing_pair_for_windows(store, gh):
-    gh.add_run(100, jobs=("linux",))
+    gh.add_run(100, jobs=(LINUX_CHECK,))
     run_import(store, gh)
     started, ended = pairs(store)["github:100/windows/1"]
     assert started["run_os"] == "windows" and started["place"] == "github"
@@ -439,7 +440,7 @@ def test_a_run_holding_only_linux_gets_a_job_missing_pair_for_windows(store, gh)
 
 
 def test_a_missing_job_pair_runs_from_the_creation_to_the_last_update_of_the_run(store, gh):
-    gh.add_run(100, jobs=("linux",))
+    gh.add_run(100, jobs=(LINUX_CHECK,))
     run_import(store, gh)
     rows = store.query("SELECT at FROM events WHERE step = 'test_run' AND run = 'github:100/windows/1'"
                        " ORDER BY at").rows
@@ -502,14 +503,14 @@ def test_a_since_that_is_no_time_is_a_coded_error_before_anything_is_asked(store
 
 
 def test_the_required_checks_are_the_setting_required_checks(store, gh):
-    settings.save("required_checks", ["linux"])
+    settings.save("required_checks", [LINUX_CHECK])
     gh.add_run(100)
     run_import(store, gh)
     assert [started["run_os"] for started, _ in pairs(store).values()] == ["linux"]
 
 
 def test_a_required_job_that_is_no_list_of_names_is_a_bad_setting(store, gh):
-    settings.save("required_checks", "linux")
+    settings.save("required_checks", LINUX_CHECK)
     with pytest.raises(settings.SettingsError) as error:
         run_import(store, gh)
     assert error.value.code == "bad_setting"
@@ -535,7 +536,7 @@ def test_the_artifact_of_the_job_and_attempt_is_downloaded_by_name(store, gh):
 def test_a_run_from_before_the_attempt_suffix_is_read_from_the_artifact_named_by_the_job(store, gh):
     gh.add_run(100, linux={"artifact_name": "junit-linux"})
     report = run_import(store, gh)
-    assert ended_of(store, "linux")["collected"] == 3 and report.reports_missing == 0
+    assert ended_of(store, LINUX_CHECK)["collected"] == 3 and report.reports_missing == 0
 
 
 def test_an_unreadable_report_is_no_result_summary_missing_for_a_failed_job(store, gh):
@@ -543,14 +544,14 @@ def test_an_unreadable_report_is_no_result_summary_missing_for_a_failed_job(stor
     with zipfile.ZipFile(gh.zips / "100-junit-linux-1.zip", "w") as z:
         z.writestr("junit.xml", "<testsuites><testsuite><testcase")
     run_import(store, gh)
-    assert ended_of(store, "linux")["reason"] == "summary_missing"
+    assert ended_of(store, LINUX_CHECK)["reason"] == "summary_missing"
 
 
 # --- again, and when gh fails --------------------------------------------------------------------
 
 def test_a_second_import_writes_nothing_and_downloads_nothing(store, gh):
     gh.add_run(100)
-    gh.add_run(101, created=3600, jobs=("linux",))
+    gh.add_run(101, created=3600, jobs=(LINUX_CHECK,))
     first = run_import(store, gh)
     assert first.written > 0
     gh.calls.clear()
@@ -705,20 +706,20 @@ def test_a_cancelled_run_lacking_a_required_job_gets_stopped_pairs_not_job_missi
     gh.add_run(100, jobs=(), conclusion="cancelled")
     gh.add_run(101, created=600)
     run_import(store, gh)
-    for name in ("linux", "windows"):
+    for name in (LINUX_CHECK, WINDOWS_CHECK):
         _, ended = pairs(store)[f"github:100/{name}/1"]
         assert (ended["outcome"], ended["reason"]) == ("stopped", "superseded")
 
 
 def test_a_cancelled_run_lacking_a_job_and_with_no_newer_run_is_stopped_with_no_reason(store, gh):
-    gh.add_run(100, jobs=("linux",), conclusion="cancelled")
+    gh.add_run(100, jobs=(LINUX_CHECK,), conclusion="cancelled")
     run_import(store, gh)
     _, ended = pairs(store)["github:100/windows/1"]
     assert (ended["outcome"], ended["reason"]) == ("stopped", None)
 
 
 def cancelled_linux(**over):
-    return dict(created=0, conclusion="cancelled", jobs=("linux",),
+    return dict(created=0, conclusion="cancelled", jobs=(LINUX_CHECK,),
                 linux={"conclusion": "cancelled", "cases": None}) | over
 
 
@@ -753,28 +754,28 @@ def test_a_push_run_is_superseded_by_a_newer_push_run_of_the_same_branch(store, 
 def test_a_cancelled_job_that_ran_to_the_bound_is_no_result_cut(store, gh):
     gh.add_run(100, linux={"conclusion": "cancelled", "cases": RED, "completed": 60 + github.DEFAULT_JOB_TIMEOUT_MINUTES * 60})
     run_import(store, gh)
-    ended = ended_of(store, "linux")
+    ended = ended_of(store, LINUX_CHECK)
     assert (ended["outcome"], ended["reason"]) == ("no_result", "cut")
 
 
 def test_a_cancelled_job_that_stopped_short_of_the_bound_is_stopped(store, gh):
     gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "completed": 60 + github.DEFAULT_JOB_TIMEOUT_MINUTES * 60 - 1})
     run_import(store, gh)
-    assert ended_of(store, "linux")["outcome"] == "stopped"
+    assert ended_of(store, LINUX_CHECK)["outcome"] == "stopped"
 
 
 def test_the_bound_is_the_setting_github_job_timeout_minutes(store, gh):
     settings.save("github_job_timeout_minutes", 3)
     gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "completed": 60 + 3 * 60})
     run_import(store, gh)
-    assert ended_of(store, "linux")["reason"] == "cut"
+    assert ended_of(store, LINUX_CHECK)["reason"] == "cut"
 
 
 def test_a_cancelled_job_that_never_started_is_never_cut(store, gh):
     gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "started": False,
                            "completed": 99999})
     run_import(store, gh)
-    assert ended_of(store, "linux")["outcome"] == "stopped"
+    assert ended_of(store, LINUX_CHECK)["outcome"] == "stopped"
 
 
 @pytest.mark.parametrize("value", [0, -1, "15", True, None])
@@ -1082,7 +1083,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     judged = newest_judged(runs, moment, since, newest)
     require_enough_judged(judged, runs, completed_since, newest)
     assert judged, "no run completed since the first pull request run and before the moment"
-    required = ("linux", "windows")
+    required = (LINUX_CHECK, WINDOWS_CHECK)
     run_pairs, waits = pairs(store), pairs(store, "wait")
     jobs_of = {}
     for run in judged:

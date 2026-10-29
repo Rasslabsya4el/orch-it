@@ -28,6 +28,7 @@ DEFAULT_COMMAND = ("{python}", "-m", "pytest", "-q", "-p", "orch_it_ids", "--jun
 OSES = ("linux", "windows", "macos")
 MAX_BOUND_MINUTES = 7 * 24 * 60  # a week: a longer bound is no bound
 REQUIRED_CHECKS_SETTING = "required_checks"
+REPLACED_SETTING = "github_required_jobs"  # the name `required_checks` replaced; a file that still has it is refused
 _MACHINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -48,6 +49,8 @@ def required_checks(raw: dict, repo: str) -> tuple[str, ...]:
     non-empty names with no surrounding space; any other shape raises `SettingsError("bad_setting")`."""
 
     merged = {**raw, **settings.repo_section(raw, repo)}
+    if REPLACED_SETTING in merged:
+        raise SettingsError("bad_setting", f"{REPLACED_SETTING} replaced by {REQUIRED_CHECKS_SETTING}")
     if REQUIRED_CHECKS_SETTING not in merged:
         return DEFAULT_REQUIRED_CHECKS
     names = merged[REQUIRED_CHECKS_SETTING]

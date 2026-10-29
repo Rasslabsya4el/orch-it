@@ -4,6 +4,7 @@ job names `linux` and `windows` stay the `tests` workflow's alone."""
 
 import re
 from pathlib import Path
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 WORKFLOWS = Path(__file__).parents[1] / ".github" / "workflows"
 TEXT = (WORKFLOWS / "follow.yml").read_text("utf-8")
@@ -55,7 +56,7 @@ def test_the_merge_flow_s_workflows_add_no_job_named_like_a_required_check():
     for name in ("follow.yml", "main-check.yml", "reconcile.yml"):
         jobs = re.findall(r"^  ([A-Za-z0-9_-]+):$", (WORKFLOWS / name).read_text("utf-8").split("\njobs:\n", 1)[1],
                           re.MULTILINE)
-        assert jobs and not {"linux", "windows"} & set(jobs), name
+        assert jobs and not {LINUX_CHECK, WINDOWS_CHECK} & set(jobs), name
 
 
 def test_its_token_may_close_label_comment_and_rerun_but_no_more():

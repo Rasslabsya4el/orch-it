@@ -81,6 +81,13 @@ def test_the_setting_names_the_checks_and_the_default_is_the_defaults_file(setti
     assert error.value.code == "bad_setting"
 
 
+def test_the_old_setting_name_is_refused_and_names_its_replacement():
+    with pytest.raises(SettingsError) as error:
+        config.required_checks({"github_required_jobs": list(config.DEFAULT_REQUIRED_CHECKS)}, REPO)
+    assert error.value.code == "bad_setting"
+    assert str(error.value) == "bad_setting: github_required_jobs replaced by required_checks"
+
+
 def test_guards_status_holds_the_protection_to_the_setting(settings_file, tmp_path):
     store = Store.open(tmp_path / "store")
 

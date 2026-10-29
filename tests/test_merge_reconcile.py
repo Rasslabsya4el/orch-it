@@ -14,6 +14,7 @@ from orch_it.merge import reconcile as reconcile_module
 from orch_it.merge.follow import FollowReport
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.settings import MergeSettings
+from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 
 def sweep(hub, store, tmp_path, **kwargs):
@@ -47,7 +48,7 @@ def test_with_actions_off_the_same_sweep_runs_here_and_says_so(tmp_path):
 def test_a_member_of_the_line_is_followed_and_red_main_gets_its_ticket(tmp_path):
     hub, store, prs = world(tmp_path)
     hub.checks_on(hub.head(prs[10]), FAILED, failing=["t::mine"])
-    hub.main_run(hub.land(), {"linux": FAILED, "windows": PASSED}, failing=["t::main"])
+    hub.main_run(hub.land(), {LINUX_CHECK: FAILED, WINDOWS_CHECK: PASSED}, failing=["t::main"])
     done = sweep(hub, store, tmp_path)
     assert ("unparked", f"#{prs[10]}") in done.repairs
     assert any(code == "red_ticket_opened" for code, _ in done.repairs)
@@ -77,7 +78,7 @@ def test_a_rerun_the_sweep_asked_for_is_a_repair(tmp_path):
     from fake_github import NO_RESULT
 
     hub, store, _ = world(tmp_path)
-    hub.main_run(hub.land(), {"linux": NO_RESULT, "windows": PASSED})
+    hub.main_run(hub.land(), {LINUX_CHECK: NO_RESULT, WINDOWS_CHECK: PASSED})
     assert ("rerun", "main") in sweep(hub, store, tmp_path).repairs
 
 
