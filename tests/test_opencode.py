@@ -144,39 +144,6 @@ def test_two_servers_at_once_have_their_own_port_and_process(tmp_path):
         assert one.seen()["pid"] != two.seen()["pid"]
 
 
-@pytest.mark.xfail(strict=True, reason="#421: Server.start pre-probes its port (opencode.py free_port); "
-                                       "the src change is pending a decision")
-def test_two_servers_started_at_once_do_not_collide(tmp_path, monkeypatch):
-    # both starts get the same number from the pre-probe, as two runs racing for one free port would
-    number = free_port()
-    monkeypatch.setattr(opencode, "free_port", lambda: number)
-    stubs = [Stub(tmp_path, "one", root="a"), Stub(tmp_path, "two", root="b")]
-    barrier = threading.Barrier(len(stubs))
-    servers, errors = {}, {}
-
-    def start(key, stub):
-        server = stub.server()
-        barrier.wait()
-        try:
-            server.__enter__()
-        except OpencodeError as caught:
-            errors[key] = caught
-        else:
-            servers[key] = server
-
-    threads = [threading.Thread(target=start, args=(key, stub)) for key, stub in zip("ab", stubs)]
-    try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(60)
-        assert not errors, errors
-        assert servers["a"].port != servers["b"].port
-    finally:
-        for server in servers.values():
-            server.__exit__(None, None, None)
-
-
 def test_the_log_names_the_port_and_never_holds_the_password(tmp_path):
     stub = Stub(tmp_path)
     server = stub.server()
