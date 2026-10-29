@@ -12,9 +12,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from orch_it import language
 from orch_it.guards.kinds import find_in_ticket_text
-from orch_it.shipped import RULE_FIRST_SENTENCE
 from orch_it.guards.values import Values, find_in
+from orch_it.shipped import RULE_FIRST_SENTENCE
 from orch_it.tickets.model import HUMAN_FIELDS, Ticket, none_reason
 
 TITLE_MAX = 80
@@ -25,7 +26,8 @@ LITERAL_RULE = RULE_FIRST_SENTENCE
 # the literal findings of a body (rule 3 of the check, #413 unit 6); not shape rules, so not in `RULES`
 LITERAL_RULES: dict[str, str] = {"literal_value": LITERAL_RULE, "literal_pattern": LITERAL_RULE}
 
-# code -> the rule as the skill states it
+# code -> the rule as the skill states it; a rule about the human block's language is a key of the
+# language table instead (`rule_text` reads it: the setting `human_language` decides the words)
 RULES: dict[str, str] = {
     "title_too_long": f"the title is at most {TITLE_MAX} characters",
     "title_parked": "the title never holds the word \"parked\"",
@@ -34,7 +36,7 @@ RULES: dict[str, str] = {
     "human_block_not_first": "above `## For the human` stand only `Parked:` lines",
     "human_field_missing": "each of What, Goal, Plan, Result, Undo is there and not empty",
     "human_field_order": "the five fields keep the order What, Goal, Plan, Result, Undo, each once",
-    "human_field_not_russian": "the text of each human field is Russian",
+    "human_field_wrong_language": "human_field_language_rule",
     "human_field_path": "a human field holds no file path and no file:line",
     "agent_block_missing": "the body has the heading `## For the agent` after the human block",
     "acceptance_missing": "the agent block has an acceptance table with `check` and `pass` filled in",
@@ -46,6 +48,17 @@ RULES: dict[str, str] = {
     "weight_bad": "the weight is a whole number from 1 to 10",
 }
 
+TABLE_RULES = frozenset({"human_field_wrong_language"})
+
+
+def rule_text(code: str) -> str:
+    """The rule of `code` in words: from `RULES`, or from the language table when the rule is one."""
+
+    if code in LITERAL_RULES:
+        return LITERAL_RULES[code]
+    rule = RULES[code]
+    return language.text(rule) if code in TABLE_RULES else rule
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -56,12 +69,12 @@ class Violation:
     def rule(self) -> str:
         """The rule broken, with this violation's detail."""
 
-        text = (RULES | LITERAL_RULES)[self.code]
-        return f"{text} ({self.detail})" if self.detail else text
+        rule = rule_text(self.code)
+        return f"{rule} ({self.detail})" if self.detail else rule
 
     @property
     def message(self) -> str:
-        said = f"{self.code}: {(RULES | LITERAL_RULES)[self.code]}"
+        said = f"{self.code}: {rule_text(self.code)}"
         return f"{said} ({self.detail})" if self.detail else said
 
 
@@ -69,13 +82,9 @@ _ISSUE_NUMBER = re.compile(r"(?:[\w.-]+/[\w.-]+)?#\d+")
 _PARKED = re.compile(r"parked", re.IGNORECASE)
 _CODE_SPAN = re.compile(r"`[^`\n]*`")
 _URL = re.compile(r"https?://\S+")
-# the fixed English words of the Undo field (`two-way door`, `touches`) are the form, not text
-_UNDO_WORDS = re.compile(r"\b(?:two-way door|one-way door|one revert|touches)\b", re.IGNORECASE)
-_CYRILLIC = re.compile(r"[Ѐ-ӿ]")
-_LATIN = re.compile(r"[A-Za-z]")
 _EXTENSIONS = ("py|pyi|md|js|mjs|cjs|ts|tsx|jsx|json|jsonl|yml|yaml|toml|sql|txt|sh|ps1|bat|cmd|cfg|ini"
                "|html|css|xml|csv|go|rs|java|kt|rb|php|cs|c|h|cpp|hpp|swift|lock|log|env")
-_SEGMENT = r"[A-Za-z0-9_.-]"  # ASCII only: a Russian `и/или` is no path
+_SEGMENT = r"[A-Za-z0-9_.-]"  # ASCII only: a word of another script of a non-ASCII language is no path
 _PATH = re.compile(
     # a file with a known extension, maybe in folders, maybe with `:line`: `docs/events.md:62`
     rf"(?<![\w.])(?:[A-Za-z]:[\\/]|\.{{0,2}}[\\/])?(?:{_SEGMENT}+[\\/])*[A-Za-z0-9_-]{_SEGMENT}*"
@@ -156,8 +165,8 @@ def _human(ticket: Ticket) -> list[Violation]:
             found.append(Violation("human_field_order", field.name))
         furthest = max(furthest, place)
     for name, text in texts.items():
-        if text.strip() and not _is_russian(text):
-            found.append(Violation("human_field_not_russian", name))
+        if text.strip() and not _in_human_language(text):
+            found.append(Violation("human_field_wrong_language", name))
         paths = _paths(text)
         if paths:
             found.append(Violation("human_field_path", f"{name}: {', '.join(paths)}"))
@@ -170,13 +179,20 @@ def _paths(text: str) -> list[str]:
     return list(dict.fromkeys(path for path in found if not _PRODUCT.fullmatch(path)))
 
 
-def _is_russian(text: str) -> bool:
-    """Russian when at least half its letters are Cyrillic, leaving out code spans, links and the
-    Undo field's fixed words: a domain term in backticks or a product name stays as written."""
+def _in_human_language(text: str) -> bool:
+    """Written in the script of the setting `human_language`: a test of script, not of language. The text
+    holds a letter of that language's script (the table's `human_field_letters`) and at least as many of
+    them as letters of any other script; a text in another language of the same script (German for
+    English) cannot be told apart and passes, only text mostly in another script is refused. Code spans,
+    links and the Undo field's fixed words (the table's `undo_words`) are left out: a domain term in
+    backticks or a product name stays as written."""
 
-    prose = _UNDO_WORDS.sub(" ", _URL.sub(" ", _CODE_SPAN.sub(" ", text)))
-    cyrillic, latin = len(_CYRILLIC.findall(prose)), len(_LATIN.findall(prose))
-    return cyrillic > 0 and cyrillic >= latin
+    letters = re.compile(language.text("human_field_letters"))
+    undo_words = re.compile(language.text("undo_words"), re.IGNORECASE)
+    prose = undo_words.sub(" ", _URL.sub(" ", _CODE_SPAN.sub(" ", text)))
+    own = len(letters.findall(prose))
+    other = sum(1 for ch in prose if ch.isalpha() and not letters.fullmatch(ch))
+    return own > 0 and own >= other
 
 
 def _agent(ticket: Ticket) -> list[Violation]:

@@ -15,6 +15,8 @@ import pytest
 from orch_it.skills import copies, update
 from orch_it.skills.copies import Manifest, SkillsError
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -655,7 +657,7 @@ def test_a_bad_template_gives_an_issue_without_ready_for_agent_that_lists_its_vi
     done = report(world, forge)
     [(_, body, label)] = forge.opened
     assert label != "ready-for-agent" and done.labels == [label]
-    assert "human_field_not_russian" in body
+    assert "human_field_wrong_language" in body
 
 
 def test_a_body_with_violations_on_a_later_run_leaves_the_brains_labels(world, monkeypatch):
@@ -665,7 +667,7 @@ def test_a_body_with_violations_on_a_later_run_leaves_the_brains_labels(world, m
     forge.issues[0]["labels"] = ["ready-for-agent"]
     monkeypatch.setitem(update.HUMAN_LINES, "Goal", "the copies match his upstream")
     assert report(world, forge).status == "already_open"
-    assert forge.issues[0]["labels"] == ["ready-for-agent"] and "human_field_not_russian" in forge.edited[-1][1]
+    assert forge.issues[0]["labels"] == ["ready-for-agent"] and "human_field_wrong_language" in forge.edited[-1][1]
 
 
 def test_a_huge_change_stays_inside_a_github_body_and_its_shape():

@@ -11,6 +11,8 @@ from ticket_fixtures import fixture
 from orch_it.events.store import Store
 from orch_it.tickets import park as parks
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+
 TODAY = date(2026, 11, 2)
 BODY = fixture("good_basic")[1]
 

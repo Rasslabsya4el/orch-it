@@ -4,6 +4,10 @@ Every test gets ORCH_IT_SETTINGS set, through monkeypatch, to a settings file in
 temporary base. A test that sets the variable itself runs later and its own monkeypatch value wins.
 """
 
+import json
+import os
+from pathlib import Path
+
 import pytest
 
 
@@ -15,6 +19,13 @@ def isolated_settings(tmp_path_factory, monkeypatch):
     # the per-user data folder (store, locks, caches) is the OS base plus "orch-it": point both bases at the test's own
     monkeypatch.setenv("LOCALAPPDATA", str(folder / "local"))
     monkeypatch.setenv("XDG_DATA_HOME", str(folder / "share"))
+
+
+@pytest.fixture
+def ticket_language_ru(isolated_settings):
+    """The human block of a ticket is Russian (#413 unit 10a): the setting `human_language` is `ru`. For a test
+    module whose ticket bodies (fixtures, texts the code writes) are Russian: `pytestmark = usefixtures(...)`."""
+    Path(os.environ["ORCH_IT_SETTINGS"]).write_text(json.dumps({"human_language": "ru"}), "utf-8")
 
 
 @pytest.fixture(scope="session")

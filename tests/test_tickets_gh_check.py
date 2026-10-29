@@ -17,6 +17,8 @@ from orch_it.cli import main
 from orch_it.tickets import commands, gh_check, hook
 from orch_it.tickets.hub import LAYER_MARK
 
+pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
+
 WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ticket-shape.yml"
 TRANSCRIPT = Path(__file__).parent / "fixtures" / "transcripts" / "write_ticket_called.jsonl"
 
