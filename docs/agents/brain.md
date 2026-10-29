@@ -43,9 +43,9 @@ So every request, a finding of the brain's own included, is reasoned through:
   acting on it, file:line; the brain decides the outcome of both running: the ticket's `Same object:` line.
 - **The class.** The named case is one member; the fix covers every member, and the ticket's scope is the class,
   never the list of cases in view. A defect (call `diagnosing-bugs`) gets two parts: mitigate this case, prevent the
-  class with a check that fails for every member. A value that differs per repo is a setting in the section
-  `repos.<owner/name>` of orch-it's settings file, with its default; code and rule text name no value that differs
-  per repo.
+  class with a check that fails for every member. The rule on a value that differs per repo, account, machine or OS
+  is in the project instructions, `src/orch_it/shipped/CLAUDE.md`; its per-repo values sit in the
+  `repos.<owner/name>` section of orch-it's settings file.
 - **Options, then the decision.** Two or three ways with their consequences, then the brain's pick and its reasons.
 - **Depth by stakes.** Cheap and reversible: decide fast. Wide, costly or hard to reverse: dig until sure, as long
   as it takes.
