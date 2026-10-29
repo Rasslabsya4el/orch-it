@@ -80,9 +80,9 @@ def test_a_green_run_with_no_watch_does_nothing():
     assert decide([run(outcome="success")]) == []
 
 
-# the ticket https://github.com/Rasslabsya4el/orchestration-layer/issues/411 unit 8: a run GitHub skipped by its
-# `if:` (conclusion skipped, no job started) is neither green nor non-green; the watch looks past it to the latest
-# run that is not skipped
+# a run GitHub skipped by its `if:` (conclusion skipped, no job started) is neither green nor non-green: the
+# sweep's own comments start more skipped runs, so the watch must not open or comment on one; it looks past it to
+# the latest run that is not skipped
 def test_only_skipped_runs_do_nothing_with_or_without_a_watch():
     skipped_runs = [run(run_id=4117, outcome="skipped", jobs=0),
                     run(run_id=4118, outcome="skipped", jobs=0, ended="2026-10-28T10:00:00Z")]

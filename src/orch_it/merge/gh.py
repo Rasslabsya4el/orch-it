@@ -362,9 +362,8 @@ class GhPullHub(GhHub):
         return [workflow.path for workflow in self._workflows(repo)]
 
     def latest_workflow_runs(self, repo: str) -> list[WorkflowRun]:
-        """The latest run of each workflow on the default branch that is not skipped by its `if:` (the ticket
-        https://github.com/Rasslabsya4el/orchestration-layer/issues/411 unit 8): the newest `RUNS_SCANNED` completed
-        runs are read, and the first one not skipped is the workflow's run."""
+        """The latest run of each workflow on the default branch that is not skipped by its `if:`: the newest
+        `RUNS_SCANNED` completed runs are read, and the first one not skipped is the workflow's run."""
 
         branch = quote(self._default_branch(repo), safe="")
         found = []
@@ -382,8 +381,10 @@ class GhPullHub(GhHub):
         run_id = run.get("id")
         if type(run_id) is not int or not _text(run.get("updated_at")):
             raise GithubError("gh_bad_output", f"{repo}: workflow `{path}` has a run with no id or end time")
-        jobs = self._pages(["api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"], "jobs")
         conclusion = run.get("conclusion")
+        # a run GitHub already concluded `skipped` is passed over without reading its jobs
+        jobs = [] if conclusion == "skipped" else self._pages(
+            ["api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"], "jobs")
         return WorkflowRun(
             workflow=path, run_id=run_id, url=_text(run.get("html_url")), ended_at=run["updated_at"],
             outcome=conclusion if conclusion in RUN_OUTCOMES else "other",

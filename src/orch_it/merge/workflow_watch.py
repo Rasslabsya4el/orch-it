@@ -200,8 +200,7 @@ def latest_per_workflow(runs: list[WorkflowRun]) -> list[WorkflowRun]:
 
 
 def decide(latest: list[WorkflowRun], open_issues: list[WatchIssue], *, skip: frozenset[str]) -> list[Action]:
-    """The actions for the latest ended run of each workflow that is not skipped (the ticket
-    https://github.com/Rasslabsya4el/orchestration-layer/issues/411 unit 8): a non-green one opens its watch or
+    """The actions for the latest ended run of each workflow that is not skipped: a non-green one opens its watch or
     comments on the lowest-numbered open one (no comment for a run it already names); a green one closes every
     open watch of its workflow; any other run, and a workflow in `skip`, gets nothing."""
 

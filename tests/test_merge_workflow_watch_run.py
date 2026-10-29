@@ -146,9 +146,9 @@ def test_a_non_green_run_on_another_branch_opens_nothing(hub):
     assert watched(hub) == []
 
 
-def scripted_gh(asked, *, run_conclusion="failure", jobs=(STARTED, NOT_STARTED), newer_skipped=False):
-    """A scripted `gh`; `asked` collects the text of every call that reads the runs of a workflow. With
-    `newer_skipped`, run 4118 (conclusion skipped, one skipped job) is listed above run 4117."""
+def scripted_gh(asked, *, run_conclusion="failure", jobs=(STARTED, NOT_STARTED), newer=None):
+    """A scripted `gh`. `asked` collects the text of every call that reads the runs or the jobs of a workflow.
+    With `newer` = (conclusion, jobs), run 4118 is listed above run 4117 with that conclusion and those jobs."""
 
     def scripted(args):
         text = " ".join(args)
@@ -162,15 +162,17 @@ def scripted_gh(asked, *, run_conclusion="failure", jobs=(STARTED, NOT_STARTED),
             asked.append(text)
             listed = [{"id": 4117, "status": "completed", "conclusion": run_conclusion,
                        "updated_at": "2026-10-28T09:00:00Z", "html_url": URL}]
-            if newer_skipped:
-                listed.insert(0, {"id": 4118, "status": "completed", "conclusion": "skipped",
+            if newer is not None:
+                listed.insert(0, {"id": 4118, "status": "completed", "conclusion": newer[0],
                                   "updated_at": "2026-10-28T10:00:00Z", "html_url": URL})
             return json.dumps({"total_count": len(listed), "workflow_runs": listed})
         if "actions/workflows/2/runs?" in text:
             return json.dumps({"total_count": 0, "workflow_runs": []})
         if "actions/runs/4118/jobs" in text:
-            return json.dumps({"total_count": 1, "jobs": [SKIPPED_JOB]})
+            asked.append(text)
+            return json.dumps({"total_count": len(newer[1]), "jobs": list(newer[1])})
         if "actions/runs/4117/jobs" in text:
+            asked.append(text)
             return json.dumps({"total_count": len(jobs), "jobs": list(jobs)})
         if "/issues/7/comments" in text:
             return json.dumps([{"user": {"login": "owner", "type": "User"}, "body": watch.run_mark(4120),
@@ -204,6 +206,23 @@ def test_the_real_hub_leaves_out_a_run_whose_jobs_were_all_skipped():
 
 
 def test_the_real_hub_reads_past_a_newer_skipped_run_to_the_latest_run_that_is_not_skipped():
-    hub = GhPullHub(gh=scripted_gh([], newer_skipped=True))
+    hub = GhPullHub(gh=scripted_gh([], newer=("skipped", ())))
     assert hub.latest_workflow_runs(REPO) == [
         watch.WorkflowRun(FLOW_PATH, 4117, URL, "2026-10-28T09:00:00Z", "failure", 1)]
+
+
+def test_the_real_hub_asks_no_jobs_of_a_run_already_concluded_skipped():
+    asked = []
+    hub = GhPullHub(gh=scripted_gh(asked, run_conclusion="skipped", jobs=(SKIPPED_JOB,)))
+    assert hub.latest_workflow_runs(REPO) == []
+    assert not any("actions/runs/4117/jobs" in text for text in asked)
+
+
+def test_a_failure_at_start_above_an_older_skipped_run_is_the_latest_and_opens_one_watch():
+    asked = []
+    hub = GhPullHub(gh=scripted_gh(asked, run_conclusion="skipped", jobs=(SKIPPED_JOB,), newer=("failure", ())))
+    latest = hub.latest_workflow_runs(REPO)
+    assert latest == [watch.WorkflowRun(FLOW_PATH, 4118, URL, "2026-10-28T10:00:00Z", "failure", 0)]
+    actions = watch.decide(latest, [], skip=frozenset())
+    assert len(actions) == 1 and isinstance(actions[0], watch.Open)
+    assert actions[0].run.run_id == 4118
