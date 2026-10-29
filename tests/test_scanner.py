@@ -10,10 +10,11 @@ kind also checks that the value is in no text the scanner or the command produce
 
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -22,6 +23,7 @@ from orch_it.cli import main
 from orch_it.guards import scanner
 from orch_it.guards.scanner import KINDS, Hit, Patterns, ScanError
 from orch_it.testruns import github
+from scan_setup import invented_setup, with_values  # noqa: F401  (invented_setup: an autouse fixture)
 from scan_repos import (ANTHROPIC_KEY, AWS_KEY, EMAIL, GITHUB_FINE_TOKEN, GITHUB_TOKEN, INVENTED_USER,
                         MAC_HOME, MSYS_HOME, NO_WINDOW, NOREPLY, OPENAI_KEY, PRIVATE_KEY, SOMEONE_HOME,
                         WIN_HOME, WIN_TAIL, Repo, default_host, invented_host, make_template)
@@ -38,13 +40,17 @@ LINES = {
 }
 
 
+HOST = invented_host()  # a generated host name, never a real one
+HOST_LONG = HOST + ".dept.example"
+
+
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
 
 
 def kinds(text: str, patterns: Patterns | None = None) -> list[str]:
-    return (patterns or Patterns.machine_independent()).find(text)
+    return (patterns or Patterns()).find(text)
 
 
 # --- the kinds in one line ------------------------------------------------------------------
@@ -202,11 +208,11 @@ def test_the_root_folder_follows_any_character_that_is_not_part_of_a_path(before
 
 
 def test_a_value_that_overlaps_another_is_redacted_whole():
-    text = "see " + str(PureWindowsPath("C:/") / "Users" / "jane.doe") + "@" + "corp.example.io now"
-    shown = Patterns.machine_independent().redact(text)
+    text = "see " + WIN_HOME + "@" + "corp.example.io now"
+    shown = Patterns().redact(text)
     assert shown == "see <home_path> now"
-    assert "corp" not in shown and "jane" not in shown
-    shown = Patterns.machine_independent().redact(GITHUB_TOKEN + "@" + "corp.example.io")
+    assert "corp" not in shown and INVENTED_USER not in shown
+    shown = Patterns().redact(GITHUB_TOKEN + "@" + "corp.example.io")
     assert "corp" not in shown and "ghp" not in shown
 
 
@@ -227,19 +233,19 @@ def test_the_errors_and_the_places_of_a_hit_are_closed_sets():
 
 
 def test_the_machine_home_outside_the_usual_folders_is_found_in_every_spelling():
-    patterns = Patterns(homes=("D:" + "\\me",))
+    patterns = with_values(home="D:" + "\\me")
     for spelling in ("D:" + "\\me\\x", "d:" + "/me/x", "D:" + "\\\\me\\\\x", "/d" + "/me/x",
                      "/cyg" + "drive/d/me", "/mn" + "t/d/me/x", "at D:" + "\\me."):
-        assert kinds(spelling, patterns) == ["home_path"], spelling
+        assert kinds(spelling, patterns) == ["home"], spelling
     for other in ("D:" + "\\meal\\x", "D:" + "\\me-too", "E:" + "\\me\\x", "x/d/me/x"):
         assert kinds(other, patterns) == [], other
 
 
 def test_a_posix_machine_home_is_matched_as_it_is():
     home = str(PurePosixPath("/data") / INVENTED_USER)
-    patterns = Patterns(homes=(home,))
-    assert kinds("ls " + home + "/x", patterns) == ["home_path"]
-    assert kinds("ls " + home, patterns) == ["home_path"]
+    patterns = with_values(home=home)
+    assert kinds("ls " + home + "/x", patterns) == ["home"]
+    assert kinds("ls " + home, patterns) == ["home"]
     assert kinds("ls " + home + "lse/x", patterns) == []
 
 
@@ -250,11 +256,10 @@ def test_the_machine_independent_patterns_know_no_machine_home():
 # --- the host name --------------------------------------------------------------------------
 
 def test_the_host_name_and_its_first_label_are_found_whole_word_in_any_case():
-    host = invented_host()
-    patterns = Patterns(host=host + ".lan.example")
-    for text in (f"on {host.upper()}", f"{host}.lan.example:22", f"host={host.capitalize()};", f"({host})"):
-        assert kinds(text, patterns) == ["host_name"], text
-    for other in (host + "0", "x" + host, host + "-b", host.rsplit("-", 1)[0]):
+    patterns = with_values(host=HOST_LONG)
+    for text in (f"on {HOST.upper()}", f"{HOST_LONG}:22", f"host={HOST};", f"({HOST.lower()})"):
+        assert kinds(text, patterns) == ["host"], text
+    for other in (HOST + "0", "x" + HOST, "testbox"):
         assert kinds(other, patterns) == [], other
 
 
@@ -266,9 +271,9 @@ DEFAULT_HOSTS = [default_host("WIN", 12), default_host("DESKTOP", 7), default_ho
 
 @pytest.mark.parametrize("name", DEFAULT_HOSTS)
 def test_a_default_host_name_is_found_on_any_machine(name):
-    for patterns in (Patterns.machine_independent(), Patterns.of_machine(), Patterns()):
+    for patterns in (Patterns(), Patterns.of_machine(), Patterns.of_run()):
         assert patterns.find(f"hostname={name} ok") == ["host_name"]
-    assert Patterns.machine_independent().redact(f'hostname="{name}"') == 'hostname="<host_name>"'
+    assert Patterns().redact(f'hostname="{name}"') == 'hostname="<host_name>"'
 
 
 _WIN = default_host("WIN", 12)
@@ -280,12 +285,12 @@ _WIN = default_host("WIN", 12)
     "WIN-SHORT", default_host("LAPTOP", 9),
 ])
 def test_what_is_no_default_host_name_is_not_found(text):
-    assert Patterns.machine_independent().find(text) == []
+    assert Patterns().find(text) == []
 
 
 @pytest.mark.parametrize("host", ["localhost", "LocalHost", "ab", "", None])
 def test_a_host_that_is_localhost_or_too_short_is_not_a_pattern(host):
-    assert kinds("localhost ab here", Patterns(host=host)) == []
+    assert kinds("localhost ab here", with_values(host=host)) == []
 
 
 # --- emails ---------------------------------------------------------------------------------
@@ -315,7 +320,7 @@ def test_addresses_that_are_not_private_are_no_hit(text):
 
 
 def test_an_address_is_a_hit_unless_it_is_allowed():
-    allowed = Patterns.machine_independent(allowed_emails=[EMAIL.upper()])
+    allowed = Patterns(allowed_emails=[EMAIL.upper()])
     assert kinds(f"by {EMAIL}") == ["email"]
     assert kinds(f"by {EMAIL}", allowed) == []
     assert kinds("by " + "other" + "@" + "corp.io", allowed) == ["email"]
@@ -349,16 +354,15 @@ def test_of_machine_measures_the_home_the_host_and_the_words_file(tmp_path, monk
     home = tmp_path / "somebody"
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    host = invented_host()
-    monkeypatch.setattr(scanner.socket, "gethostname", lambda: host + ".dept.example")
+    monkeypatch.setattr(socket, "gethostname", lambda: HOST_LONG)
     words = tmp_path / "words.txt"
     words.write_text("# my words\n\n  Blue" + "Heron  \nsecond" + " word\n", "utf-8", newline="\n")
     patterns = Patterns.of_machine(words_file=words)
-    assert patterns.homes == (str(home),)
-    assert patterns.host == host + ".dept.example"
     assert patterns.words == ("Blue" + "Heron", "second" + " word")
-    assert kinds(f"{home}{os.sep}x", patterns) == ["home_path"]
-    assert kinds("on " + host, patterns) == ["host_name"]
+    # the home and the host are read once, by `read_values`, and found as its kinds of a file
+    assert patterns.values.home == (str(home),)
+    assert patterns.values.host == (HOST_LONG, HOST)
+    assert "home" in kinds(f"{home}{os.sep}x", patterns) and kinds(f"on {HOST.lower()}", patterns) == ["host"]
     assert kinds("a blueheron flew", patterns) == ["private_word"]
 
 
@@ -400,7 +404,7 @@ def test_the_words_file_defaults_to_the_setting_then_the_data_folder(tmp_path, m
 def test_the_bare_user_name_is_not_a_pattern(tmp_path, monkeypatch):
     home = tmp_path / "somebody"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(scanner.socket, "gethostname", lambda: "localhost")
+    monkeypatch.setattr(socket, "gethostname", lambda: "localhost")
     patterns = Patterns.of_machine(words_file=tmp_path / "none.txt")
     assert kinds("hello somebody, welcome", patterns) == []
 
@@ -411,7 +415,7 @@ def test_the_bare_user_name_is_not_a_pattern(tmp_path, monkeypatch):
 def test_a_line_of_a_million_characters_is_scanned_in_bounded_time(filler):
     line = (filler * (1_000_000 // len(filler) + 1))[:1_000_000]
     started = time.monotonic()
-    Patterns.machine_independent().find(line)
+    Patterns().find(line)
     assert time.monotonic() - started < 20
 
 
@@ -430,7 +434,7 @@ def repo(tmp_path, repo_template):
 
 def scan(repo, patterns=None, rev_range=None) -> list[Hit]:
     commits = scanner.commits_of_range(repo.path, rev_range or "HEAD")
-    return scanner.scan_commits(repo.path, commits, patterns or Patterns.machine_independent())
+    return scanner.scan_commits(repo.path, commits, patterns or Patterns())
 
 
 def everywhere(hits, value) -> bool:
@@ -489,11 +493,10 @@ def test_every_home_spelling_is_found_in_a_commit(repo, home):
 
 
 def test_the_machine_home_and_host_and_words_are_found_in_a_commit(repo):
-    host = invented_host()
-    patterns = Patterns(homes=("D:" + "\\me",), host=host, words=("Blue" + "Heron",))
-    sha = repo.commit({"a.txt": "D:" + "\\me\\x\nrunning on " + host + "\nthe blueheron\n"})
-    assert scan(repo, patterns) == [Hit("home_path", "content", sha, "a.txt", 1),
-                                    Hit("host_name", "content", sha, "a.txt", 2),
+    patterns = with_values(home="D:" + "\\me", host=HOST, words=("Blue" + "Heron",))
+    sha = repo.commit({"a.txt": "D:" + f"\\me\\x\nrunning on {HOST.lower()}\nthe blueheron\n"})
+    assert scan(repo, patterns) == [Hit("home", "content", sha, "a.txt", 1),
+                                    Hit("host", "content", sha, "a.txt", 2),
                                     Hit("private_word", "content", sha, "a.txt", 3)]
     assert scan(repo) == []
 
@@ -571,17 +574,16 @@ def test_the_author_and_the_committer_are_scanned_separately(repo):
 
 def test_an_allowed_author_address_is_no_hit_and_another_is(repo):
     repo.commit({"a.txt": "x\n"}, author=EMAIL)
-    allowed = Patterns.machine_independent(allowed_emails=[EMAIL])
+    allowed = Patterns(allowed_emails=[EMAIL])
     assert scan(repo, allowed) == []
     sha = repo.commit({"a.txt": "y\n"}, author="other" + "@" + "corp.io")
     assert scan(repo, allowed, "HEAD~1..HEAD") == [Hit("email", "author", sha, None, None)]
 
 
 def test_the_machine_host_in_an_author_name_is_found(repo):
-    host = invented_host()
-    repo.env |= {"GIT_AUTHOR_NAME": host.capitalize() + " admin"}
+    repo.env |= {"GIT_AUTHOR_NAME": f"{HOST} admin"}
     sha = repo.commit({"a.txt": "x\n"})
-    assert scan(repo, Patterns(host=host)) == [Hit("host_name", "author", sha, None, None)]
+    assert scan(repo, with_values(host=HOST.lower())) == [Hit("host", "author", sha, None, None)]
 
 
 # --- the edges ------------------------------------------------------------------------------
@@ -589,7 +591,7 @@ def test_the_machine_host_in_an_author_name_is_found(repo):
 def test_an_empty_range_has_no_commit_and_no_hit(repo):
     repo.commit({"a.txt": f"{GITHUB_TOKEN}\n"})
     assert scanner.commits_of_range(repo.path, "HEAD..HEAD") == []
-    assert scanner.scan_commits(repo.path, [], Patterns.machine_independent()) == []
+    assert scanner.scan_commits(repo.path, [], Patterns()) == []
 
 
 def test_a_range_lists_its_commits_oldest_first(repo):
@@ -832,7 +834,7 @@ def test_the_junit_fixtures_at_head_hold_no_home_path():
 
     if real_git("rev-parse", "--verify", "HEAD").returncode != 0:
         pytest.skip("no git history here")
-    hits = scanner.scan_tree(ROOT, Patterns.machine_independent())
+    hits = scanner.scan_tree(ROOT, Patterns())
     assert [(h.kind, h.file, h.line) for h in hits
             if h.kind == "home_path" and (h.file or "").startswith(f"{JUNIT}/")] == []
 
@@ -853,7 +855,7 @@ def test_the_reports_as_part_2_committed_them_held_a_home_path_on_17_lines():
     if real_git("cat-file", "-e", f"{PRE_SCRUB}^{{commit}}").returncode != 0:
         pytest.skip(f"{PRE_SCRUB} is not in this clone (a shallow one)")
     names = real_git("ls-tree", "-r", "--name-only", PRE_SCRUB, "tests/fixtures/").stdout.decode().split()
-    patterns = Patterns.machine_independent()
+    patterns = Patterns()
     found: dict[str, list[int]] = {}
     for name in names:
         text = real_git("show", f"{PRE_SCRUB}:{name}").stdout.decode("utf-8", "replace")
@@ -878,8 +880,8 @@ def test_a_git_that_hangs_is_killed_within_the_bound_and_is_a_git_timeout(repo, 
     a_git_that_says(monkeypatch, "import time; time.sleep(120)")
     started = time.monotonic()
     for call in (lambda: scanner.commits_of_range(repo.path, "HEAD"),
-                 lambda: scanner.scan_commits(repo.path, ["0" * 40], Patterns.machine_independent()),
-                 lambda: scanner.scan_tree(repo.path, Patterns.machine_independent())):
+                 lambda: scanner.scan_commits(repo.path, ["0" * 40], Patterns()),
+                 lambda: scanner.scan_tree(repo.path, Patterns())):
         with pytest.raises(ScanError) as caught:
             call()
         assert caught.value.code == "git_timeout"
@@ -891,7 +893,7 @@ def test_a_git_that_stops_midway_in_a_stream_is_a_git_timeout(repo, monkeypatch)
     a_git_that_says(monkeypatch, f"import time; print({header}, flush=True); time.sleep(120)")
     started = time.monotonic()
     with pytest.raises(ScanError) as caught:
-        scanner.scan_commits(repo.path, ["a" * 40], Patterns.machine_independent())
+        scanner.scan_commits(repo.path, ["a" * 40], Patterns())
     assert caught.value.code == "git_timeout"
     assert time.monotonic() - started < 20
 
@@ -920,7 +922,7 @@ def test_a_git_dir_in_the_environment_does_not_move_the_scan_to_another_reposito
     monkeypatch.setenv("GIT_DIR", str(other.path / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(other.path))
     assert scan(repo) == [Hit("github_token", "content", sha, "a.txt", 1)]
-    assert scanner.scan_tree(repo.path, Patterns.machine_independent()) == [
+    assert scanner.scan_tree(repo.path, Patterns()) == [
         Hit("github_token", "content", sha, "a.txt", 1)]
     code, out, _ = guard(capsys, repo, "--all", "--machine-independent")
     assert (code, out) == (1, f"{sha[:12]} content a.txt:1 github_token\nhits=1 commits=1\n")
@@ -933,7 +935,7 @@ def test_scan_tree_finds_each_kind_in_a_tracked_file_and_its_path(repo, kind):
     line, value = LINES[kind]
     name = f"docs={value}/f.txt" if kind == "home_path" else f"docs/x {value}.dat"
     sha = repo.commit({name: f"clean\n{line}\n", "ok.txt": "fine\n"})
-    hits = scanner.scan_tree(repo.path, Patterns.machine_independent())
+    hits = scanner.scan_tree(repo.path, Patterns())
     shown = hits[0].file
     assert hits == [Hit(kind, "path", sha, shown, None), Hit(kind, "content", sha, shown, 2)]
     assert not everywhere(hits, value)
@@ -943,15 +945,15 @@ def test_scan_tree_reads_the_files_at_the_revision_it_is_given(repo):
     first = repo.commit({"a.txt": f"x\n{GITHUB_TOKEN}\n"})
     repo.commit(remove=["a.txt"])
     (repo.path / "untracked.txt").write_text(f"{AWS_KEY}\n", "utf-8", newline="\n")
-    assert scanner.scan_tree(repo.path, Patterns.machine_independent()) == []
-    old = scanner.scan_tree(repo.path, Patterns.machine_independent(), "HEAD~1")
+    assert scanner.scan_tree(repo.path, Patterns()) == []
+    old = scanner.scan_tree(repo.path, Patterns(), "HEAD~1")
     assert old == [Hit("github_token", "content", first, "a.txt", 2)]
 
 
 def test_scan_tree_gives_the_path_of_a_binary_file_only(repo):
     sha = repo.commit({f"bin {GITHUB_TOKEN}.dat": b"\x00" + GITHUB_TOKEN.encode(),
                        "café dir/latin.txt": b"caf\xe9\n" + AWS_KEY.encode() + b"\n"})
-    hits = scanner.scan_tree(repo.path, Patterns.machine_independent())
+    hits = scanner.scan_tree(repo.path, Patterns())
     assert sorted((h.kind, h.where, h.file, h.line) for h in hits) == [
         ("aws_key", "content", "café dir/latin.txt", 2),
         ("github_token", "path", "bin <github_token>.dat", None)]
@@ -962,14 +964,14 @@ def test_scan_tree_reads_more_files_than_one_batch(repo):
     files = {f"d{n % 7}/f{n}.txt": f"line {n}\n" for n in range(250)}
     files["d4/f249.txt"] += f"{OPENAI_KEY}\n"
     sha = repo.commit(files)
-    assert scanner.scan_tree(repo.path, Patterns.machine_independent()) == [
+    assert scanner.scan_tree(repo.path, Patterns()) == [
         Hit("openai_key", "content", sha, "d4/f249.txt", 2)]
 
 
 def test_scan_tree_of_an_unknown_revision_is_a_coded_error(repo):
     repo.commit({"a.txt": "x\n"})
     with pytest.raises(ScanError) as caught:
-        scanner.scan_tree(repo.path, Patterns.machine_independent(), "nope")
+        scanner.scan_tree(repo.path, Patterns(), "nope")
     assert caught.value.code == "bad_rev"
 
 

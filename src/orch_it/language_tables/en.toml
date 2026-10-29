@@ -1,0 +1,45 @@
+# English: the strings orch-it writes to a human. Same keys as every other table.
+
+# The shape check of a ticket (src/orch_it/tickets/shape.py): the rule for the human block's language.
+human_field_language_rule = "the text of each human field is English"
+# A character class matching the letters of this language's script; the check counts them. It tests the script, not the
+# language: text in another language of the same script passes, and only text mostly in another script is refused.
+human_field_letters = "[A-Za-z]"
+
+# notices to the owner (unit 10b)
+# the red-on-main ticket (merge/red_main.py build): the title and the human block; {tests} is one of the three forms below
+red_main_title = "Main is red: {count} {tests}"
+red_main_tests_one = "test fails"
+red_main_tests_few = "tests fail"
+red_main_tests_many = "tests fail"
+red_main_by_pr = "pull request #{pr}"
+red_main_by_commit = "a commit with no pull request"
+red_main_what = "main is red: {count} {tests} after the merge of {by}."
+red_main_goal = "main is green again, and the pull requests that are red only on these tests go on by themselves."
+red_main_plan = "fix or revert what broke these tests; which one to pick is decided by this ticket."
+red_main_result = "the full test run on main is green; the ticket closes by itself on the first green run."
+red_main_undo = "two-way door (one revert); touches each pull request that waits for this ticket."
+# the ticket to the brain when main's tests gave no result twice (merge/red_main.py build_no_result)
+no_result_title = "Main's tests gave no result twice"
+no_result_what = "the tests on main gave no result twice in a row: the run was cut, cancelled or had no report."
+no_result_goal = "it is visible again whether main is green or red, and the pull requests that are red only on it are clear."
+no_result_plan = "the brain looks at why the run gave no answer (place, limit, report) and decides what to fix."
+no_result_result = "the next test run on main gives a result on both systems."
+no_result_undo = "two-way door (one revert); touches only the main check."
+# the workflow watch ticket (merge/workflow_watch.py build); the title stays short: the name takes up to 49 characters
+watch_title = "Workflow {shown} did not end green"
+watch_what = "workflow `{shown}` did not end green: its latest run {run_id} ended without a green result."
+watch_goal = "the latest run of `{shown}` is green again, and the ticket closes by itself on the first such run."
+watch_plan = "find why the run is not green and fix the cause; which one to fix is decided by this ticket."
+watch_result = "the latest run of `{shown}` is green."
+watch_undo = "two-way door (one revert); touches only the run of `{shown}`."
+# the skills update issue (skills/update.py issue); the Undo field keeps its fixed English words
+skills_what = "Pocock's upstream of skills moved from `{old}` to `{new}`: changed skills: {changed}, of them copied into the repo: {copies}."
+skills_goal = "the copies of the skills in the repo match the new version of its upstream, and no role loses a callable skill silently."
+skills_plan = "ORCH under the owner's `gh` runs `python -m orch_it skills update`; it opens one pull request with the new copies, and the repo's tests check the copies and the references to the skills."
+skills_result = "the pull request is green on both systems, 100 % of the copies have hashes equal to the manifest of the new version, and every skill in it is assigned its class."
+skills_undo = "two-way door (one revert of the pull request brings back the previous copies); touches all roles that call these skills."
+skills_plan_brain = "ORCH opens no pull request for this ticket: the brain decides each class from the table below, and `python -m orch_it skills update` prints `waits_for_brain` and moves nothing."
+skills_result_brain = "the brain wrote its decision for each class in this ticket, and no copy is moved without it."
+# A regex (word boundaries included) of the Undo field's fixed words; the check leaves them out, they are the form, not text.
+undo_words = '\b(?:two-way door|one-way door|one revert|touches)\b'

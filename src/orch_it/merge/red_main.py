@@ -17,6 +17,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+from orch_it import language
 from orch_it.tickets import parse, violations
 from orch_it.tickets.model import PRIORITY_LABEL, READY_LABEL
 from orch_it.tickets.reader import TRIAGE_LABEL
@@ -70,17 +71,37 @@ def _checked(title: str, body: str, labels) -> tuple[str, str]:
     return title, body
 
 
+def _human(texts: dict[str, str]) -> str:
+    """The lines of a human block, `- **Name:** text`, in the order given."""
+
+    return "\n".join(f"- **{name}:** {text}" for name, text in texts.items())
+
+
+def _tests_key(count: int) -> str:
+    """The table key of the word for `count` tests: Russian has three forms, every table carries them."""
+
+    if count == 1:
+        return "red_main_tests_one"
+    return "red_main_tests_few" if 2 <= count % 10 <= 4 and count % 100 // 10 != 1 else "red_main_tests_many"
+
+
 def build(ids: list[str], *, sha: str, run_id: str, pr: int | None) -> tuple[str, str]:
     """(title, body) of the red-on-main ticket for `ids`, failing on main at `sha` in run `run_id`."""
 
     ids = sorted({normal(test_id) for test_id in ids} - {""})
     count, newline = len(ids), "\n"
     whole = hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()[:16]
-    by = f"пулл-реквеста #{pr}" if pr else "коммита без пулл-реквеста"
+    by = language.text("red_main_by_pr", pr=pr) if pr else language.text("red_main_by_commit")
     brought = f"#{pr}" if pr else "a commit with no pull request"
-    tests = "тест падает" if count == 1 else ("теста падают" if 2 <= count % 10 <= 4 and count % 100 // 10 != 1
-                                                 else "тестов падают")
-    title = f"Main is red: {count} test{'s' if count != 1 else ''} fail"
+    tests = language.text(_tests_key(count))
+    title = language.text("red_main_title", count=count, tests=tests)
+    human = _human({
+        "What": language.text("red_main_what", count=count, tests=tests, by=by),
+        "Goal": language.text("red_main_goal"),
+        "Plan": language.text("red_main_plan"),
+        "Result": language.text("red_main_result"),
+        "Undo": language.text("red_main_undo"),
+    })
     longest = max((len(run) for test_id in ids for run in re.findall(r"`+", test_id)), default=0)
     fence = "`" * max(3, longest + 1)
     listed, size = [], 0
@@ -94,11 +115,7 @@ def build(ids: list[str], *, sha: str, run_id: str, pr: int | None) -> tuple[str
     body = f"""{MARK}
 <!-- orch-it red-main-set count={count} sha={whole} -->
 ## For the human
-- **What:** main красный: {count} {tests} после слияния {by}.
-- **Goal:** main снова зелёный, и пулл-реквесты, красные только на этих тестах, идут дальше сами.
-- **Plan:** починить или откатить то, что сломало эти тесты; что выбрать, решает этот тикет.
-- **Result:** полный прогон тестов на main зелёный; тикет закрывается сам на первом зелёном прогоне.
-- **Undo:** two-way door (один откат); touches каждый пулл-реквест, который ждёт этот тикет.
+{human}
 
 ## For the agent
 Facts: the `tests` run {run_id} on main at `{sha}` failed the tests listed below (each one red in the JUnit report
@@ -134,14 +151,17 @@ def build_no_result(*, sha: str, run_id: str, jobs: dict[str, str]) -> tuple[str
     """(title, body) of the ticket to the brain when main's tests gave no result twice on one run."""
 
     named = ", ".join(f"`{name}` {state}" for name, state in sorted(jobs.items()))
-    title = "Main's tests gave no result twice"
+    title = language.text("no_result_title")
+    human = _human({
+        "What": language.text("no_result_what"),
+        "Goal": language.text("no_result_goal"),
+        "Plan": language.text("no_result_plan"),
+        "Result": language.text("no_result_result"),
+        "Undo": language.text("no_result_undo"),
+    })
     body = f"""{NO_RESULT_MARK.format(run_id=run_id)}
 ## For the human
-- **What:** тесты на main дважды подряд не дали результата: прогон обрезан, отменён или без отчёта.
-- **Goal:** снова видно, зелёный main или красный, и пулл-реквесты, красные только на нём, понятны.
-- **Plan:** мозг смотрит, почему прогон не дал ответа (место, лимит, отчёт), и решает, что чинить.
-- **Result:** следующий прогон тестов на main даёт результат на обеих системах.
-- **Undo:** two-way door (один откат); touches только проверку main.
+{human}
 
 ## For the agent
 Facts: the `tests` run {run_id} on main at `{sha}` ended with no result on its first attempt and again on its

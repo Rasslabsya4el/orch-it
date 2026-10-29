@@ -16,7 +16,7 @@ def test_the_ticket_keeps_the_shape_and_its_ids_read_back(ids, pr):
     title, body = red_main.build(ids, sha="abc123", run_id="99", pr=pr)
     assert tickets.violations(tickets.parse(body, title=title, labels=red_main.LABELS)) == []
     assert red_main.ids_of(body) == frozenset(ids)
-    assert title == f"Main is red: {len(ids)} test{'s' if len(ids) > 1 else ''} fail"
+    assert title == f"Main is red: {len(ids)} {'test fails' if len(ids) == 1 else 'tests fail'}"
 
 
 def test_thousands_of_failing_tests_fit_one_issue_body_and_the_rest_are_counted():
