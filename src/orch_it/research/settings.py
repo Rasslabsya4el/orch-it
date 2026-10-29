@@ -9,13 +9,16 @@ installation's settings file:
   opencode takes them); the bridge adds `options.apiKey` as `{env:<key_env>}` and an entry per id
   of `models`;
 - `key_env`: the name of the environment variable holding the provider's key (read at run time,
-  never stored);
+  never stored; default `RESEARCH_API_KEY`);
 - `opencode`: the program (a name or path) or argv prefix that starts opencode, default
   `opencode` on `PATH`;
 - `helpers` (false): whether opencode's `task` tool may start helper sessions;
 - `minutes` (20) and `stall_minutes` (10): the run's time bound and stall bound;
 - `state`: the folder of runs and jobs, default `research` beside the store in orch-it's data
   folder, never inside a repo.
+
+The names check (`python -m orch_it research-check-names`) reads a `settings.json` at a repo's root, its
+`research` object, and refuses the values of the provider and model name fields only.
 
 A value of the wrong shape, or a key not in this list (a typo would be silently ignored), raises
 `SettingsError("bad_setting", "research.<key>")`; a run the settings cannot serve raises
@@ -37,6 +40,7 @@ REFUSAL_CODES = ("research_not_set", "unknown_model", "key_missing", "brief_unre
 KEYS = ("models", "default_model", "provider", "key_env", "opencode", "helpers", "minutes",
         "stall_minutes", "state")
 AGENT = "orch-it-research"
+DEFAULT_KEY_ENV = "RESEARCH_API_KEY"
 MAX_MINUTES = 7 * 24 * 60
 _ALIAS = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -57,7 +61,7 @@ class ResearchSettings:
     models: dict[str, str] = field(default_factory=dict)
     default_model: tuple[tuple[int | None, str], ...] = ()
     provider: dict | None = None
-    key_env: str | None = None
+    key_env: str = DEFAULT_KEY_ENV
     opencode: str | tuple[str, ...] | None = None
     helpers: bool = False
     minutes: float = 20.0
@@ -101,8 +105,7 @@ class ResearchSettings:
         return cls(**values)
 
     def _require_set(self) -> None:
-        missing = [name for name, value in (("models", self.models), ("provider", self.provider),
-                                            ("key_env", self.key_env)) if not value]
+        missing = [name for name, value in (("models", self.models), ("provider", self.provider)) if not value]
         if missing:
             raise ResearchRefused("research_not_set", "set research." + ", research.".join(missing))
 

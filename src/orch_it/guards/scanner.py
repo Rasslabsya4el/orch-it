@@ -437,6 +437,21 @@ def commits_of_range(work_tree: Path, rev_range: str) -> list[str]:
     return out.decode("ascii", "replace").split()
 
 
+def emails_of_commits(work_tree: Path, commits: Iterable[str]) -> list[tuple[str, str, str]]:
+    """(sha, author e-mail, committer e-mail) of each commit, in the order given, a hundred commits
+    per git call. Nothing is asked of git for no commit (git would then read HEAD)."""
+
+    shas = list(commits)
+    found: list[tuple[str, str, str]] = []
+    for start in range(0, len(shas), _BATCH):
+        batch = shas[start:start + _BATCH]
+        out = _git_output(work_tree, "log", "--no-walk=unsorted", "--format=%H%x00%ae%x00%ce", *batch)
+        for line in out.decode("utf-8", "replace").splitlines():
+            sha, author, committer = line.split("\x00")
+            found.append((sha, author, committer))
+    return found
+
+
 def _unquote(text: str) -> tuple[str, int]:
     """The C-style quoted string git writes a path in, starting at `text[0] == '"'`: the path
     and the index after the closing quote."""

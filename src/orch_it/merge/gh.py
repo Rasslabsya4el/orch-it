@@ -38,6 +38,7 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import quote
 
 from orch_it import settings
@@ -45,6 +46,7 @@ from orch_it.events import schema
 from orch_it.merge import git as merge_git
 from orch_it.merge.git import GitDone, GitError
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
+from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, skipped, workflow_of
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
     REPORT_FILE,
@@ -57,6 +59,9 @@ from orch_it.testruns.github import (
 from orch_it.tickets.hub import Comment, GhHub, _moment, _text
 
 CACHE_FOLDER = "merge-cache"
+RUN_OUTCOMES = ("success", "failure", "cancelled", "timed_out", "skipped")  # a run's conclusion the watch keeps
+WORKFLOW_TOKEN_REFUSAL = "Resource not accessible by integration"  # GitHub's 403 text for a workflow token
+RUNS_SCANNED = 10  # the newest completed runs of a workflow the watch reads for its latest run not skipped
 EVENTS_ARTIFACT_PREFIX = "orch-it-events-"
 EVENT_ARTIFACT_PAGES = 3  # of 100 artifacts each, newest first
 BASE_REF, PULL_REF = "refs/orch/base", "refs/orch/pr"
@@ -64,6 +69,13 @@ BRANCH_RUN_EVENTS = ("push", "schedule", "workflow_dispatch")
 METHODS = ("merge", "squash", "rebase")
 _RUN_OF_JOB = re.compile(r"/actions/runs/(\d+)/job/")
 _PULL_URL = re.compile(r"/pull/(\d+)/?$")
+
+
+class _Workflow(NamedTuple):
+    """A workflow GitHub lists: its id, and its file path (its identity)."""
+
+    id: int
+    path: str
 _JUNIT_NAME = re.compile(r"junit-(.+)-(\d+)")
 _CREDENTIAL = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
 
@@ -345,8 +357,89 @@ class GhPullHub(GhHub):
         self._send(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}"],
                    {"state": "closed", "state_reason": reason})
 
+    # --- workflow watch (#411) ----------------------------------------------------------------
+
+    def workflow_files(self, repo: str) -> list[str]:
+        return [workflow.path for workflow in self._workflows(repo)]
+
+    def latest_workflow_runs(self, repo: str) -> list[WorkflowRun]:
+        """The latest run of each workflow on the default branch that is not skipped by its `if:`: the newest
+        `RUNS_SCANNED` completed runs are read, and the first one not skipped is the workflow's run."""
+
+        branch = quote(self._default_branch(repo), safe="")
+        found = []
+        for workflow in self._workflows(repo):
+            runs = self._pages(["api", f"repos/{repo}/actions/workflows/{workflow.id}/runs?status=completed"
+                                f"&branch={branch}&per_page={RUNS_SCANNED}"], "workflow_runs")
+            for run in runs:  # a workflow with no completed run on the default branch is left out
+                built = self._workflow_run(repo, workflow.path, run)
+                if not skipped(built):
+                    found.append(built)
+                    break
+        return found
+
+    def _workflow_run(self, repo: str, path: str, run: dict) -> WorkflowRun:
+        run_id = run.get("id")
+        if type(run_id) is not int or not _text(run.get("updated_at")):
+            raise GithubError("gh_bad_output", f"{repo}: workflow `{path}` has a run with no id or end time")
+        conclusion = run.get("conclusion")
+        # a run GitHub already concluded `skipped` is passed over without reading its jobs
+        jobs = [] if conclusion == "skipped" else self._pages(
+            ["api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"], "jobs")
+        return WorkflowRun(
+            workflow=path, run_id=run_id, url=_text(run.get("html_url")), ended_at=run["updated_at"],
+            outcome=conclusion if conclusion in RUN_OUTCOMES else "other",
+            jobs_started=sum(1 for job in jobs
+                             if job.get("started_at") is not None and job.get("conclusion") != "skipped"),
+            jobs_skipped=sum(1 for job in jobs if job.get("conclusion") == "skipped"))
+
+    def watch_issues(self, repo: str) -> list[WatchIssue]:
+        """The open issues (no pull requests) whose body holds a workflow watch mark, whatever labels they carry."""
+
+        found = []
+        listed = self._list(["api", "--paginate", f"repos/{repo}/issues?state=open&per_page=100"])
+        for issue in listed:
+            if "pull_request" in issue or type(issue.get("number")) is not int:
+                continue
+            body = _text(issue.get("body"))
+            workflow = workflow_of(body)
+            if workflow is None:
+                continue
+            texts = [body, *(c.body for c in self.comments(repo, issue.get("number")))]
+            found.append(WatchIssue(issue["number"], workflow, last_run_id(texts)))
+        return found
+
+    def _default_branch(self, repo: str) -> str:
+        found = self._object(["api", f"repos/{repo}"])
+        branch = _text(found.get("default_branch")) if found else ""
+        if not branch:
+            raise GithubError("gh_bad_output", f"{repo}: a repo with no default branch")
+        return branch
+
+    def _workflows(self, repo: str) -> list[_Workflow]:
+        """The id and file path of every workflow GitHub lists; a workflow is named by its file, never its name."""
+
+        found = []
+        for workflow in self._pages(["api", "--paginate", f"repos/{repo}/actions/workflows?per_page=100"],
+                                    "workflows"):
+            path = _text(workflow.get("path"))
+            if type(workflow.get("id")) is not int or not path:
+                raise GithubError("gh_bad_output", f"{repo}: a workflow with no id or file path")
+            found.append(_Workflow(workflow["id"], path))
+        return found
+
     def actions_enabled(self, repo: str) -> bool:
-        found = self._object(["api", f"repos/{repo}/actions/permissions"], missing_ok=True)
+        """Whether Actions is on for the repo. The workflow's own token holds no administration scope, so GitHub
+        refuses it this read with a 403 saying "Resource not accessible by integration": that one answer reads as
+        on, because a sweep running on a workflow token is running on Actions. Any other failure, a 403 of another
+        kind (a rate limit, a person's login without admin) included, raises."""
+
+        try:
+            found = self._object(["api", f"repos/{repo}/actions/permissions"], missing_ok=True)
+        except GithubError as e:
+            if "HTTP 403" in str(e) and WORKFLOW_TOKEN_REFUSAL in str(e):
+                return True
+            raise
         if found is None:
             return False
         if not isinstance(found.get("enabled"), bool):

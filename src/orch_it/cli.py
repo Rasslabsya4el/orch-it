@@ -8,7 +8,8 @@ shadowed` (#397 decision 3), a session-start hook that exits 0 whatever happens;
 research <brief>` and `research-mcp` (#396 decision 1, the research bridge's two fronts); `python -m orch_it
 tickets ...` (#398 decisions 4 and 5, in `orch_it.tickets.commands`); `python -m orch_it skills check`,
 `skills report` and `skills update` (#397 decision 4); `python -m orch_it merge ...` and the
-other commands of the merge flow (#400, in `orch_it.merge.commands`).
+other commands of the merge flow (#400, in `orch_it.merge.commands`); `python -m orch_it brain handoff ...`
+(orchestration-layer#403 decision 3, in `orch_it.brain.commands`).
 
 Commands print a result as an aligned text table (header, then rows). Any coded error of the
 store, the settings, the importer, a named query or a command prints `error: <code>` (plus the
@@ -22,13 +23,16 @@ import re
 import sys
 from pathlib import Path
 
-from orch_it import labels, roles, settings
+from orch_it import identity, labels, roles, settings
+from orch_it.brain import commands as brain_commands
+from orch_it.brain.handoff import HandoffError
 from orch_it.events import queries, schema, transcripts
 from orch_it.events.store import QueryResult, Store, StoreError
 from orch_it.guards import hook, install, prepush, scanner
 from orch_it.guards import status as guards_status
 from orch_it.merge import commands as merge_commands
 from orch_it.research import mcp as research_mcp
+from orch_it.research import names as research_names
 from orch_it.research import run as research_run
 from orch_it.research.settings import ResearchRefused, ResearchSettings
 from orch_it.roles.spawn import SpawnRefused
@@ -165,6 +169,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p.add_argument("--machine-independent", action="store_true",
                    help="only what holds on any machine: no home, host name or word of this one")
+    p.add_argument("--require-noreply-email", action=argparse.BooleanOptionalAction, default=None,
+                   help="every commit's author and committer e-mail is a GitHub noreply address, with --range "
+                        "(default: on when the repo's setting commit_identity is noreply; --all is never checked)")
     p.add_argument("--allow-email", action="append", default=[], metavar="ADDR",
                    help="an address that is no hit")
     p.add_argument("--allow-email-of", action="append", default=[], metavar="LOGIN",
@@ -191,6 +198,8 @@ def _parser() -> argparse.ArgumentParser:
                              help="the PreToolUse guard; reads the hook's JSON on stdin")
     hook_commands.add_parser("subagent-stop", parents=[common],
                              help="the SubagentStop hold of report lines; reads the hook's JSON on stdin")
+    hook_commands.add_parser("brain", parents=[common],
+                             help="the brain's SessionStart and UserPromptSubmit hook; reads the hook's JSON on stdin")
     p = hook_commands.add_parser("pre-push", parents=[common],
                                  help="the git pre-push guard; git passes the remote's name and url "
                                       "and writes the refs on stdin")
@@ -242,8 +251,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--job", help=argparse.SUPPRESS)  # the MCP front's job id, carried by the started event
 
     commands.add_parser("research-mcp", help="the research bridge's MCP server on stdin and stdout")
+    p = commands.add_parser("research-check-names", help="the names check: the bridge's text against the names its "
+                                                         "settings name and the known families")
+    p.add_argument("--work-tree", default=".", metavar="PATH", help="the work tree whose bridge text is read")
 
     ticket_commands.add_parsers(commands, common)
+    brain_commands.add_parsers(commands, common)
     merge_commands.add_parsers(commands, common)
 
     p = commands.add_parser("spawn", parents=[common],
@@ -363,6 +376,15 @@ def _guards_install(args) -> tuple[str, int]:
 
 
 def _hook(args) -> tuple[str, int]:
+    if args.command == "brain":
+        try:  # a prompt or a start is never stopped by this hook, whatever goes wrong
+            from orch_it.brain.hook import run as run_brain_hook
+
+            raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+            return run_brain_hook(raw, open_store=lambda: _store(args))
+        except Exception as e:  # noqa: BLE001
+            print(f"brain hook: {type(e).__name__}: {e}", file=sys.stderr)
+            return "", 0
     if args.command == "subagent-stop":
         # the hold never blocks a stop by an error: whatever goes wrong lets the stop through
         try:
@@ -393,6 +415,18 @@ def _hook(args) -> tuple[str, int]:
     raise AssertionError(args.command)
 
 
+def _require_noreply(args, work_tree: Path) -> bool:
+    """The check of `guards scan --range`: the option when given, else on when the repo's setting
+    `commit_identity` is `noreply`. A work tree with no GitHub origin has no repo section to read,
+    so the default mode applies."""
+
+    if args.require_noreply_email is not None:
+        return args.require_noreply_email
+    repo = _repo_or_none(work_tree)
+    mode = identity.DEFAULT_MODE if repo is None else identity.mode_of(repo)
+    return mode == identity.DEFAULT_MODE
+
+
 def _guards_scan(args) -> tuple[str, int]:
     """`guards scan`: one line per hit, then `hits=<n> commits=<n>`; exit 0 with no hit, 1 with hits."""
 
@@ -407,18 +441,23 @@ def _guards_scan(args) -> tuple[str, int]:
         patterns = scanner.Patterns.of_machine(
             allowed_emails=allowed, words_file=Path(args.words_file) if args.words_file else None)
     work_tree = Path(args.work_tree)
+    unnamed: list[tuple[str, str]] = []  # (sha, author | committer) of a non-noreply e-mail
     if args.tree:
         hits, commits = scanner.scan_tree(work_tree, patterns, args.rev or "HEAD"), 1
     else:
         shas = scanner.commits_of_range(work_tree, "HEAD" if args.all else args.rev_range)
         hits, commits = scanner.scan_commits(work_tree, shas, patterns), len(shas)
+        # the whole history (`--all`) is never rewritten, so its e-mails are not checked
+        if args.rev_range is not None and _require_noreply(args, work_tree):
+            unnamed = identity.noreply_failures(work_tree, shas)
     lines = [f"{hit.commit[:12]} {hit.where} {_one_line(hit.file)}:"
              f"{'-' if hit.line is None else hit.line} {hit.kind}\n" for hit in hits]
-    text = "".join(lines) + f"hits={len(hits)} commits={commits}\n"
+    lines += [f"{sha[:12]} {role} -:- not_noreply\n" for sha, role in unnamed]
+    text = "".join(lines) + f"hits={len(hits) + len(unnamed)} commits={commits}\n"
     # a console that cannot show a file name's letters shows them escaped, not an error
     text = text.encode(sys.stdout.encoding or "utf-8", "backslashreplace").decode(
         sys.stdout.encoding or "utf-8")
-    return text, 1 if hits else 0
+    return text, 1 if hits or unnamed else 0
 
 
 def _one_line(path: str | None) -> str:
@@ -471,6 +510,18 @@ def _research(args) -> tuple[str, int]:
     if args.done_file:
         research_run.write_done(Path(args.done_file), done)
     return done.line(), RESEARCH_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
+
+
+def _check_names(args) -> tuple[str, int]:
+    """The names check of the bridge's text, against the names the installation's settings and the work
+    tree's own `settings.json` name: one line per hit, exit 1 on a hit, 0 clean."""
+
+    work_tree = Path(args.work_tree)
+    hits = research_names.find_names(research_names.bridge_texts(work_tree),
+                                     research_names.refused_names_from_installation(work_tree=work_tree))
+    if not hits:
+        return "no refused name in the bridge's text\n", 0
+    return "".join(f"{path}:{line}: {name}\n" for path, line, name in hits), 1
 
 
 def _run(args) -> str:
@@ -550,9 +601,12 @@ def _skills(args) -> str:
         said = {"opened": "issue", "already_open": "issue already open, body updated",
                 "declined": "issue closed by the brain for this commit, not opened again"}[done.status]
         return f"{said}: {done.url} {','.join(done.labels)}".rstrip() + "\n"
-    done = update.update(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref)
+    done = update.update(Path(args.work_tree), forge=GithubForge(repo), ref=args.ref,
+                         identity=identity.for_repo(repo))
     if done.status == "no_change":
         return "no change\n"
+    if done.status == "waits_for_brain":
+        return "no pull request: this upstream commit waits for the brain (its issue is labelled needs-triage)\n"
     rule = f"labels={','.join(done.labels)}" if done.labels else "no label"
     if done.status == "already_open":
         return f"pull request already open: {done.url} {rule}\n"
@@ -587,9 +641,13 @@ def main(argv: list[str] | None = None) -> int:
             text, code = _research(args)
         elif args.group == "research-mcp":
             return research_mcp.serve()
+        elif args.group == "research-check-names":
+            text, code = _check_names(args)
         elif args.group == "tickets":
             text, code = ticket_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of("."),
                                              render, follow_of=merge_commands.parks_follower), 0
+        elif args.group == "brain":
+            text, code = brain_commands.run(args, lambda: _store(args), lambda: args.repo or _repo_of(".")), 0
         elif args.group in merge_commands.GROUPS:
             text, code = merge_commands.run(args, lambda: _store(args), _repo_of)
         else:
@@ -597,7 +655,7 @@ def main(argv: list[str] | None = None) -> int:
     except (schema.EventError, StoreError, settings.SettingsError, transcripts.ImportError_,
             queries.QueryError, github.GithubError, labels.LabelError, roles.RolesError, ParkError, CheckError,
             SkillsError, SpawnRefused, CommandError, RunError, scanner.ScanError, install.InstallError, hook.ReverseError,
-            ResearchRefused, *merge_commands.ERRORS) as e:
+            ResearchRefused, HandoffError, identity.IdentityError, *merge_commands.ERRORS) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:  # a run stopped by a person has already written its end

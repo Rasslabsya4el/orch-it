@@ -90,6 +90,7 @@ The label set is `src/orch_it/labels/labels.json`; `python -m orch_it labels syn
 - `wontfix`: decided not to be done.
 - `parked`: waits on one named event until a date; written only by the park command.
 - `priority`: the owner's push; offered first, kept while parked.
+- `brain-handoff`: only the brain's pinned hand-off issue, set by `python -m orch_it brain handoff ensure`; a ticket never carries it.
 
 ## Parking
 

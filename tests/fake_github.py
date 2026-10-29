@@ -13,11 +13,23 @@ from datetime import datetime, timedelta
 
 from fake_hub import REPO, FakeHub
 
+from orch_it.merge import workflow_watch as watch
 from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull
 from orch_it.testruns.github import GithubError
 from orch_it.tickets.hub import Comment
 
 REQUIRED = ("linux", "windows")
+DEFAULT_BRANCH = "main"
+
+
+@dataclass
+class FakeFlow:
+    """A workflow GitHub lists: its name ("" when it has none), its file, its completed runs newest first, each
+    with the branch it ran on."""
+
+    name: str
+    path: str
+    runs: list = field(default_factory=list)  # (WorkflowRun, branch) pairs
 
 
 @dataclass
@@ -61,6 +73,8 @@ class FakeGitHub(FakeHub):
         self.merge_refusals = 0  # the next merges GitHub refuses for a reason of its own
         self.next_number = 100
         self.event_files: dict[str, dict[str, str]] = {}  # artifact name -> {relative path: text}
+        self.flows: list[FakeFlow] = []  # the workflows GitHub lists, in the order they were listed
+        self.default_branch = DEFAULT_BRANCH
         self._shas = 0
 
     # building the world
@@ -255,6 +269,48 @@ class FakeGitHub(FakeHub):
 
     def later(self, **delta):
         super().later(**delta)
+
+    # the workflow watch
+
+    def end_run(self, name, run_id, outcome="success", *, jobs=3, path=None, branch=DEFAULT_BRANCH):
+        """A completed run of a workflow, the newest of its runs; a workflow new to the listing is added to it.
+        `name` is the display name ("" for a workflow with no name); the run carries its file `path`, which is
+        the workflow's identity, and the `branch` it ran on."""
+
+        path = path or f".github/workflows/{name}.yml"
+        flow = next((f for f in self.flows if f.path == path), None)
+        if flow is None:
+            flow = FakeFlow(name, path)
+            self.flows.append(flow)
+        url = f"https://github.com/{REPO}/actions/runs/{run_id}"
+        run = watch.WorkflowRun(path, run_id, url, self.now.isoformat(), outcome, jobs)
+        flow.runs.insert(0, (run, branch))
+
+    def latest_workflow_runs(self, repo):
+        """The latest completed run of each workflow on the default branch; the fake drops skipped runs, as the real
+        hub reads past them."""
+        found = []
+        for flow in self.flows:
+            on_default = [run for run, branch in flow.runs
+                          if branch == self.default_branch and not watch.skipped(run)]
+            if on_default:
+                found.append(on_default[0])
+        return found
+
+    def workflow_files(self, repo):
+        return [flow.path for flow in self.flows]
+
+    def watch_issues(self, repo):
+        found = []
+        for (r, number), issue in sorted(self.issues.items(), key=lambda item: item[0]):
+            if r != repo or not issue.open or issue.is_pr:
+                continue
+            workflow = watch.workflow_of(issue.body)
+            if workflow is None:
+                continue
+            texts = [issue.body, *(c.body for c in self.notes.get((repo, number), []))]
+            found.append(watch.WatchIssue(number, workflow, watch.last_run_id(texts)))
+        return found
 
 
 def ago(hub, **delta):

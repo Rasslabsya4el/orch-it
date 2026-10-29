@@ -11,6 +11,8 @@ REPO = "owner-x/repo-y"
 
 
 class FakeHub:
+    WRITES = ("write", "remove_label", "comment", "create", "pin", "label_created")
+
     def __init__(self, now: datetime | None = None):
         self.now = now or datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
         self.issues: dict[tuple[str, int], Issue] = {}
@@ -21,6 +23,9 @@ class FakeHub:
         self.versions: dict[str, str] = {}
         self.writes: list[tuple[str, int, str, list[str]]] = []
         self.failing: set[tuple[str, int]] = set()  # issues every call about fails
+        self.pins: dict[str, list[int]] = {}
+        self.repo_labels: dict[str, set[str]] = {}  # a repo not named here holds the layer's whole set
+        self.calls: list[tuple] = []  # the writes, in order: (name, repo, ...)
 
     # building the world
 
@@ -69,6 +74,7 @@ class FakeHub:
             self.label_times[(repo, number)] = self.now
         self.issues[(repo, number)] = replace(before, body=body, labels=tuple(labels))
         self.writes.append((repo, number, body, list(labels)))
+        self.calls.append(("write", repo, number))
 
     def remove_label(self, repo, number, name):
         self._check(repo, number)
@@ -78,6 +84,7 @@ class FakeHub:
     def comment(self, repo, number, body):
         self._check(repo, number)
         self.say(number, body, author="the-layer", repo=repo)
+        self.calls.append(("comment", repo, number))
 
     def comments(self, repo, number):
         self._check(repo, number)
@@ -92,3 +99,33 @@ class FakeHub:
 
     def layer_version(self, repo):
         return self.versions.get(repo)
+
+    def listed(self, repo, label):
+        return [issue for (r, _), issue in sorted(self.issues.items())
+                if r == repo and issue.open and not issue.is_pr and label in issue.labels]
+
+    def create(self, repo, title, body, labels):
+        number = max([n for (r, n) in self.issues if r == repo] or [0]) + 1
+        self.add(number, body, labels, repo=repo, title=title)
+        self.calls.append(("create", repo, number))
+        return number
+
+    def pinned(self, repo):
+        return list(self.pins.get(repo, []))
+
+    def pin(self, repo, number):
+        self._check(repo, number)
+        if len(self.pins.get(repo, [])) >= 3:
+            raise GithubError("gh_failed", "pinIssue: a repository can pin at most 3 issues")
+        self.pins.setdefault(repo, []).append(number)
+        self.calls.append(("pin", repo, number))
+
+    def ensure_label(self, repo, name):
+        from orch_it.labels import label_set
+
+        held = self.repo_labels.setdefault(repo, set(label_set()))
+        if name in held:
+            return False
+        held.add(name)
+        self.calls.append(("label_created", repo, name))
+        return True
