@@ -41,3 +41,14 @@ def text(key: str, **fields: object) -> str:
         return value.format(**fields)
     except (KeyError, IndexError) as e:
         raise LanguageError("missing_field", f"{key!r} in the {language!r} table needs {e}") from None
+
+
+def text_or_refusal(key: str, **fields: object) -> str:
+    """`text`, for a refusal or a guard's notice that must still be written: when the setting names no
+    table (or the settings cannot be read) the words are the error's own, which name the missing table,
+    and no other language's words are written instead. The caller's refusal is never lost to a setting."""
+
+    try:
+        return text(key, **fields)
+    except (settings.SettingsError, LanguageError) as e:
+        return str(e)

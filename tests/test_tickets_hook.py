@@ -234,7 +234,9 @@ def test_the_hook_prints_a_deny_with_every_violation_and_fails_open_on_its_own_e
     monkeypatch.setattr(hook, "judge", broken)
     assert hook.main(data) == 0
     out, err = capsys.readouterr()
-    assert out == "" and "failing open" in err
+    from orch_it import language  # the words are the table's, in this module's language (ru, unit 10a)
+
+    assert out == "" and language.text("ticket_hook_internal", error="RuntimeError: a bug in the hook") in err
     assert hook.main("not json") == 0
 
 

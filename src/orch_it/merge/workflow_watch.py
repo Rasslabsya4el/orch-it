@@ -26,8 +26,7 @@ from orch_it.tickets.reader import TRIAGE_LABEL
 
 LABELS = (TRIAGE_LABEL,)
 NON_GREEN = frozenset({"failure", "cancelled", "timed_out"})
-HOW = {"failure": "failure", "cancelled": "cancelled", "timed_out": "timed out"}
-NO_JOB = "no job started"
+HOW_KEY = {"failure": "watch_how_failure", "cancelled": "watch_how_cancelled", "timed_out": "watch_how_timed_out"}
 NAME_MAX = 49  # `Workflow ` + name + ` did not end green` stays within the title limit of 80
 _MARK = re.compile(r"<!-- orch-it workflow-watch workflow=(\S+) -->")
 RUN_MARK = "<!-- orch-it workflow-watch run={run_id} -->"
@@ -99,9 +98,9 @@ def green(run: WorkflowRun) -> bool:
 
 
 def how_ended(run: WorkflowRun) -> str:
-    """How a non-green run ended, in the words the watch ticket names."""
+    """How a non-green run ended, in the words of the language table (the watch ticket and its comments)."""
 
-    return NO_JOB if run.jobs_started == 0 else HOW[run.outcome]
+    return language.text("watch_how_no_job") if run.jobs_started == 0 else language.text(HOW_KEY[run.outcome])
 
 
 def display_name(workflow: str) -> str:
@@ -183,13 +182,13 @@ Weight: 2
 
 
 def _comment(run: WorkflowRun) -> str:
-    return (f"Workflow `{run.workflow}` did not end green again: run {run.run_id} ended as {how_ended(run)} "
-            f"at {run.url}, ended {run.ended_at}.")
+    return language.text("watch_comment", workflow=run.workflow, run_id=run.run_id, how=how_ended(run),
+                         url=run.url, ended_at=run.ended_at)
 
 
 def _close(run: WorkflowRun) -> str:
-    return (f"Workflow `{run.workflow}` ends green: run {run.run_id} at {run.url}, ended {run.ended_at}. "
-            "Closing this watch.")
+    return language.text("watch_close", workflow=run.workflow, run_id=run.run_id, url=run.url,
+                         ended_at=run.ended_at)
 
 
 def latest_per_workflow(runs: list[WorkflowRun]) -> list[WorkflowRun]:

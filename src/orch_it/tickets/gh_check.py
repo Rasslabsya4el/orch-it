@@ -19,6 +19,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from orch_it import language
 from orch_it.tickets.hub import LAYER_MARK, Hub
 from orch_it.tickets.model import READY_LABEL, parse
 from orch_it.tickets.shape import literal_violations, violations
@@ -90,13 +91,14 @@ def check_event(event: object, hub: Hub, *, env=None, run=None, home=None, host=
     found += literal_violations(issue.body, values=values, checks=checks)
     if not found:
         return CheckResult(number, "kept")
-    # the label first: a comment never says it came off when it did not; a failed comment fails the run
-    hub.remove_label(repo, number, ready[0])
+    # the comment's words are read before the label moves: a language that cannot be read never leaves a label
+    # off without its comment (text_or_refusal writes the error's own words in that case)
+    notice = language.text_or_refusal("check_took_label", label=READY_LABEL)
     listed = "\n".join(f"- `{v.code}`: {_quiet(v.rule)}" for v in found)
     tail = values.render_not_checked()
-    hub.comment(repo, number, f"{LAYER_MARK}\nThe shape check took `{READY_LABEL}` off this ticket. Write it again "
-                              f"with the `write-ticket` skill, then set the label again:\n\n{listed}\n"
-                              + (f"{tail}\n" if tail else ""))
+    # the label first: a comment never says it came off when it did not; a failed comment fails the run
+    hub.remove_label(repo, number, ready[0])
+    hub.comment(repo, number, f"{LAYER_MARK}\n{notice}\n\n{listed}\n" + (f"{tail}\n" if tail else ""))
     return CheckResult(number, "removed", list(dict.fromkeys(v.code for v in found)))
 
 
