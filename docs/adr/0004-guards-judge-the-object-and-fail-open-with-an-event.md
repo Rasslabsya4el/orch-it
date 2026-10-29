@@ -57,4 +57,4 @@ language or add the table). Any other unexpected error still fails open.
 
 ## D4 amd 3: where human_language lives
 
-Amendment (orchestration-layer#453): the setting `human_language` lives only in the `settings.json` at the root of the git work tree, and is `en` when that file or key is missing or there is no git tree.
+Amendment (orchestration-layer#453): the setting `human_language` lives only in the `settings.json` at the root of the git work tree, and is `en` when that file or key is missing or there is no git tree. A command reads the git top level of its working directory, then that tree's file. The installation's settings file no longer holds the setting: a `human_language` key there is refused with `HumanLanguageError`, which names the tree file to move it to. A port or a skills copy never copies the tree file, so another repo gets `en` until it commits its own. This amendment replaces nothing in amd 2: a language with no table is still refused as amd 2 says.
