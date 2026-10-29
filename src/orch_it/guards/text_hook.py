@@ -5,7 +5,8 @@ catch-all matcher). A call whose input carries text for another reader (a prompt
 edit's new text, a description, a body; found in any nesting) is checked for the eleven kinds of the coding
 standard: the eight value kinds of `guards.values` and the three pattern kinds of `guards.kinds`.
 
-A write of a file inside the repo leaves the machine, so its text gets no per-machine value at all. Any other call
+A write of a file inside the repo leaves the machine, so its text gets no per-machine value at all; a write of a
+source file (`SOURCE_SUFFIXES`, outside `docs/`) gets the value kinds only, its pattern kinds being legitimate code. Any other call
 stays on this machine, so its text may name the run-time locations the harness gives a session (a session's
 scratchpad, a worktree) and paths inside the repo. A check that cannot run refuses the call: every exception, an
 import failure included, is a refusal naming the install step.
@@ -28,11 +29,16 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from orch_it.guards.values import Values
 
-# every string of the call's input is text for another reader, except the keys that name a place or a kind of
-# agent, never text for a reader; a tool no list names is judged too
-STRUCTURAL_KEYS = ("file_path", "path", "subagent_type", "model")
+# every string of the call's input is text for another reader, except the keys that name a place, a kind of agent or
+# what a search looks for (Grep's and Glob's pattern and glob, an Edit's old_string: the text it finds, not writes),
+# never text for a reader; a tool no list names is judged too
+STRUCTURAL_KEYS = ("file_path", "path", "subagent_type", "model", "pattern", "glob", "notebook_path", "cell_id",
+                   "edit_mode", "old_string")
 SHELL_TOOLS = ("Bash", "PowerShell")  # their commands and descriptions are other guards' business, not judged here
 FILE_KEY = "file_path"  # a write of a file: judged only when the file is inside the repo
+# a source file (a code folder's) gets the value kinds only: its one-OS words and call forms are legitimate code
+# (guards.kinds flags them there); a `docs/` file or a suffix no list names keeps all the kinds
+SOURCE_SUFFIXES = (".py", ".sh", ".ps1", ".js", ".ts", ".yml", ".yaml", ".toml")
 
 _SESSION_ID = r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
 _TOKEN = r"[^\s\"'`<>|,()\[\]{}]*"  # a path or a word of a text: up to a space, quote, comma, bracket or pipe
@@ -102,24 +108,26 @@ def read_context(folder: str | None) -> Context:
                    roots=roots, repo=roots[0] if roots else "")
 
 
-def find_text(text: str, *, stays: bool, context: Context, path: str | None = None) -> list[Hit]:
-    """The hits of `text`: each value of the setup in any spelling (`guards.values.find_in`) and each pattern kind.
-    The pattern kinds are judged by the file `path` when the text is a file's (`guards.kinds.find_pattern_kinds`),
-    and as ticket text otherwise (`guards.kinds.find_in_ticket_text`). For text that stays on this machine, the
-    run-time locations are masked first, so a token that is a session's scratchpad, a worktree, or a path inside a
-    root is no hit."""
+def find_text(text: str, *, stays: bool, context: Context, path: str | None = None,
+              patterns: bool = True) -> list[Hit]:
+    """The hits of `text`: each value of the setup in any spelling (`guards.values.find_in`) and, when `patterns`, each
+    pattern kind. The pattern kinds are judged as a record of the file `path` when the text is a file's
+    (`guards.kinds.find_in_record`), and as ticket text otherwise (`guards.kinds.find_in_ticket_text`). For text that
+    stays on this machine, the run-time locations are masked first, so a token that is a session's scratchpad, a
+    worktree, or a path inside a root is no hit."""
 
-    from orch_it.guards.kinds import find_in_ticket_text, find_pattern_kinds
+    from orch_it.guards.kinds import find_in_record, find_in_ticket_text
     from orch_it.guards.values import find_in
 
     checked = _masked(text, context.roots, context.repo) if stays else text
     found = [Hit(finding.kind, finding.line) for finding in find_in(checked, context.values)]
-    if path is None:
-        pattern = find_in_ticket_text(checked, context.job_names)
-    else:
-        pattern = find_pattern_kinds(path, checked, context.job_names)
-    found += [Hit(finding.kind, finding.line) for finding in pattern]
-    return sorted(found, key=lambda hit: (hit.line, hit.kind))
+    if patterns:
+        if path is None:
+            pattern = find_in_ticket_text(checked, context.job_names)
+        else:
+            pattern = find_in_record(path, checked, context.job_names)
+        found += [Hit(finding.kind, finding.line) for finding in pattern]
+    return sorted(set(found), key=lambda hit: (hit.line, hit.kind))
 
 
 def judge_call(payload: dict, context: Callable[[str | None], Context]) -> tuple[list[Hit], str]:
@@ -140,9 +148,12 @@ def judge_call(payload: dict, context: Callable[[str | None], Context]) -> tuple
     setup = context(folder)
     file = tool_input.get(FILE_KEY)
     if isinstance(file, str):
-        if not _inside(file, folder, setup.roots):
+        root = _root_of(file, folder, setup.roots)
+        if root is None:
             return [], ""
-        hits = [hit for text in texts for hit in find_text(text, stays=False, context=setup, path=file)]
+        patterns = _patterns_judged(file, folder, root)
+        hits = [hit for text in texts
+                for hit in find_text(text, stays=False, context=setup, path=file, patterns=patterns)]
     else:
         hits = [hit for text in texts for hit in find_text(text, stays=True, context=setup)]
     return hits, setup.values.render_not_checked()
@@ -251,15 +262,38 @@ def _root_pattern(root: str) -> re.Pattern | None:
     return re.compile(rf"(?<![A-Za-z0-9_]){lead}{body}(?![A-Za-z0-9_-]){_TOKEN}", re.IGNORECASE)
 
 
-def _inside(file: str, folder: str | None, roots: tuple[str, ...]) -> bool:
-    """True when `file` (relative to `folder`, or absolute) is a root or lies under one."""
+def _absolute(file: str, folder: str | None) -> str:
+    return os.path.normcase(os.path.normpath(file if folder is None else os.path.join(folder, file)))
 
-    path = os.path.normcase(os.path.normpath(file if folder is None else os.path.join(folder, file)))
+
+def _root_of(file: str, folder: str | None, roots: tuple[str, ...]) -> str | None:
+    """The root that holds `file` (relative to `folder`, or absolute), the longest one when roots nest; None when no
+    root is a root of it or lies above it."""
+
+    path = _absolute(file, folder)
+    best: str | None = None
     for root in roots:
         base = os.path.normcase(os.path.normpath(root))
         if path == base or path.startswith(base.rstrip(os.sep) + os.sep):
-            return True
-    return False
+            if best is None or len(base) > len(os.path.normcase(os.path.normpath(best))):
+                best = root
+    return best
+
+
+def _patterns_judged(file: str, folder: str | None, root: str) -> bool:
+    """True when a file write gets the pattern kinds as well as the value kinds: every file except a source file (a
+    suffix of `SOURCE_SUFFIXES`) outside the root's `docs/` folder."""
+
+    suffix = os.path.splitext(file)[1].lower()
+    return not (suffix in SOURCE_SUFFIXES and not _in_docs(file, folder, root))
+
+
+def _in_docs(file: str, folder: str | None, root: str) -> bool:
+    """True when `file` lies under the `docs/` folder of `root`."""
+
+    base = os.path.normcase(os.path.normpath(root)).rstrip(os.sep)
+    rest = _absolute(file, folder)[len(base):].lstrip(os.sep)
+    return rest.split(os.sep, 1)[0] == "docs"
 
 
 if __name__ == "__main__":

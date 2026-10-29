@@ -145,13 +145,67 @@ def test_a_file_write_is_judged_by_the_file_it_writes_for_the_pattern_kinds():
     assert judge(call("Write", {"file_path": f"{REPO_ROOT}/docs/STATE.md", "content": prose})) == []
 
 
-def test_a_python_file_is_judged_by_its_call_forms_and_its_job_names():
+def test_a_python_source_file_is_not_judged_by_its_call_forms_or_its_job_names():
+    # a source file's pattern kinds are not judged (they flag legitimate code, #415 unit 4 item 3); the same text in a
+    # record is refused (see the record tests below)
     call_form = 'import subprocess\nsubprocess.run(["python", "-m", "pytest", "-q"])\n'
-    assert "bare_python" in kinds_of(judge(call("Write", {"file_path": f"{REPO_ROOT}/tests/t_x.py",
-                                                          "content": call_form})))
+    assert judge(call("Write", {"file_path": f"{REPO_ROOT}/tests/t_x.py", "content": call_form})) == []
     job = 'check = "lint-and-types"\n'
-    assert "check_name_literal" in kinds_of(judge(call("Write", {"file_path": f"{REPO_ROOT}/tests/t_x.py",
-                                                                "content": job})))
+    assert judge(call("Write", {"file_path": f"{REPO_ROOT}/tests/t_x.py", "content": job})) == []
+
+
+@pytest.mark.parametrize("key", ["pattern", "glob", "notebook_path", "cell_id", "edit_mode", "old_string"])
+def test_a_structural_key_holding_a_machine_value_is_not_judged(key):
+    # Grep and Glob only search: their pattern and glob name what to look for; an Edit's old_string is the text it
+    # finds, not the text it writes (#415 unit 4 items 1 and 2)
+    assert judge(call("Grep", {key: "t9@example.invalid"})) == []
+
+
+def test_an_edit_whose_old_string_holds_a_value_passes_when_its_new_string_is_clean():
+    tool_input = {"file_path": f"{REPO_ROOT}/docs/STATE.md", "old_string": "e-mail t9@example.invalid",
+                  "new_string": "e-mail of this machine"}
+    assert judge(call("Edit", tool_input)) == []
+
+
+def test_an_edit_whose_new_string_holds_a_value_is_refused():
+    tool_input = {"file_path": f"{REPO_ROOT}/docs/STATE.md", "old_string": "e-mail of this machine",
+                  "new_string": "e-mail t9@example.invalid"}
+    assert "git_email" in kinds_of(judge(call("Edit", tool_input)))
+
+
+SOURCE_FILES = ["src/orch_it/x.py", "scripts/run.sh", "scripts/run.ps1", "web/app.js", "web/app.ts",
+                ".github/ci.yml", "ci/job.yaml", "pyproject.toml"]
+RECORD_FILES = ["docs/STATE.md", "README.md", "docs/notes.txt", "docs/guide.rst", "docs/research/x.json",
+                "docs/config.toml", "data/x.json"]  # a suffix no source list names is judged in full too
+ONE_OS_TEXT = "subprocess.run(['taskkill', '/F', '/PID', '1'])\n"
+
+
+@pytest.mark.parametrize("path", SOURCE_FILES)
+def test_a_source_file_write_with_a_one_os_word_is_not_refused(path):
+    assert judge(call("Write", {"file_path": f"{REPO_ROOT}/{path}", "content": ONE_OS_TEXT})) == []
+
+
+@pytest.mark.parametrize("path", SOURCE_FILES)
+def test_a_source_file_write_with_a_machine_value_is_refused(path):
+    hits = judge(call("Write", {"file_path": f"{REPO_ROOT}/{path}", "content": "author t9@example.invalid\n"}))
+    assert "git_email" in kinds_of(hits)
+
+
+@pytest.mark.parametrize("path", RECORD_FILES)
+def test_a_record_write_with_a_one_os_word_is_refused(path):
+    hits = judge(call("Write", {"file_path": f"{REPO_ROOT}/{path}", "content": "stop it with taskkill /F\n"}))
+    assert "one_os_call" in kinds_of(hits)
+
+
+@pytest.mark.parametrize("path", RECORD_FILES)
+def test_a_record_write_with_a_machine_value_is_refused(path):
+    hits = judge(call("Write", {"file_path": f"{REPO_ROOT}/{path}", "content": "author t9@example.invalid\n"}))
+    assert "git_email" in kinds_of(hits)
+
+
+def test_a_record_write_with_a_job_name_literal_is_refused():
+    tool_input = {"file_path": f"{REPO_ROOT}/docs/STATE.md", "content": KIND_SAMPLES["check_name_literal"] + "\n"}
+    assert "check_name_literal" in kinds_of(judge(call("Write", tool_input)))
 
 
 def test_legitimate_python_code_with_no_machine_value_or_call_form_is_not_refused():
