@@ -89,6 +89,20 @@ def find_in_ticket_text(text: str, job_names: frozenset[str] = frozenset()) -> l
     return [Finding(kind, number, matched, TICKET_PATH) for kind, number, matched in sorted(hits, key=_by_line)]
 
 
+def find_in_record(path: str, text: str, job_names: frozenset[str] = frozenset()) -> list[Finding]:
+    """Every match in a record's text: a file the value check judges in full (#415 unit 4 item 3), a `.md`, `.txt` or
+    `.rst` file, a file under `docs/`, or a file whose suffix no source list names. It is `find_pattern_kinds` of its
+    suffix, plus a one-OS call anywhere (a record has no OS test of its own) and a job name as a quoted or backticked
+    literal, as a ticket body has them. `find_pattern_kinds` itself, which the scanner uses, is unchanged."""
+
+    lines = text.splitlines()
+    extra = [Finding(kind, number, matched, path)
+             for kind, number, matched in sorted([*_os_name_hits(lines), *_quoted_name_hits(lines, job_names)],
+                                                 key=_by_line)]
+    found = {*find_pattern_kinds(path, text, job_names), *extra}
+    return sorted(found, key=lambda finding: (finding.line, finding.kind))
+
+
 def read_job_names(folder: str) -> frozenset[str]:
     """The names a check of the workflows in `folder` carries, read from the `*.yml` and `*.yaml` files: each job's
     `jobs:` key, and each job's `name:` value (what GitHub shows as the check). A value with a matrix suffix,
