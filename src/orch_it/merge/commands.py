@@ -4,7 +4,7 @@
   acceptance step (decision 1, `orch_it.merge.pr_open`): the measured rows checked against the
   ticket's, the branch pushed, one OPEN pull request per ticket at a time opened with `Refs #N` (or its own reused;
   a merged one never refuses the next; `--part K/N` writes `Part: K of N` beside it),
-  the acceptance comment, the ready mark, auto-merge on, the ticket parked on the pull request; prints
+  the acceptance comment, the ready mark, the ticket parked on the pull request; prints
   `pr #<n> opened|reused at <head>: <park line>`. `--branch` defaults to the work tree's branch;
 - `follow [<pr>] [--event <file>] [--base main] [--repo R] [--role github]`: the ticket follows its
   pull request (decision 3, `orch_it.merge.follow`): the pull request named, or the one a GitHub event
@@ -157,7 +157,7 @@ def _pr_open(args, store_of, repo_of, now: datetime) -> str:
         raise PrError("git_failed", str(e)) from None
     raw = settings.load()
     done = open_pr(GhPullHub(), store_of(), repo, args.ticket, acceptance=acceptance, branch=branch, base=args.base,
-                   required=required_checks(raw, repo), git=git, settings=MergeSettings.from_settings(raw, repo), now=now,
+                   git=git, settings=MergeSettings.from_settings(raw, repo), now=now,
                    role=args.role, notes=notes, part=part)
     return f"pr #{done.pr} {'reused' if done.reused else 'opened'} at {done.head[:12]}: {done.park}\n"
 

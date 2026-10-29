@@ -1,5 +1,5 @@
 """An in-memory GitHub for the merge flow (#400): the tickets' `FakeHub` plus pull requests with
-their heads, bases and auto-merge, check runs per sha, Actions runs with their failed tests, the
+their heads and bases, check runs per sha, Actions runs with their failed tests, the
 runs of the `tests` workflow on a branch, and branch protection's strict rule: a merge needs the
 head up to date with its base and every required check green on the head.
 
@@ -42,7 +42,6 @@ class FakePull:
     base: str
     created_at: datetime
     draft: bool = False
-    auto_merge: str | None = None
     state: str = "open"
     conflict: tuple[str, ...] = ()  # the files that conflict with the base, when not empty
     merged_at: datetime | None = None
@@ -87,12 +86,12 @@ class FakeGitHub(FakeHub):
         return f"{prefix}{self._shas}"
 
     def open_pull(self, number=None, *, branch=None, base="main", body="", title="A change", behind=0,
-                  draft=False, auto_merge=None, conflict=()):
+                  draft=False, conflict=()):
         number = number or self._number()
         branch = branch or f"branch-{number}"
         held = self.branches[base][:len(self.branches[base]) - behind]
         self.branches[branch] = [*held, self.sha(f"h{number}-")]
-        self.pulls[number] = FakePull(number, title, body, branch, base, self.now, draft, auto_merge,
+        self.pulls[number] = FakePull(number, title, body, branch, base, self.now, draft,
                                       conflict=tuple(conflict))
         self.add(number, body, (), title=title, is_pr=True)
         return number
@@ -146,7 +145,7 @@ class FakeGitHub(FakeHub):
         branch, base = self.branches[found.branch], self.branches[found.base]
         behind = len([sha for sha in base if sha not in branch])
         return Pull(repo, number, found.title, found.body, found.branch, branch[-1], found.base, found.state,
-                    found.draft, found.auto_merge, "conflicting" if found.conflict else "mergeable", behind,
+                    found.draft, "conflicting" if found.conflict else "mergeable", behind,
                     found.created_at, found.merged_at, found.merge_sha, found.closed_at, found.head_repo)
 
     def open_pulls(self, repo, base):
@@ -175,10 +174,6 @@ class FakeGitHub(FakeHub):
         self.add(number, body, (), title=title, is_pr=True)
         return number
 
-    def set_auto_merge(self, repo, number, method):
-        self.calls.append(("auto_merge", number, method))
-        self.pulls[number].auto_merge = method
-
     def required_checks_of(self, repo, base):
         return set(self.required_by_base.get(base, set()))
 
@@ -205,7 +200,7 @@ class FakeGitHub(FakeHub):
                 or any(green.get(name) != PASSED for name in self.required)):
             return None
         sha = self.land(found.base, number)
-        found.state, found.merged_at, found.merge_sha, found.auto_merge = "merged", self.now, sha, None
+        found.state, found.merged_at, found.merge_sha = "merged", self.now, sha
         self.close(number, merged=True)
         for hook in list(self.on_merge):
             hook(number)
@@ -215,7 +210,7 @@ class FakeGitHub(FakeHub):
         number = repo_or_number if number is None else number
         self.calls.append(("close_pull", number))
         found = self.pulls[number]
-        found.state, found.closed_at, found.auto_merge = "closed", self.now, None
+        found.state, found.closed_at = "closed", self.now
         self.close(number, reason=None)
 
     def rerun(self, repo, run_id):

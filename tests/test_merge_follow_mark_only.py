@@ -1,4 +1,4 @@
-"""#424 unit 5: a pull request with a ready mark and no auto-merge, into a base that requires none of the
+"""#424 unit 5: a pull request with a ready mark, into a base that requires none of the
 required jobs (the mark-only class), is merged by `follow` once its required checks are green on its head;
 a base that requires them is the merge line's, and `follow` never merges there."""
 
@@ -25,11 +25,10 @@ def run(hub, store, pr, merge=True, **kwargs):
 
 
 def mark_only(tmp_path):
-    """`pr open` on a base that requires nothing leaves the ready mark and no auto-merge."""
+    """`pr open` on a base that requires nothing leaves the ready mark."""
 
     hub, store, prs = world(tmp_path)
     hub.required_by_base = {}
-    hub.set_auto_merge(REPO, prs[10], None)
     hub.calls.clear()
     return hub, store, prs[10]
 
@@ -102,14 +101,6 @@ def test_a_base_that_requires_only_one_job_is_mark_only(tmp_path):
     hub.required_by_base = {"main": {REQUIRED[0]}}
     hub.checks_on(hub.head(pr), PASSED)
     assert run(hub, store, pr).merged_by_follow and len(merges(hub)) == 1
-
-
-def test_auto_merge_already_on_is_not_merged_by_the_follow(tmp_path):
-    hub, store, pr = mark_only(tmp_path)
-    hub.set_auto_merge(REPO, pr, "merge")
-    hub.checks_on(hub.head(pr), PASSED)
-    done = run(hub, store, pr)
-    assert (done.outcome, done.merged_by_follow) == ("green", False) and not merges(hub)
 
 
 def test_a_draft_is_not_merged(tmp_path):
@@ -217,7 +208,7 @@ def skills_mark_only(tmp_path):
     hub.add(SKILLS_ISSUE, "## For the human\n\n- **What:** his upstream moved.\n", ["ready-for-agent"],
             title=f"His skills moved to {COMMIT}")
     pr = hub.open_pull(body="His upstream moved. The copies are rewritten.", branch=f"skills-upstream/{COMMIT}-abcdef12",
-                       title="His skills move to 0123456789ab: text_changed skill", auto_merge=None)
+                       title="His skills move to 0123456789ab: text_changed skill")
     hub.comment(REPO, pr, marks.ready_comment(None, hub.head(pr), hub.now))
     hub.calls.clear()
     return hub, store, pr
@@ -261,7 +252,7 @@ def event(sha, number=None, branch=None):
 
 def test_a_workflow_run_names_the_open_pull_request_with_its_head_sha_and_no_other(tmp_path):
     hub, store, pr = mark_only(tmp_path)
-    other = hub.open_pull(body="Refs #1", auto_merge=None)
+    other = hub.open_pull(body="Refs #1")
     sha = hub.head(pr)
     assert prs_of_workflow_run(event(sha, pr), hub, REPO, "main") == ([pr], "")
     assert prs_of_workflow_run(event(hub.head(other), pr), hub, REPO, "main")[0] == []  # the pull request moved on

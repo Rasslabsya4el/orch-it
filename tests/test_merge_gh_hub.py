@@ -79,13 +79,13 @@ def compare_url(base="main", head="h" * 7):
 # --- pull requests ----------------------------------------------------------------------------
 
 
-def test_an_open_pull_request_is_read_with_its_auto_merge_mergeable_and_behind():
+def test_an_open_pull_request_is_read_with_its_mergeable_and_behind_and_an_auto_merge_it_carries_is_ignored():
     gh = Gh(([pull_url()], pull_json(auto_merge={"merge_method": "SQUASH"}, draft=True)),
             ([compare_url()], {"behind_by": 3, "ahead_by": 1}))
     found = GhPullHub(gh).pull(REPO, 5)
     assert found == hub_mod.Pull(
         repo=REPO, number=5, title="T", body="B", branch="feature", head_sha="h" * 7, base="main",
-        state="open", draft=True, auto_merge="squash", mergeable="mergeable", behind=3,
+        state="open", draft=True, mergeable="mergeable", behind=3,
         created_at=datetime(2026, 11, 2, 10, tzinfo=UTC))
 
 
@@ -165,8 +165,7 @@ def test_a_missing_pull_request_is_none_and_a_failure_raises():
 
 
 @pytest.mark.parametrize("answer", ["", "not json", "[1]", "{}", json.dumps(pull_json(head=None)),
-                                    json.dumps(pull_json(created_at="soon")),
-                                    json.dumps(pull_json(auto_merge={"enabled_by": {}}))])
+                                    json.dumps(pull_json(created_at="soon"))])
 def test_a_pull_request_answer_not_of_the_shape_asked_for_is_bad_output(answer):
     gh = Gh(([pull_url()], answer), ([compare_url()], {"behind_by": 0}))
     with pytest.raises(GithubError) as error:
@@ -356,35 +355,6 @@ def test_a_failed_create_raises_and_leaves_no_temp_file():
         GhPullHub(Gh((["pr", "create"], create))).create_pull(REPO, "main", "feature", "t", "b")
     assert error.value.code == "gh_failed"
     assert not seen["path"].parent.exists()
-
-
-def test_auto_merge_goes_on_with_a_method_and_off_with_none():
-    gh = Gh((["pr", "merge"], ""))
-    hub = GhPullHub(gh)
-    hub.set_auto_merge(REPO, 5, "squash")
-    hub.set_auto_merge(REPO, 5, None)
-    assert gh.calls == [["pr", "merge", "5", "--repo", REPO, "--auto", "--squash"],
-                        ["pr", "merge", "5", "--repo", REPO, "--disable-auto"]]
-
-
-def test_auto_merge_already_off_is_no_error_and_any_other_refusal_raises():
-    off = GithubError("gh_failed", "pr merge 5 --repo x: X Auto-merge is not enabled for this pull request")
-    hub = GhPullHub(Gh((["--disable-auto"], off), (["--auto", "--merge"], GithubError(
-        "gh_failed", "pr merge: Pull request Auto merge is not allowed for this repository"))))
-    hub.set_auto_merge(REPO, 5, None)
-    with pytest.raises(GithubError):
-        hub.set_auto_merge(REPO, 5, "merge")
-    with pytest.raises(GithubError):
-        GhPullHub(Gh((["--disable-auto"], failed(502)))).set_auto_merge(REPO, 5, None)
-
-
-def test_auto_merge_already_on_is_no_error_and_a_method_not_known_is_refused_before_any_call():
-    gh = Gh((["--auto"], GithubError("gh_failed", "pr merge: auto-merge is already enabled")))
-    hub = GhPullHub(gh)
-    hub.set_auto_merge(REPO, 5, "rebase")
-    with pytest.raises(ValueError):
-        hub.set_auto_merge(REPO, 5, "fast-forward")
-    assert len(gh.calls) == 1
 
 
 # --- the checks a base requires (#424 unit 4) -----------------------------------------------------

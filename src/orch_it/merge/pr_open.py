@@ -16,9 +16,9 @@ In this order, and nothing written before every check passed:
    follow, with its acceptance rows, never by GitHub;
 4. the branch is pushed (never forced), the pull request opened or reused, the acceptance comment
    written on the ticket (the rows, the head they were checked at, the hash of the body), the ready
-   mark on the pull request (it enters the merge line: a later left mark is undone), auto-merge
-   turned on with the setting `merge_method`, and the ticket parked `pr_ended` on it through #398's
-   park command until the day after `pr_max_hours` from now;
+   mark on the pull request (it enters the merge line: a later left mark is undone; the line merges
+   it, nothing in GitHub does), and the ticket parked `pr_ended` on it through #398's park command
+   until the day after `pr_max_hours` from now;
 5. the `pr` step started (run `pr:<repo>#<n>@<ready mark time>`), one `acceptance_row.checked`
    per row that was run, and `comment.written` (`accepted`).
 """
@@ -34,7 +34,7 @@ from orch_it.events.store import Store
 from orch_it.merge import marks, record
 from orch_it.merge.git import GitError, branch_ok
 from orch_it.merge.hub import Pull, PullHub
-from orch_it.merge.settings import MergeSettings, required_checks_now
+from orch_it.merge.settings import MergeSettings
 from orch_it.tickets import park
 from orch_it.tickets.model import AcceptanceRow, parse
 
@@ -88,12 +88,10 @@ def parse_part(text: str) -> tuple[int, int]:
 
 def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: str, branch: str, base: str,
             git: Git, settings: MergeSettings, now: datetime, role: str = ROLE, notes: str = "",
-            part: tuple[int, int] | None = None, required: tuple[str, ...] | None = None) -> Opened:
+            part: tuple[int, int] | None = None) -> Opened:
     """`notes`: ORCH's report lines, put in the body of a pull request it opens, under its rows.
     `part`: the (k, n) of a part's pull request (#434), written as `Part: k of n` in a new body; a
-    reused pull request keeps its body. `required`: the check names (default: the setting `required_checks` of `repo`)."""
-    if required is None:
-        required = required_checks_now(repo)
+    reused pull request keeps its body."""
     if part is not None and not 1 <= part[0] <= part[1]:
         raise PrError("bad_part", f"{part[0]}/{part[1]} is not K/N with 1 <= K <= N")
     for name in (branch, base):
@@ -148,7 +146,7 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
         raise PrError("head_moved", f"#{pr} is at {pull.head_sha[:12] if pull else 'nothing'}, the rows were "
                       f"measured at {measured[:12]}")
     hub.comment(repo, number, marks.acceptance_comment(pr, measured, marks.body_hash(issue.body), rows))
-    after_open(hub, repo, pr, measured, number, now, settings.merge_method, base, required)
+    after_open(hub, repo, pr, measured, number, now)
     if parked_on_it:
         line = ticket.park_lines[0]
     else:
@@ -160,7 +158,6 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
                 raise
             # another `pr open` of this ticket parked it on its own pull request a moment before:
             # this one, just opened, never enters the line
-            hub.set_auto_merge(repo, pr, None)
             hub.comment(repo, pr, marks.left_comment("ticket_has_pr", f"#{number} took another pull request first"))
             hub.close_pull(repo, pr)
             raise PrError("ticket_has_pr", f"#{number} was parked by another pull request first: {e}") from None
@@ -174,25 +171,15 @@ def open_pr(hub: PullHub, store: Store, repo: str, number: int, *, acceptance: s
     return Opened(pr, measured, reused, line)
 
 
-def after_open(hub: PullHub, repo: str, pr: int, head: str, ticket: int | None, now: datetime,
-               method: str, base: str, required: tuple[str, ...], *, mark_written: bool = False) -> None:
+def after_open(hub: PullHub, repo: str, pr: int, head: str, ticket: int | None, now: datetime, *,
+               mark_written: bool = False) -> None:
     """Whoever opens a pull request (`pr open`, `skills update`) puts it in the merge line: the ready mark at
-    `head`, then auto-merge with `method`, only where `base` requires every name of `required` (#424).
-    A base that requires less would merge the pull request at once, checks still running, so there it keeps
-    the mark alone. `mark_written`: the mark already stands at `head` (a re-used pull request), so no second
-    mark is written; the auto-merge rule is the same. `ticket` is None for a pull request that names no ticket."""
+    `head`, nothing more; the line merges it once its required checks are green on its head (#414); GitHub
+    sets nothing. `mark_written`: the mark already stands at `head` (a re-used pull request), so no
+    second mark is written. `ticket` is None for a pull request that names no ticket."""
 
     if not mark_written:
         hub.comment(repo, pr, marks.ready_comment(ticket, head, now))
-    auto_merge_if_required(hub, repo, pr, method, base, required)
-
-
-def auto_merge_if_required(hub: PullHub, repo: str, pr: int, method: str, base: str,
-                           required: tuple[str, ...]) -> None:
-    """Auto-merge with `method` on a pull request into `base` only when that base requires every name of `required`."""
-
-    if set(required) <= hub.required_checks_of(repo, base):
-        hub.set_auto_merge(repo, pr, method)
 
 
 def checked_rows(rows: tuple[AcceptanceRow, ...], text: str) -> list[marks.ResultRow]:

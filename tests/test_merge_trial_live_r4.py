@@ -317,7 +317,7 @@ def test_a_comment_end_whose_pull_request_merged_before_the_comment_fails_the_en
             return
         pr = made[2].pr
         head = world.hub.pull(REPO, pr).head_sha
-        world.hub.checks_on(head)  # the required checks green on the head: the auto-merge's own condition
+        world.hub.checks_on(head)  # the required checks green on the head: the merge's own condition
         sha = world.hub.merge(REPO, pr, head, "squash")
         assert sha is not None, "the trial's precondition: the comment pull request lands before the comment"
 

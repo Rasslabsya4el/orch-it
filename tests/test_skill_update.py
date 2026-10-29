@@ -398,7 +398,7 @@ def test_a_fresh_update_hands_its_new_pull_request_the_ready_mark(world):
 
 
 def test_an_open_pr_of_the_same_upstream_commit_is_brought_up_to_date_then_joins_the_line(world):
-    # the outside case: a pull request the old code opened has no ready mark and no auto-merge (a text change: no brain)
+    # the outside case: a pull request the old code opened has no ready mark (a text change: no brain)
     up = newer(world, {"skills/engineering/tdd/SKILL.md": skill("tdd", "Red then green.\nOne thin slice.\nAt seams.\n")})
     open_pr = {"url": "https://example.invalid/pull/9", "branch": f"skills-upstream/{up[:12]}-00000000", "state": "OPEN"}
     forge = FakeForge(prs=[open_pr])

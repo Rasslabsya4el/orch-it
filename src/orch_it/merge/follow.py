@@ -2,8 +2,8 @@
 ticket from GitHub alone and moves the ticket once, by the `pr` and `close` rules of the pipeline
 model. It is called by the workflow `follow` on pull request, review, comment and ticket events, by
 `reconcile`, by the merge line on its head and by the park reader on a `pr_ended` park whose pull
-request ended. Calling it again changes nothing: a pull request it took out of the line (auto-merge
-off, a left mark) is `idle` until `pr open` puts it back.
+request ended. Calling it again changes nothing: a pull request it took out of the line (a left
+mark) is `idle` until `pr open` puts it back.
 
 The ticket of a pull request is the one its line `Refs #N` names; of several such lines, the one
 whose park waits on this pull request; with none, the open ticket parked on it. A skills update's pull
@@ -24,7 +24,7 @@ table (`closed_skills`).
 
 Closed unmerged: a ticket parked on it goes to the brain (`closed_unmerged`).
 
-Open and in the line (a ready mark, or auto-merge on), in this order: the ticket closed
+Open and in the line (a ready mark), in this order: the ticket closed
 (`withdrawn`: out of the line) or edited since its rows were checked (`edited`: out of the line,
 back to ready to be planned again); a person's comment on the pull request from its ready mark on
 (`commented`) or on the ticket after its acceptance comment (`unanswered`): out of the line, the
@@ -41,7 +41,7 @@ files, not counted; then the required checks of the head sha only (MERGE-12):
 - open past `pr_max_hours` from its ready mark: out of the line, to the brain (`timeout`);
 - else `waiting` (a check pending or missing: no check is never green, MERGE-1), `behind` or `green`:
   nothing changes, the line brings it up to date and merges it. One exception, the mark-only class (#424): a
-  green, up to date, non-draft pull request of this repo with a ready mark and no auto-merge, into a base
+  green, up to date, non-draft pull request of this repo with a ready mark, into a base
   that does not require every required job, is merged by the follow itself (`merged_by_follow`): its title
   and body pass the merge line's closing-keyword check (else it leaves the line, `refused`), then
   `merge` at the head sha the follow read; GitHub refusing it is `waiting`, and the next follow reads again.
@@ -51,7 +51,7 @@ files, not counted; then the required checks of the head sha only (MERGE-12):
   the merge line or a bare `follow <pr>`.
 
 "To ready" is the park off and `ready-for-agent` on; "to the brain" the park off, `needs-triage` on,
-the ready labels off; "out of the line" auto-merge off and a left mark on the pull request. The
+the ready labels off; "out of the line" a left mark on the pull request. The
 ticket is written first, through #398's write that refuses a ticket changed since it was read: when
 another follow or a person changed it meanwhile nothing is written at all (`raced`) and the next
 follow acts on it as it is then. Then the ticket's comment with the follow mark of its outcome, then
@@ -393,7 +393,7 @@ class _Follow:
 
     def open(self) -> FollowReport:
         ready = marks.ready_since(marks.of_layer(self.said, self.owner))
-        if ready is None and self.pull.auto_merge is None:
+        if ready is None:
             return self.report("idle", "not in the merge line")
         since = ready.at if ready else self.pull.created_at
         if self.issue is not None and not self.issue.open:
@@ -449,13 +449,13 @@ class _Follow:
         return self._merge_mark_only(ready) or self.report("green")
 
     def _merge_mark_only(self, ready) -> FollowReport | None:
-        """A green, up to date pull request in the mark-only class (a ready mark, no auto-merge, a base that does
+        """A green, up to date pull request in the mark-only class (a ready mark, a base that does
         not require every required job) merged here: the merge line's closing-keyword check on its text as it is
-        now, then `merge` at the head sha this follow read. None when it is not that class, so the line (or
-        auto-merge) owns it. The workflow's token starts no workflow, so the merged rules run in this same run."""
+        now, then `merge` at the head sha this follow read. None when it is not that class, so the line
+        owns it. The workflow's token starts no workflow, so the merged rules run in this same run."""
 
         pull = self.pull
-        if (not self.merge or ready is None or pull.auto_merge is not None or pull.draft
+        if (not self.merge or ready is None or pull.draft
                 or (pull.head_repo or "").lower() != self.repo.lower()
                 or set(self.required) <= self.hub.required_checks_of(self.repo, pull.base)):
             return None
@@ -637,9 +637,8 @@ class _Follow:
         return self.issue is not None and self.issue.open
 
     def _leave(self, reason: str, text: str) -> None:
-        """Take the pull request out of the merge line: auto-merge off, then the left mark."""
+        """Take the pull request out of the merge line: the left mark."""
 
-        self.hub.set_auto_merge(self.repo, self.pull.number, None)
         self.hub.comment(self.repo, self.pull.number, marks.left_comment(reason, text))
 
     def _a_person_said(self, said, after: datetime) -> bool:

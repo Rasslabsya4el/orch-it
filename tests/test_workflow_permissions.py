@@ -14,7 +14,7 @@ WORKFLOWS = Path(__file__).parents[1] / ".github" / "workflows"
 
 # workflow file -> the token it may hold: what each key is for is written beside it in the file
 EXPECTED = {
-    # git fetch and the compare of a pull request (contents), auto-merge (pull-requests, contents), the ticket's
+    # git fetch and the compare of a pull request (contents), a merge (pull-requests, contents), the ticket's
     # comments and labels (issues), rerun and cancel of a run (actions), the check runs of a head (checks)
     "follow.yml": {"contents": "write", "pull-requests": "write", "issues": "write", "actions": "write",
                    "checks": "read"},

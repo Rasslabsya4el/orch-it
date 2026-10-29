@@ -34,7 +34,6 @@ class Pull:
     base: str  # the base branch
     state: str  # `open`, `merged` or `closed` (closed unmerged)
     draft: bool
-    auto_merge: str | None  # the method auto-merge is on with (`merge`, `squash`, `rebase`), None when off
     mergeable: str  # `mergeable`, `conflicting` or `unknown` (GitHub has not computed it yet)
     behind: int | None  # commits of the base the head does not hold; None when unknown
     created_at: datetime
@@ -92,9 +91,6 @@ class PullHub(Hub, Protocol):
     def required_checks_of(self, repo: str, base: str) -> set[str]:
         """The check names `base` requires before a pull request into it merges: classic protection and rulesets
         both; a base that protects nothing (or a plan that does not allow it) requires none, the empty set."""
-
-    def set_auto_merge(self, repo: str, number: int, method: str | None) -> None:
-        """Turn auto-merge on with `method`, or off with None; already so is no error."""
 
     def update_branch(self, repo: str, number: int, head_sha: str) -> bool:
         """Bring the head up to date with its base by a merge commit, only from `head_sha`;

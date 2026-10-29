@@ -192,7 +192,7 @@ def test_red_on_the_head_returns_the_ticket_to_ready_with_the_failing_ids_and_co
     assert done.outcome == "red"
     held, issue = ticket(hub)
     assert held.ready and not held.parked and "tests/test_cart.py::test_quote" in last_comment(hub, 10)
-    assert hub.pull(REPO, pr).auto_merge is None and marks.ready_since(hub.comments(REPO, pr)) is None
+    assert marks.ready_since(hub.comments(REPO, pr)) is None
     counted = events(store, "attempt.counted")
     assert len(counted) == 1 and counted[0][4]["counted"] is True and counted[0][4]["in_a_row"] == 1
     assert ("step.ended", "pr", "failed", "red") in [row[:4] for row in events(store, "step.ended")]
@@ -296,14 +296,14 @@ def test_green_but_behind_waits_for_the_line(tmp_path):
 # open: people, edits, time
 
 
-def test_a_person_s_comment_on_the_pull_request_turns_auto_merge_off_and_sends_the_ticket_to_the_brain(tmp_path):
+def test_a_person_s_comment_on_the_pull_request_leaves_the_line_and_sends_the_ticket_to_the_brain(tmp_path):
     hub, store, prs = world(tmp_path)
     pr = prs[10]
     hub.later(minutes=1)
     hub.note(pr, "Please do not merge yet, the rates change on Monday.", author="owner-x")
     done = run(hub, store, pr)
     assert done.outcome == "commented"
-    assert hub.pull(REPO, pr).auto_merge is None and marks.ready_since(hub.comments(REPO, pr)) is None
+    assert marks.ready_since(hub.comments(REPO, pr)) is None
     held, _ = ticket(hub)
     assert "needs-triage" in held.labels and not held.parked
     rows = events(store, "pr.commented")
@@ -337,7 +337,7 @@ def test_a_person_s_comment_on_the_parked_ticket_stops_the_merge_too(tmp_path):
     hub.later(minutes=1)
     hub.note(10, "Hold on, the zone list changed.", author="owner-x")
     assert run(hub, store, prs[10]).outcome == "unanswered"
-    assert hub.pull(REPO, prs[10]).auto_merge is None
+    assert marks.ready_since(hub.comments(REPO, prs[10])) is None
 
 
 def test_a_ticket_closed_while_its_pull_request_waits_takes_it_out_of_the_line(tmp_path):
@@ -345,7 +345,7 @@ def test_a_ticket_closed_while_its_pull_request_waits_takes_it_out_of_the_line(t
     hub.close(10, "not_planned")
     done = run(hub, store, prs[10])
     assert done.outcome == "withdrawn"
-    assert hub.pull(REPO, prs[10]).auto_merge is None and marks.ready_since(hub.comments(REPO, prs[10])) is None
+    assert marks.ready_since(hub.comments(REPO, prs[10])) is None
     assert ("step.ended", "pr", "stopped", "withdrawn") in [row[:4] for row in events(store, "step.ended")]
 
 
@@ -356,7 +356,7 @@ def test_a_ticket_edited_while_its_pull_request_waits_goes_back_to_ready_to_be_p
     done = run(hub, store, prs[10])
     assert done.outcome == "edited"
     held, _ = ticket(hub)
-    assert held.ready and not held.parked and hub.pull(REPO, prs[10]).auto_merge is None
+    assert held.ready and not held.parked and marks.ready_since(hub.comments(REPO, prs[10])) is None
 
 
 def test_open_past_its_bound_goes_to_the_brain(tmp_path):
@@ -365,7 +365,7 @@ def test_open_past_its_bound_goes_to_the_brain(tmp_path):
     done = run(hub, store, prs[10])
     assert done.outcome == "timeout"
     held, _ = ticket(hub)
-    assert "needs-triage" in held.labels and hub.pull(REPO, prs[10]).auto_merge is None
+    assert "needs-triage" in held.labels and marks.ready_since(hub.comments(REPO, prs[10])) is None
 
 
 def test_a_conflict_returns_the_ticket_to_ready_with_the_files_not_counted(tmp_path):
@@ -381,11 +381,12 @@ def test_a_conflict_returns_the_ticket_to_ready_with_the_files_not_counted(tmp_p
 
 def test_a_pull_request_with_no_ticket_leaves_the_line_on_red_and_touches_no_issue(tmp_path):
     hub, store, _ = world(tmp_path)
-    pr = hub.open_pull(body="A hand change", auto_merge="squash")
+    pr = hub.open_pull(body="A hand change")
+    hub.comment(REPO, pr, marks.ready_comment(None, hub.head(pr), hub.now))
     hub.checks_on(hub.head(pr), FAILED, failing=["t::x"])
     writes = len(hub.writes)
     assert run(hub, store, pr).outcome == "red"
-    assert hub.pull(REPO, pr).auto_merge is None and len(hub.writes) == writes
+    assert marks.ready_since(hub.comments(REPO, pr)) is None and len(hub.writes) == writes
 
 
 @pytest.mark.parametrize("event, expected", [
@@ -483,7 +484,7 @@ def test_a_ticket_edited_while_the_follow_acts_is_left_as_it_is_and_the_next_fol
     monkeypatch.setattr(park, "write_unchanged", edited_meanwhile)
     comments = len(hub.comments(REPO, 10))
     assert run(hub, store, pr).outcome == "raced"
-    assert len(hub.comments(REPO, 10)) == comments and hub.pull(REPO, pr).auto_merge == "merge"
+    assert len(hub.comments(REPO, 10)) == comments and marks.ready_since(hub.comments(REPO, pr)) is not None
     assert ticket(hub)[0].parked  # nothing moved: the next follow acts on the ticket as it is then
     assert run(hub, store, pr).outcome == "red"
 

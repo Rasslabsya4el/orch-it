@@ -120,8 +120,7 @@ def _to_follow(hub: PullHub, repo: str, base: str, owner: str) -> list[int]:
         if ref is not None and (ref.repo is None or ref.repo.lower() == repo.lower()):
             numbers.add(ref.number)
     for pull in hub.open_pulls(repo, base):
-        in_line = marks.ready_since(marks.of_layer(hub.pull_comments(repo, pull.number), owner)) is not None
-        if in_line or pull.auto_merge is not None:
+        if marks.ready_since(marks.of_layer(hub.pull_comments(repo, pull.number), owner)) is not None:
             numbers.add(pull.number)
     return sorted(numbers)
 

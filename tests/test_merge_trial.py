@@ -187,7 +187,7 @@ def test_rows_2_and_3_four_merge_in_order_each_after_one_up_to_date_run_and_the_
     assert row3["passed"], row3
     assert row3["line_result"] in (None, "left")  # the follow of a held member may take it out between two turns
     assert row3["ticket_ready"] and not row3["ticket_parked"] and row3["last_comment_names_the_file"]
-    assert row3["attempt_counted"] == [False] and row3["auto_merge"] is None
+    assert row3["attempt_counted"] == [False] and not row3["in_line"]
     assert len(row3["behind"]) == 3 and row3["merged_behind"] == row3["behind"]  # nobody behind it was held
     assert row3["pr"] not in world.ci.merged and world.trial.closed == [row3["pr"]]  # and it is closed after
 
@@ -228,7 +228,7 @@ def test_row_4_every_end_of_a_pull_request_moves_its_ticket_and_reads_back_from_
     assert (red["open"], red["ready"], red["follow"]) == (True, True, "red") and RED_TESTS in red["comment"]
     closed, said = row4["closed_unmerged"], row4["comment"]
     assert closed["needs_triage"] and not closed["ready"] and closed["pr_state"] == "closed"
-    assert said["follow"] == "commented" and said["auto_merge"] is None and said["needs_triage"]
+    assert said["follow"] == "commented" and not said["in_line"] and said["needs_triage"]
     assert said["pr_state"] == "open" and "pr.commented" in said["store"]
     assert {said["pr"], red["pr"]} <= set(world.trial.closed)  # the ones still open are closed at the end
 
@@ -320,13 +320,13 @@ def test_a_row_that_breaks_is_a_failed_row_the_next_rows_still_run_and_everythin
 
 def test_a_repo_the_trial_cannot_run_on_is_told_before_any_row_runs(world, tmp_path, capsys):
     def refuse():
-        raise merge_trial.TrialError("auto-merge is not allowed")
+        raise merge_trial.TrialError("the repo is not allowed")
 
     world.trial.preflight = refuse
     code = merge_trial.main(["--repo", REPO, "--base", "main", "--work-tree", str(tmp_path), "--rows", "2",
                              "--out", str(tmp_path / "n.json"), "--store", str(tmp_path / "s")],
                             world=lambda args: (world.trial, world.rows, world.clock, world.sleep))
-    assert code == 1 and "auto-merge is not allowed" in capsys.readouterr().out and not world.hub.pulls
+    assert code == 1 and "the repo is not allowed" in capsys.readouterr().out and not world.hub.pulls
 
 
 @pytest.mark.parametrize("args", [["--rows", "7"], ["--rows", "two"], ["--repo", "no-slash"]])
@@ -401,7 +401,7 @@ def test_a_workflow_that_cannot_be_disabled_is_said_and_the_row_goes_on(world):
 # --- the preflight, the cleanup and the restore of the real adapter ---------------------------------------------
 
 GOOD = {
-    f"api repos/{REPO}": json.dumps({"allow_auto_merge": True, "default_branch": "main", "private": False}),
+    f"api repos/{REPO}": json.dumps({"default_branch": "main", "private": False}),
     f"api repos/{REPO}/branches/trial-main": json.dumps({"protected": True}),
     f"api repos/{REPO}/actions/workflows/tests.yml": json.dumps({"id": 1, "path": ".github/workflows/tests.yml"}),
     f"api repos/{REPO}/branches/trial-main/protection": json.dumps({"required_status_checks": {
@@ -490,12 +490,6 @@ def test_a_base_without_branch_protection_or_with_protection_that_is_not_what_or
         else:
             with pytest.raises(merge_trial.TrialError, match=said):
                 trial.preflight()
-
-
-def test_a_repo_without_auto_merge_is_refused(tmp_path):
-    answers = {**GOOD, f"api repos/{REPO}": json.dumps({"allow_auto_merge": False, "default_branch": "main"})}
-    with pytest.raises(merge_trial.TrialError, match="auto-merge"):
-        real(tmp_path, answers).preflight()
 
 
 def test_the_default_branch_is_refused_as_the_base_unless_it_is_allowed(tmp_path):
