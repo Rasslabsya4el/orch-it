@@ -125,7 +125,8 @@ def _fired(hit: scanner.Hit) -> hook.Fired:
 
 def _refusal(hits: list[scanner.Hit]) -> str:
     lines = [language.text_or_refusal("push_refused_private")]
-    lines += [f"  {hit.commit[:12]} {hit.where} {_where(hit)} {hit.kind}{scanner.cited(hit.kind)}"
+    rule = scanner.coding_rule()  # read once for the report, not once per hit
+    lines += [f"  {hit.commit[:12]} {hit.where} {_where(hit)} {hit.kind}{scanner.cited(hit.kind, rule)}"
               for hit in hits[:SHOWN_HITS]]
     if len(hits) > SHOWN_HITS:
         lines.append(language.text_or_refusal("push_more", count=len(hits) - SHOWN_HITS))

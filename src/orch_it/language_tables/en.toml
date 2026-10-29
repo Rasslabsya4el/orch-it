@@ -51,6 +51,23 @@ push_refused_closing = "orch-it: push refused, a commit message holds a closing 
 push_closing_hit = '  {sha}, line {number}, "{text}", {hit}'
 push_closing_way = "write `Refs <URL>` or `Ticket: <URL>` in its place (amend or rebase) and push again"
 push_unreadable = "orch-it: push refused, {file}: {reason}"
+# the coding standard's rule, cited after each finding of a kind it judges (guards/scanner.py cited): its first sentence
+coding_rule = "A value that differs per repo, account, machine or OS is a setting with its default, never a literal in code, tests, rules or tickets."
+# the kinds the setup lacked (guards/values.py render_not_checked): `{items}` is one `{kind} ({reason})` per kind
+not_checked_line = "not checked: {items}"
+not_checked_item = "{kind} ({reason})"
+not_checked_not_set = "not set"
+not_checked_too_short = "too short to scan"
+# the refusal of an exceptions list that cannot be used (guards/exceptions.py): `{name}` is the entry's name, `{file}` the list's
+# path or the entry's file value, `{error}` the parser's or the regex's own words (de and ru leave them out)
+exc_not_toml = "{file}: not readable as TOML: {error}"
+exc_not_tables = "{file}: the entries are [[exception]] tables"
+exc_entry = "[[exception]] entry {number} (file {file})"
+exc_no_file = "{name}: no file: a glob or a repo path (or a list of them) is required"
+exc_no_pattern = "{name}: no pattern: a regex over the line is required"
+exc_kinds = "{name}: kinds: a non-empty list of {kinds} is required"
+exc_no_reason = "{name}: empty or missing reason: each entry says why it is allowed"
+exc_bad_pattern = "{name}: pattern does not compile: {error}"
 guard_refusal_way = "the guard reads the object, not the command; to stop an own process with its tree use `{python} -m orch_it stop <pid>`"
 guard_refused = "refused by the orch-it guard"
 guard_no_repo = "orch-it guard: no repo is known (the setting `repo` or a GitHub origin): {what} not written"

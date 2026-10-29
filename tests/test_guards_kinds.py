@@ -115,6 +115,56 @@ def test_os_only_name_in_a_markdown_file_is_not_one_os_call():
     assert found("docs/notes.md", "The call ctypes.windll is Windows only.\n") == []
 
 
+# the Windows-only process tools: taskkill, tskill, Stop-Process, wmic (CODING_STANDARDS.md kind 4)
+WINDOWS_PROCESS_TOOLS = ("taskkill", "tskill", "Stop-Process", "wmic")
+# each tool in three casings: Windows reads these names case-insensitively
+WINDOWS_PROCESS_CASINGS = [case(name) for name in WINDOWS_PROCESS_TOOLS for case in (str.upper, str.lower, str.capitalize)]
+
+WINDOWS_PROCESS_CALLS = [
+    'subprocess.run(["taskkill", "/F", "/PID", str(pid)])',
+    'subprocess.run(["tskill", str(pid)])',
+    'subprocess.run(["powershell", "-Command", "Stop-Process -Id " + str(pid)])',
+    'subprocess.run(["wmic", "process", "where", "ProcessId=" + str(pid), "delete"])',
+]
+
+
+@pytest.mark.parametrize("call", WINDOWS_PROCESS_CALLS)
+def test_unguarded_windows_process_tool_in_py_is_found_once(call):
+    text = f"import subprocess\n\n\ndef kill(pid):\n    {call}\n"
+    assert found("src/proc.py", text) == [("one_os_call", 5)]
+
+
+@pytest.mark.parametrize("call", WINDOWS_PROCESS_CALLS)
+def test_os_guarded_windows_process_tool_is_not_found(call):
+    text = (
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "\n"
+        "def kill(pid):\n"
+        '    if sys.platform != "win32":\n'
+        "        return\n"
+        f"    {call}\n"
+    )
+    assert found("src/proc.py", text) == []
+
+
+@pytest.mark.parametrize("name", WINDOWS_PROCESS_CASINGS)
+def test_windows_process_tool_in_any_casing_in_py_is_found_once(name):
+    text = f'import subprocess\n\n\ndef kill(pid):\n    subprocess.run(["{name}", str(pid)])\n'
+    assert found("src/proc.py", text) == [("one_os_call", 5)]
+
+
+def test_cross_os_process_kill_through_psutil_is_not_found():
+    text = "import psutil\n\n\ndef kill(pid):\n    psutil.Process(pid).kill()\n"
+    assert found("src/proc.py", text) == []
+
+
+@pytest.mark.parametrize("name", WINDOWS_PROCESS_TOOLS)
+def test_windows_process_tool_name_in_markdown_prose_is_not_one_os_call(name):
+    assert found("docs/notes.md", f"The stuck process is ended with {name} on Windows.\n") == []
+
+
 # (c) check_name_literal: a job name written as a string literal in a .py file
 
 def test_job_name_literal_in_py_is_found_once():
@@ -224,6 +274,12 @@ def test_ticket_bare_python_inside_a_fence_is_found_once():
 def test_ticket_one_os_name_is_found_once():
     text = "The fix calls ctypes.windll here.\n"
     assert [(f.kind, f.line, f.text) for f in find_in_ticket_text(text)] == [("one_os_call", 1, "ctypes.windll")]
+
+
+@pytest.mark.parametrize("name", WINDOWS_PROCESS_CASINGS)
+def test_ticket_windows_process_tool_name_is_found_once(name):
+    text = f"The stuck process is ended with {name} here.\n"
+    assert [(f.kind, f.line, f.text) for f in find_in_ticket_text(text)] == [("one_os_call", 1, name)]
 
 
 @pytest.mark.parametrize("line", ['Wait for the "alpha" check.', "Wait for the `alpha` check."])

@@ -50,6 +50,23 @@ push_refused_closing = "orch-it: push отклонён, сообщение ко�
 push_closing_hit = '  {sha}, строка {number}, "{text}", {hit}'
 push_closing_way = "напишите `Refs <URL>` или `Ticket: <URL>` на его месте (amend или rebase) и отправьте push снова"
 push_unreadable = "orch-it: push отклонён, {file}: {reason}"
+# правило стандарта кода, которое цитируется после каждой находки видов, которые оно судит (guards/scanner.py cited)
+coding_rule = "CODING_STANDARDS.md: значение, которое различается у репо, аккаунта, машины или ОС, — это настройка со значением по умолчанию, а не буквальное значение в коде, тестах, правилах или тикетах."
+# виды, которых не было в настройке (guards/values.py render_not_checked): `{items}` — по одному `{kind} ({reason})` на вид
+not_checked_line = "не проверено: {items}"
+not_checked_item = "{kind} ({reason})"
+not_checked_not_set = "не задано"
+not_checked_too_short = "слишком коротко для проверки"
+# отказ списка исключений, который нельзя использовать (guards/exceptions.py): `{name}` — имя записи, `{file}` — путь списка
+# или значение file записи; `{error}` — слова парсера или регулярного выражения (в ru их нет)
+exc_not_toml = "{file}: не читается как TOML"
+exc_not_tables = "{file}: записи — таблицы [[exception]]"
+exc_entry = "[[exception]], запись {number} (файл {file})"
+exc_no_file = "{name}: нет file: нужен glob или путь в репо (или список из них)"
+exc_no_pattern = "{name}: нет pattern: нужно регулярное выражение по строке"
+exc_kinds = "{name}: kinds: нужен непустой список из {kinds}"
+exc_no_reason = "{name}: reason пустой или отсутствует: каждая запись говорит, почему она разрешена"
+exc_bad_pattern = "{name}: шаблон не компилируется"
 guard_refusal_way = "guard смотрит на объект, а не на команду; чтобы остановить собственный процесс вместе с его деревом, используйте `{python} -m orch_it stop <pid>`"
 guard_refused = "отклонено guard-ом orch-it"
 guard_no_repo = "orch-it guard: репозиторий не известен (настройка `repo` или origin на GitHub), не записано: {what}"
