@@ -283,10 +283,10 @@ def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_do
 
 # --- the job bounds (#411 unit 4): 15 minutes per change, the night's bound from measured full runs ---
 
-PER_CHANGE_BOUND = 15
-NIGHT_BOUND = {"linux": 27, "windows": 59}  # ceil(17.4 x 1.5), ceil(39.3 x 1.5)
-MEASURED_MINUTES = {"linux": "17.4", "windows": "39.3"}  # the longest full run of each OS
-MEASURED_RUNS = ("40870600022", "40870569933")  # the two dispatched runs the minutes come from
+PER_CHANGE_BOUND = 9
+NIGHT_BOUND = {"linux": 16, "windows": 16}  # ceil(10.4 x 1.5): both jobs share it, the importer reads one setting
+MEASURED_MINUTES = {"linux": "10.4", "windows": "10.4"}  # the longest full job of either OS (622 s)
+MEASURED_RUNS = ("40946107649", "40932163943")  # the longest full run and the longest per-change run the minutes come from
 MEASURED_ON = "2026-10-29"
 
 
@@ -305,7 +305,7 @@ def timeout_of(text: str, job: str) -> tuple[str, list[str]]:
     return raw[at].removeprefix("    timeout-minutes: "), comment
 
 
-def test_each_job_keeps_the_per_change_bound_of_15_minutes_outside_the_night():
+def test_each_job_keeps_the_measured_per_change_bound_outside_the_night():
     text = WORKFLOW.read_text("utf-8")
     for job in ("linux", "windows"):
         value, _ = timeout_of(text, job)
