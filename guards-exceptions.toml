@@ -23,13 +23,13 @@ reason = "Follow-up: the merge-line tests, the fake GitHub and the import of its
 # ---- 6. A word that is also a workflow job name, used as a plain word ----------------------------------------
 
 [[exception]]
-file = ["src/orch_it/cli.py", "src/orch_it/guards/install.py", "src/orch_it/merge/commands.py", "src/orch_it/merge/marks.py", "src/orch_it/tickets/hook.py", "src/orch_it/tickets/model.py", "src/orch_it/tickets/queues.py"]
+file = ["src/orch_it/cli.py", "src/orch_it/guards/install.py", "src/orch_it/merge/commands.py", "src/orch_it/merge/follow.py", "src/orch_it/merge/marks.py", "src/orch_it/tickets/hook.py", "src/orch_it/tickets/model.py", "src/orch_it/tickets/queues.py"]
 pattern = '''["'`](check|follow|sweep|shape|update)["'`]'''
 kinds = ["check_name_literal"]
 reason = "The workflow files give the jobs short names that are also ordinary words; here the quoted word is a command name, an event step, a queue name, a table header, a dictionary key or a flag value, not the name of a GitHub check."
 
 [[exception]]
-file = ["tests/merge_trial.py", "tests/merge_trial_live_r4.py", "tests/test_cli_brain.py", "tests/test_cli_merge.py", "tests/test_closed_sets.py", "tests/test_follow_workflow.py", "tests/test_guards_install.py", "tests/test_guards_status.py", "tests/test_merge_line.py", "tests/test_merge_reconcile.py", "tests/test_merge_trial.py", "tests/test_merge_trial_live_r4.py", "tests/test_merge_trial_live_r5.py", "tests/test_skill_copies.py", "tests/test_skill_shadow.py", "tests/test_ticket_queues.py", "tests/test_tickets_hook.py"]
+file = ["tests/merge_trial.py", "tests/merge_trial_live_r4.py", "tests/test_cli_brain.py", "tests/test_cli_merge.py", "tests/test_closed_sets.py", "tests/test_follow_workflow.py", "tests/test_guards_install.py", "tests/test_guards_status.py", "tests/test_merge_follow_mark_only.py", "tests/test_merge_line.py", "tests/test_merge_reconcile.py", "tests/test_merge_trial.py", "tests/test_merge_trial_live_r4.py", "tests/test_merge_trial_live_r5.py", "tests/test_skill_copies.py", "tests/test_skill_shadow.py", "tests/test_ticket_queues.py", "tests/test_tickets_hook.py"]
 pattern = '''["'`](check|follow|sweep|shape|update)["'`]'''
 kinds = ["check_name_literal"]
 reason = "The workflow files give the jobs short names that are also ordinary words; here the quoted word is a command name, an event step, a queue name, a dictionary key or a flag value in a test of the code above, not the name of a GitHub check."
