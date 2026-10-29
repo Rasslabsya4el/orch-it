@@ -159,6 +159,57 @@ def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_do
     assert "ORCH_IT_REQUIRE_SSHD" not in windows
 
 
+# --- the job bounds (#411 unit 4): 15 minutes per change, the night's bound from measured full runs ---
+
+PER_CHANGE_BOUND = 15
+NIGHT_BOUND = {"linux": 27, "windows": 59}  # ceil(17.4 x 1.5), ceil(39.3 x 1.5)
+MEASURED_MINUTES = {"linux": "17.4", "windows": "39.3"}  # the longest full run of each OS
+MEASURED_RUNS = ("40870600022", "40870569933")  # the two dispatched runs the minutes come from
+MEASURED_ON = "2026-10-29"
+
+
+def timeout_of(text: str, job: str) -> tuple[str, list[str]]:
+    """The value of a job's `timeout-minutes`, and the comment lines right above it."""
+
+    raw = text.splitlines()
+    start = raw.index(f"  {job}:")
+    end = next((i for i in range(start + 1, len(raw)) if re.match(r"  \S", raw[i])), len(raw))
+    at = next(i for i in range(start + 1, end) if raw[i].startswith("    timeout-minutes: "))
+    comment = []
+    i = at - 1
+    while raw[i].strip().startswith("#"):
+        comment.insert(0, raw[i].strip())
+        i -= 1
+    return raw[at].removeprefix("    timeout-minutes: "), comment
+
+
+def test_each_job_keeps_the_per_change_bound_of_15_minutes_outside_the_night():
+    text = WORKFLOW.read_text("utf-8")
+    for job in ("linux", "windows"):
+        value, _ = timeout_of(text, job)
+        assert value.endswith(f"|| {PER_CHANGE_BOUND} }}}}"), (job, value)
+
+
+def test_each_job_gives_the_measured_night_bound_only_on_the_nightly_condition():
+    text = WORKFLOW.read_text("utf-8")
+    night = re.fullmatch(r"\$\{\{ (.*) \}\}", workflow_env()["NIGHTLY"]).group(1)
+    for job in ("linux", "windows"):
+        value, _ = timeout_of(text, job)
+        assert value == f"${{{{ ({night}) && {NIGHT_BOUND[job]} || {PER_CHANGE_BOUND} }}}}", (job, value)
+
+
+def test_each_night_bound_carries_its_measurement_and_margin_beside_it():
+    text = WORKFLOW.read_text("utf-8")
+    for job in ("linux", "windows"):
+        _, comment = timeout_of(text, job)
+        comment_text = "\n".join(comment)
+        assert "margin 1.5" in comment_text, job
+        assert MEASURED_MINUTES[job] in comment_text, job
+        assert str(NIGHT_BOUND[job]) in comment_text, job
+        assert all(run in comment_text for run in MEASURED_RUNS), job
+        assert MEASURED_ON in comment_text, job
+
+
 # --- the scan of a pull request's commits (#395 row 7) ---------------------------------------
 
 PRIVATE_DATA_STEP = "private data in the pull request's commits"
