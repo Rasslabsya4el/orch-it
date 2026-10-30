@@ -25,9 +25,14 @@ that has no line. One run, until the line is empty or `line_minutes` pass:
 With the setting `batch_size` over 1 and a `suite` given (#414 item 5), steps 2 and 3 are one pass for up to
 `batch_size` members instead of one pass each: the oldest ready members are combined on one branch from the base (each
 head merged in line order; a member that does not combine with the ones before it is left apart and goes in a batch of
-its own after), the required suite runs once on that tree through the place rule, and green lands them all by moving
-the base forward to the tested commit (the base's sha is the tested tree's, each pull request ends merged); red
-splits the batch in halves, each half is combined again from the base as it then is and checked, down to the one
+its own after), the required suite runs once on that tree through the place rule. The pass replaces no required check:
+the combined tree is a branch, and the line waits (every `poll_seconds`, at most `check_minutes`, by the clock) until
+every name of `required_checks` is green on that exact sha, whichever place posted it; only then does it move the base
+forward to the tested commit by one non-forced ref update (the base's sha is the tested tree's, each pull request ends
+merged), which the base's own protection accepts or refuses and the line never pushes around. A repo whose base
+protects nothing is held by this same wait and refusal. A name still not green when the wait ends (note `required
+checks not green on <sha>: <names>`) lands nothing and stops the run, the members stay for the next run; a name red
+splits the batch like a red test. A red test splits the batch in halves, each half is combined again from the base as it then is and checked, down to the one
 red pull request, which goes back to its ticket by the follow's red rule while the others land. A red whose every
 failing test also fails on main (an open red-on-main ticket covers them, and a run of those ids alone on the sha main had
 when the batch was made fails them all) is not a member's fault: the line stops there (note `main is red on <ids>`), the
@@ -52,13 +57,15 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.merge import batch, lock, marks, record, red_main
-from orch_it.merge.follow import FollowReport, follow, follow_conflict, follow_red
+from orch_it.merge.follow import SHORT_SHA, FollowReport, follow, follow_conflict, follow_red
+from orch_it.merge.hub import FAILED as CHECK_FAILED
+from orch_it.merge.hub import PASSED as CHECK_PASSED
 from orch_it.merge.hub import LandingRefused, Pull, PullHub
 from orch_it.merge.pr_open import refers_to
 from orch_it.merge.settings import MergeSettings, required_checks_now
+from orch_it.testruns.github_place import budget_poll
 from orch_it.tickets.park import ROLE
 
 # what the follow says of a member that is still in the line: the line goes on serving it (a
@@ -70,13 +77,9 @@ LAND_POLL_SECONDS, LAND_WAIT_SECONDS = 5, 60  # after a batch moved the base: Gi
 
 def poll_wait(hub: PullHub, settings: MergeSettings) -> float:
     """The wait before the line's next read of its head (#414 decision 9): `poll_seconds`, longer while the account's
-    request budget, as GitHub reports it now, is under the threshold. No reading keeps the interval."""
+    request budget, as GitHub reports it now, is under the threshold (`budget_poll`). No reading keeps the interval."""
 
-    left = hub.rate_limit()
-    if left is None:
-        return float(settings.poll_seconds)
-    remaining, limit = left
-    return github_budget.poll_interval(settings.poll_seconds, remaining, limit, github_budget.threshold())
+    return budget_poll(settings.poll_seconds, hub.rate_limit())
 
 
 class LineError(ValueError):
@@ -160,7 +163,7 @@ class _Line:
     ready_at: dict[int, datetime] = field(default_factory=dict)  # pr -> its ready time, as members() read it
     suite: batch.Suite | None = None  # the required suite on a commit; None: no batches
     batches_made: int = 0
-    held: bool = False  # main is red on every test a batch failed: the run stops, nothing is sent back
+    held: bool = False  # the run stops, nothing is sent back: main is red on every test a batch failed, or a name stays unposted
     refused: str | None = None  # the base's own reason for refusing a batch landing: the rest goes one by one
     notes: list[str] = field(default_factory=list)
 
@@ -245,8 +248,10 @@ class _Line:
             group = [m for m in group if m.pull.number not in made.gone]  # a rebuild serves only the stayers
             try:
                 if made.included:
-                    result = self.suite(made.tip)
-                    if result.outcome == batch.PASSED:
+                    result, by_check, unmet = self.tested(made)
+                    if unmet:
+                        self.hold(made, unmet)
+                    elif result.outcome == batch.PASSED:
                         if not self.land(made):
                             if self.refused:
                                 return  # the members stay in the line and go one by one
@@ -255,8 +260,9 @@ class _Line:
                                 return self.postpone(group, "starved")
                             continue
                     elif result.outcome == batch.FAILED and result.failing and len(made.included) == 1:
-                        self.red(made.included[0], list(result.failing))
-                    elif result.outcome == batch.FAILED and result.failing and self.red_on_main(made, result.failing):
+                        self.red(made.included[0], list(result.failing), by_check)
+                    elif (result.outcome == batch.FAILED and result.failing and not by_check
+                          and self.red_on_main(made, result.failing)):
                         pass  # main itself is red on all of it: nothing to split, nothing to send back
                     elif result.outcome == batch.FAILED and result.failing:
                         half = len(made.included) // 2
@@ -267,6 +273,40 @@ class _Line:
             finally:
                 self.hub.end_batch(self.repo, made.branch)
             group = made.apart
+
+    def tested(self, made: _Batch) -> tuple[batch.SuiteResult, bool, tuple[str, ...]]:
+        """What the combined tree earned: the suite's result, and when the suite passed the required names on its sha
+        too. `(result, by_check, unmet)`: a name red turns a pass into a failure naming the names (`by_check`); names
+        still not green when the wait ends are `unmet` (the batch lands nothing)."""
+
+        result = self.suite(made.tip)
+        if result.outcome != batch.PASSED:
+            return result, False, ()
+        red, unmet = self.wait_for_names(made.tip)
+        if red:
+            return batch.SuiteResult(batch.FAILED, red), True, ()
+        return result, False, unmet
+
+    def wait_for_names(self, sha: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Poll the checks of `sha` (`budget_poll` through `poll_wait`, never a bare sleep) until every name of
+        `required` is green: `((), ())`. A name red ends the wait at once: `(red names, ())`. At `check_minutes` (or
+        the run's bound) the names not green: `((), those)`."""
+
+        ends = min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
+        while True:
+            states = {check.name: check.state for check in self.hub.checks(self.repo, sha)}
+            red = tuple(name for name in self.required if states.get(name) == CHECK_FAILED)
+            unmet = tuple(name for name in self.required if states.get(name) != CHECK_PASSED)
+            if red or not unmet or self.clock() >= ends:
+                return red, unmet if not red else ()
+            self.sleep(poll_wait(self.hub, self.settings))
+
+    def hold(self, made: _Batch, unmet: tuple[str, ...]) -> None:
+        """A required name not green when the wait ended: nothing lands, the run stops, no member is sent back."""
+
+        self.held = True
+        self.notes.append(f"required checks not green on {made.tip[:SHORT_SHA]}: {', '.join(unmet)}")
+        self.postpone(made.included, "bound", "checks_missing")
 
     def red_on_main(self, made: _Batch, failing: tuple[str, ...]) -> bool:
         """Whether every failing id of `made` is red on main too: an open red-on-main ticket covers them all, and a
@@ -362,8 +402,12 @@ class _Line:
                 break
         return merged, waiting
 
-    def red(self, member: _Member, failing: list[str]) -> None:
-        done = follow_red(self.hub, self.store, self.repo, member.pull.number, ", ".join(self.required), failing,
+    def red(self, member: _Member, failing: list[str], by_check: bool = False) -> None:
+        """The member found red alone goes back by the follow's red rule; `failing` are test ids, or (`by_check`) the
+        required check names that were red on its tree."""
+
+        names = ", ".join(failing if by_check else self.required)
+        done = follow_red(self.hub, self.store, self.repo, member.pull.number, names, failing,
                           settings=self.settings, now=self.clock(), role=self.role, owner=self.owner)
         if done.outcome == "raced":
             self.for_next_run.add(member.pull.number)

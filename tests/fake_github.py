@@ -266,6 +266,10 @@ class FakeGitHub(FakeHub):
         main = self.branches[base]
         if branch is None or self.branches[branch][:len(main)] != main:
             return False
+        held = {name for name, check in self.check_runs.get(sha, {}).items() if check.state == PASSED}
+        if self.required_by_base.get(base, set()) - held:  # protection with admins included: a name not green refuses
+            raise LandingRefused("Required status checks are expected: "
+                                 + ", ".join(sorted(self.required_by_base[base] - held)))
         main[:] = self.branches[branch]
         self.advances.append(sha)
         for number in self.batch_members[branch]:

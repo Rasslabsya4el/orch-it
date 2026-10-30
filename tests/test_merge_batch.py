@@ -7,9 +7,9 @@ import contextlib
 import json
 
 import pytest
-from fake_github import REPO
+from fake_github import FAILED, PASSED, PENDING, REPO, REQUIRED
 from line_world import line_world
-from required_names import LINUX_OS
+from required_names import LINUX_CHECK, LINUX_OS, WINDOWS_CHECK
 from scan_setup import INVENTED
 
 from orch_it import tickets
@@ -39,12 +39,18 @@ def case(test_id, failed):
 class FixturePlace:
     """A place with no process: the tree it is given names the batch commit to test (`tip.txt`); the suite is red,
     naming `failing_id(pr)`, for each member of that commit in `red`. Each pass takes `PASS_MINUTES` of the hub's
-    clock. Every tree also fails the ids of `main_red` (main itself is red on them). A run given ids runs only those."""
+    clock. Every tree also fails the ids of `main_red` (main itself is red on them). A run given ids runs only those.
+    The pass leaves each required check name in `posted` on the tree's sha (as whichever place ran it would), in the
+    state `PASSED`, or `PENDING` for a name in `pending` (CI turns it green after its minutes), or `FAILED` for a name in
+    `red_names` when the tree holds one of the pull requests it maps to."""
 
     id, os = "own", LINUX_OS
 
     def __init__(self, hub, red, main_red=()):
         self.hub, self.red, self.main_red = hub, red, list(main_red)
+        self.posted = list(REQUIRED)
+        self.pending = set()
+        self.red_names = {}  # check name -> the pull requests whose presence in a tree makes it red
         self.tested = []  # (tip, outcome) per pass, in order
         self.id_runs = []  # (tip, the ids asked) per pass that was given ids
         self.during = []  # callables run while a pass runs (the world moves under it)
@@ -59,6 +65,11 @@ class FixturePlace:
             self.id_runs.append((tip, list(request.ids)))
             failing = [i for i in request.ids if i in red]
             cases = "".join(case(i, i in failing) for i in request.ids)
+        if request.ids is None:
+            held = set(self.hub.members_of(tip))
+            for name in self.posted:
+                state = FAILED if held & self.red_names.get(name, set()) else PENDING if name in self.pending else PASSED
+                self.hub.checks_on(tip, state, names=(name,))
         report = scratch / "junit.xml"
         report.write_text(f"<testsuites><testsuite name='pytest'>{cases}</testsuite></testsuites>", "utf-8")
         self.tested.append((tip, "failed" if failing else "passed"))
@@ -403,3 +414,104 @@ def test_a_checkout_prunes_the_work_tree_a_dead_line_left_behind(tmp_path):
     with git_checkout(line_tree)(batch):
         pass
     assert len(git_in(line_tree, "worktree", "list").splitlines()) == 1
+
+
+# the required checks gate a landing (#414 brain answer 2): the pass replaces no required check
+
+def unprotected(world):
+    """A base that protects nothing (rule 7): only the line holds the gate."""
+
+    world[0].required_by_base = {}
+
+
+def main_untouched(hub):
+    return hub.advances == [] and hub.branches["main"] == ["m0"]
+
+
+@pytest.mark.parametrize("protected", [True, False])
+def test_a_required_name_nobody_posted_on_the_tested_sha_merges_nothing_and_main_is_untouched(tmp_path, protected):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    if not protected:
+        unprotected(world)
+    suite, place = make_suite(world, tmp_path)
+    place.posted = [LINUX_CHECK]  # a pass that ran only the suite: the other name stays unposted
+    done = line(world, tmp_path, suite)
+    assert main_untouched(hub) and ci.merged == [] and passes(store) == 1
+    assert all(call[0] != "advance_base" for call in hub.calls)  # the line does not even ask for the update
+    assert [(s.pr, s.result, s.detail) for s in done.served] == [(prs[n], "bound", "checks_missing")
+                                                                 for n in (10, 11, 12, 13)]
+    assert done.reason == "next_run" and len(done.notes) == 1 and WINDOWS_CHECK in done.notes[0]
+    assert LINUX_CHECK not in done.notes[0]
+    assert all(hub.pull(REPO, pr).state == "open" for pr in prs.values())
+
+
+def test_the_wait_for_the_names_ends_on_the_clock_at_check_minutes_and_names_the_missing_check(tmp_path):
+    world = line_world(tmp_path, tickets=(10,))
+    hub, store, prs, ci = world
+    suite, place = make_suite(world, tmp_path)
+    place.posted = []
+    pass_ended = []
+    place.during.append(lambda: pass_ended.append(hub.now))
+    done = line(world, tmp_path, suite, check_minutes=2, poll_seconds=30)
+    assert main_untouched(hub) and done.merged == 0 and done.reason == "next_run"
+    waited = (hub.now - pass_ended[0]).total_seconds()
+    assert 120 <= waited <= 120 + 30  # the bound on the clock, not a count of polls
+    assert LINUX_CHECK in done.notes[0] and WINDOWS_CHECK in done.notes[0]
+
+
+def test_names_still_pending_when_the_pass_ends_are_waited_for_and_main_moves_to_that_sha_once_all_are_green(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    suite, place = make_suite(world, tmp_path)
+    place.pending = {LINUX_CHECK, WINDOWS_CHECK}  # posted pending: CI ends them after its minutes
+    before = hub.now
+    done = line(world, tmp_path, suite)
+    tip = hub.branches["main"][-1]
+    assert passes(store) == 1 and hub.advances == [tip] and ci.merged == [prs[n] for n in (10, 11, 12, 13)]
+    assert {name: c.state for name, c in hub.check_runs[tip].items()} == {name: PASSED for name in REQUIRED}
+    assert (hub.now - before).total_seconds() > PASS_MINUTES * 60 and done.reason == "empty"  # it polled past the pass
+
+
+@pytest.mark.parametrize("protected", [True, False])
+def test_a_required_name_red_on_the_sha_of_a_lone_member_merges_nothing_and_sends_that_member_back(tmp_path, protected):
+    world = line_world(tmp_path, tickets=(10,))
+    hub, store, prs, ci = world
+    if not protected:
+        unprotected(world)
+    suite, place = make_suite(world, tmp_path)
+    place.red_names = {WINDOWS_CHECK: {prs[10]}}
+    done = line(world, tmp_path, suite)
+    assert main_untouched(hub) and ci.merged == [] and passes(store) == 1
+    assert [(s.pr, s.result) for s in done.served] == [(prs[10], "left")]
+    body = hub.comments(REPO, 10)[-1].body
+    assert WINDOWS_CHECK in body
+    issue = hub.issues[(REPO, 10)]
+    assert tickets.parse(issue.body, labels=issue.labels).ready
+
+
+@pytest.mark.parametrize("protected", [True, False])
+def test_a_name_red_for_one_member_of_four_splits_the_batch_and_only_green_shas_land(tmp_path, protected):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    if not protected:
+        unprotected(world)
+    suite, place = make_suite(world, tmp_path)
+    place.red_names = {WINDOWS_CHECK: {prs[12]}}
+    done = line(world, tmp_path, suite)
+    assert 1 < passes(store) <= 5
+    assert ci.merged == [prs[10], prs[11], prs[13]] and hub.pull(REPO, prs[12]).state == "open"
+    assert sorted((s.pr, s.result) for s in done.served) == sorted([(prs[n], "merged") for n in (10, 11, 13)]
+                                                                   + [(prs[12], "left")])
+    for tip in hub.advances:  # every landing had every required name green on its exact sha
+        assert {name: c.state for name, c in hub.check_runs[tip].items()} == {name: PASSED for name in REQUIRED}
+
+
+def test_the_bases_own_protection_still_decides_a_name_the_line_does_not_require(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    hub.required_by_base = {"main": {*REQUIRED, "scan-of-another-kind"}}  # protection wants one more name
+    suite, place = make_suite(world, tmp_path)
+    done = line(world, tmp_path, suite)
+    assert len(done.notes) == 1 and done.notes[0].startswith("batch landing refused:")
+    assert [c for c in hub.calls if c[0] == "advance_base"] and hub.advances == []  # the line asked, GitHub refused
