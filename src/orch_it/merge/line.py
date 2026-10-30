@@ -29,12 +29,16 @@ its own after), the required suite runs once on that tree through the place rule
 the combined tree is a branch, and the line waits (every `poll_seconds`, at most `check_minutes`, by the clock) until
 every name of `required_checks` is green on that exact sha, whichever place posted it; only then does it move the base
 forward to the tested commit by one non-forced ref update (the base's sha is the tested tree's, each pull request ends
-merged), which the base's own protection accepts or refuses and the line never pushes around. Where GitHub's runs would not start (Actions off, the account's minutes spent, a queue past its bound) and the suite
-passed at another place, the line posts PASSED for each required name that run covered (the test jobs on its OS) and
-nobody posted on that sha; a name it did not cover (a scan, a test job of another OS) stays unposted and holds the
-batch, as does any name nobody posted with GitHub on. A repo whose base
-protects nothing is held by this same wait and refusal: the line alone holds the required checks. A name still not green when the wait ends (note `required
-checks not green on <sha>: <names>`) lands nothing and stops the run: every member not landed stays for the next run.
+merged), which the base's own protection accepts or refuses and the line never pushes around.
+A suite that passed at a place other than GitHub (whatever the cause: Actions off, minutes spent, a queue past its
+bound, a private repo with nothing protected, or simply the place rule choosing a machine) speaks for the required names
+its run covered (the test jobs on its OS and the names tied to no OS): the line posts PASSED for each of those nobody
+posted on the sha. A name it did not cover (a test job of another OS, a name the workflow cannot place) stays unposted
+and holds the batch, as does any name nobody posted. A suite that passed at GitHub posts nothing (GitHub posts its own
+check runs), nor does a failed one, nor the rerun of placeholder tests (a subset of the suite).
+A repo whose base protects nothing is held by this same wait and refusal: the line alone holds the required checks. A
+name still not green when the wait ends (note `required checks not green on <sha>: <names>`) lands nothing and stops
+the run: every member not landed stays for the next run.
 A red test or a red required name splits the batch in halves, each half is combined again from the base as it then is
 and checked, down to the one red pull request, which goes back to its ticket by the follow's red rule while the others
 land. A red whose every
@@ -76,7 +80,6 @@ from orch_it.merge.hub import LandingRefused, Pull, PullHub
 from orch_it.merge.pr_open import refers_to
 from orch_it.merge.settings import MergeSettings, required_checks_now
 from orch_it.testruns.github_place import budget_poll
-from orch_it.testruns.places import RUNS_NOT_STARTING
 from orch_it.tickets.park import ROLE
 
 # the description of a required name the line posts after a suite that passed at a place other than GitHub's
@@ -301,7 +304,7 @@ class _Line:
         result = self.suite(made.tip)
         if result.outcome != batch.PASSED:
             return result, False, ()
-        if result.github_out in RUNS_NOT_STARTING:
+        if result.covered:  # the pass ran at a place other than GitHub: no workflow will post the names it covered
             self.post_missing(made.tip, result.covered)
         red, unmet = self.wait_for_names(made.tip)
         if red:
@@ -309,8 +312,9 @@ class _Line:
         return result, False, unmet
 
     def post_missing(self, sha: str, covered: tuple[str, ...]) -> None:
-        """GitHub's runs would not start (Actions off, minutes spent, a queue past its bound), so the suite that just
-        passed ran at another place and no workflow will post the required names. The pass speaks for the names its run
+        """The suite that just passed ran at a place other than GitHub (`covered` is empty after a pass at GitHub), so no
+        workflow will post the required names, whatever the cause (GitHub out, a repo with nothing protected, or the place
+        rule choosing a machine). The pass speaks for the names its run
         covered (`covered`: the jobs on the OS it ran on, and the OS-free names, tied to no OS, which run where the suite
         runs): the line posts PASSED for each of those nobody posted on `sha` (a name some place posted, red or pending,
         is left as it is). A required name of another OS never gets a post no run covered: it stays unposted and holds

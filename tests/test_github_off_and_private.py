@@ -206,7 +206,8 @@ def batch_world(tmp_path, cause, *, tickets=(10, 11, 12, 13), required=(LINUX_CH
     suite = place_rule_suite(store, REPO, settings, checkout,
                              places={"own": place, "github": GithubPlace(REPO, store, settings, gh=actions,
                                                                          oses=(LINUX_OS,))})
-    return SimpleNamespace(world=world, suite=suite, place=place, actions=actions, required=tuple(required))
+    return SimpleNamespace(world=world, suite=suite, place=place, actions=actions, required=tuple(required),
+                           checkout=checkout)
 
 
 def line(w, tmp_path, **settings):
@@ -262,16 +263,18 @@ def test_the_names_of_a_workflow_that_run_on_an_os_are_the_checks_a_place_of_tha
     assert checks_on_os(text, required, None) == () and checks_on_os("", required, LINUX_OS) == ()
 
 
-def test_github_on_and_the_pass_posts_no_name_merges_nothing_as_before(tmp_path):
-    w = batch_world(tmp_path, "actions_off", required=(LINUX_CHECK, WINDOWS_CHECK))
+def test_github_on_and_a_pass_at_own_posts_its_covered_name_and_the_other_os_holds_the_batch(tmp_path):
+    w = batch_world(tmp_path, "actions_off", tickets=(10,), required=(LINUX_CHECK, WINDOWS_CHECK))
     w.actions.enabled = True  # Actions is on and the github place is offered, but the suite ran at own
     hub, store, prs, ci = w.world
     w.place.id = "own"
     seed(store, "own", 5.0)
-    seed(store, "github", 9.0)  # own measured faster: github is not chosen, names are GitHub's to post
+    seed(store, "github", 9.0)  # own measured faster: github is not chosen
     done = line(w, tmp_path)
+    tip = w.place.tested[0][0]
+    assert {c.name: c.state for c in hub.checks(REPO, tip)} == {LINUX_CHECK: PASSED}
     assert ci.merged == [] and hub.advances == [] and done.reason == "next_run"
-    assert hub.checks(REPO, hub.branches["main"][-1]) == []
+    assert done.notes == (f"required checks not green on {tip[:SHORT_SHA]}: {WINDOWS_CHECK}",)
 
 
 def test_the_line_posts_only_the_names_nobody_posted(tmp_path):

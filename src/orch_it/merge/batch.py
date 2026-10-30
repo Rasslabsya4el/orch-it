@@ -21,7 +21,6 @@ from orch_it.events.store import Store
 from orch_it.merge import git as merge_git
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.github_place import checks_on_os, os_free_checks, workflow_text_of
-from orch_it.testruns.places import RUNS_NOT_STARTING
 from orch_it.testruns.runner import run_tests
 from orch_it.tickets.park import ROLE
 
@@ -49,8 +48,10 @@ class SuiteResult:
     outcome: str  # PASSED, FAILED or NO_RESULT
     failing: tuple[str, ...] = ()  # the ids of the failing tests, when FAILED
     github_out: str | None = None  # why GitHub's runs would not start (`places.RUNS_NOT_STARTING`), when the run went elsewhere
-    covered: tuple[str, ...] = ()  # the required check names the passed run covers, set when GitHub is out: the jobs of
-    # the tree's `tests` workflow that run on the OS the run went on, and the OS-free names (no job of the workflow)
+    covered: tuple[str, ...] = ()  # the required check names the passed run covers, set when the whole suite ran at a
+    # place other than GitHub (a run of some ids, or the rerun of placeholder tests, is a subset: it covers none): the
+    # jobs of the tree's `tests` workflow that run on the OS the run went on, and the OS-free names (no job of the
+    # workflow); empty after a pass at GitHub, whose own check runs speak for the names
 
 
 class Suite(Protocol):
@@ -76,7 +77,7 @@ def place_rule_suite(store: Store, repo: str, settings: TestSettings, checkout: 
             done = run_tests(store, work_tree=tree, repo=repo, settings=settings, role=role, places=places,
                              ids_file=ids_file)
             covered = ()
-            if done.outcome == PASSED and done.github_out in RUNS_NOT_STARTING:
+            if done.outcome == PASSED and done.place != "github" and not done.placeholder_tests and not only:
                 text = workflow_text_of(tree)  # a pass speaks for the OS-bound names of its own OS and the OS-free ones
                 covered = (*checks_on_os(text, settings.required_checks, done.run_os),
                            *os_free_checks(text, settings.required_checks))
