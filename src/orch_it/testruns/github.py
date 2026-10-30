@@ -20,6 +20,14 @@ like any other report; the job's GitHub conclusion decides the outcome:
 - anything else (`neutral`, `stale`, `startup_failure`, `action_required`): no_result
   `summary_missing`.
 
+The foreign jobs (the setting `github_foreign_jobs`, default in `defaults.json`, read by `config.foreign_jobs`) are written
+as a `foreign_run` pair (the step id `foreign_run`, so no reader of `test_run` takes them), with no queue wait, no
+`test.result` rows, no JUnit download and no `job_missing` pair: they are not required. A foreign job still running (no
+conclusion yet) is skipped until it ends. Its outcome comes from its conclusion alone: `success` passed, `failure` failed,
+`timed_out` or a cancel at its bound no_result `cut`, another `cancelled` stopped, anything else no_result
+`summary_missing`. The started detail of every pair names its job (`job`) and the whole-minute bound the run had
+(`job_bound_minutes`: the nightly bound for a `schedule` or `workflow_dispatch` run, else the per-change one).
+
 A completed run with no job of a required name in any attempt up to its latest gets, for that
 name, a `job_missing` pair, or, when the run was cancelled, a `stopped` pair with the run's
 reason. A run still in progress is left for the next import. In the `newest` mode (one unpaginated
@@ -57,7 +65,7 @@ from orch_it.events.ids import import_id
 from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns import outcome
-from orch_it.testruns.config import required_checks
+from orch_it.testruns.config import foreign_jobs, required_checks
 
 SOURCE = "github"
 WORKFLOW_FILE = "tests.yml"
@@ -67,6 +75,8 @@ NEWEST_RUNS_SETTING = "github_live_newest_runs"  # how many of the newest runs t
 DEFAULT_NEWEST_RUNS = 20
 MAX_PER_PAGE = 100  # GitHub's largest page: an unpaginated list of more runs would silently return 100
 TEST_STEP = "pytest"  # the step of a job that runs the tests
+TEST_RUN_STEP = "test_run"  # the step id of a required job's run: the place rule reads it
+FOREIGN_STEP = "foreign_run"  # the step id of a foreign job's run: no reader of `test_run` sees it
 REPORT_FILE = "junit.xml"
 NIGHTLY_EVENTS = ("schedule", "workflow_dispatch")
 API_TIMEOUT_S = 120
@@ -179,6 +189,7 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
         _check_newest(newest, "newest")
     config = settings.load()
     required = list(required_checks(config, repo))
+    foreign = list(foreign_jobs(config, repo))
     job_bound = _job_timeout_minutes(config)
 
     every_run = _items(gh(_list_runs_args(repo, floor, newest)), "workflow_runs")
@@ -190,7 +201,8 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
                   key=lambda r: (_created(r), r["id"]))
     report = ImportReport(runs_read=len(runs))
     stored = _stored_ends(store, repo)
-    importer = _Importer(store, repo, gh, required, job_bound, every_run, now, report, workflow_text=workflow_text)
+    importer = _Importer(store, repo, gh, required, foreign, job_bound, every_run, now, report,
+                         workflow_text=workflow_text)
     with store.writer() as writer:
         for run in runs:
             if run.get("status") != "completed":
@@ -211,15 +223,16 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
 
 
 def import_one_run(store: Store, repo: str, run_id: int, *, gh: Gh | None = None, now: datetime | None = None,
-                   required: tuple[str, ...] | None = None, keep: Path | None = None,
-                   timed: bool = True, workflow_text: str = "") -> ImportReport:
+                   required: tuple[str, ...] | None = None, foreign: tuple[str, ...] | None = None,
+                   keep: Path | None = None, timed: bool = True, workflow_text: str = "") -> ImportReport:
     """Write the events of the one run `run_id` of `repo`, whatever its own status says (#414 decision 11: a run's
     own status can stay not-completed long after every job has ended; the caller has settled on the jobs). The
     events are the ones `import_github` writes for a completed run, with the same ids. `required`: the check names
     (default: the setting `required_checks`). `keep`: a folder that gets a copy of each job's JUnit report, named by
     its run, job and attempt. `timed` False: the jobs' end events carry no start or run minutes (the caller keeps
     the run's own time, so the rule reads one time per run). `workflow_text`: the `tests` workflow file's text, whose
-    `timeout-minutes` bound each job (empty: the setting only). A `gh` failure raises `GithubError`."""
+    `timeout-minutes` bound each job (empty: the setting only). `foreign`: the foreign job names (default: the setting
+    `github_foreign_jobs`). A `gh` failure raises `GithubError`."""
 
     gh = gh or run_gh
     if not schema.is_repo(repo):
@@ -229,6 +242,7 @@ def import_one_run(store: Store, repo: str, run_id: int, *, gh: Gh | None = None
         raise GithubError("bad_now", str(now))
     config = settings.load()
     names = list(required if required is not None else required_checks(config, repo))
+    foreign_names = list(foreign if foreign is not None else foreign_jobs(config, repo))
     found = json_values(gh(["api", f"repos/{repo}/actions/runs/{run_id}"]))
     if len(found) != 1 or not isinstance(found[0], dict):
         raise GithubError("gh_bad_output", f"run {run_id} is no object")
@@ -237,8 +251,8 @@ def import_one_run(store: Store, repo: str, run_id: int, *, gh: Gh | None = None
     if _moment(run.get("created_at")) is None:
         raise GithubError("gh_bad_output", f"run {run['id']} has no created_at")
     report = ImportReport(runs_read=1)
-    importer = _Importer(store, repo, gh, names, _job_timeout_minutes(config), [run], now, report, keep, timed,
-                         workflow_text)
+    importer = _Importer(store, repo, gh, names, foreign_names, _job_timeout_minutes(config), [run], now, report,
+                         keep, timed, workflow_text)
     with store.writer() as writer:
         importer.import_run(run, writer)
     return report
@@ -345,6 +359,17 @@ def job_bound_of(bounds: dict[str, JobBound], name: str, event: str | None, fall
     if event == "workflow_dispatch":
         return min(bound)
     return bound.per_change
+
+
+def started_bound_of(bounds: dict[str, JobBound], name: str, event: str | None, fallback: float) -> float:
+    """The bound a job's started detail holds (`job_bound_minutes`): the nightly one for a `schedule` or a
+    `workflow_dispatch` run, the per-change one for any other event, `fallback` when the workflow gives the job none.
+    The cut reading is `job_bound_of`, not this."""
+
+    bound = bounds.get(name)
+    if bound is None:
+        return fallback
+    return bound.nightly if event in NIGHTLY_EVENTS else bound.per_change
 
 
 def _unquote(text: str) -> str:
@@ -512,12 +537,14 @@ def _facts(run: dict) -> _RunFacts:
 
 @dataclass
 class _Target:
-    """One test run to write: a real job (`job` set) or a required job the run lacks."""
+    """One test run to write: a real job (`job` set) or a required job the run lacks. `step`: `test_run` for a
+    required job, `foreign_run` for a foreign one."""
 
     key: str  # `<run id>/<job id or job name>/<attempt>`
     name: str
     attempt: int
     job: dict | None
+    step: str = TEST_RUN_STEP
 
     @property
     def run(self) -> str:
@@ -531,10 +558,11 @@ class _Target:
 
 
 class _Importer:
-    def __init__(self, store, repo, gh, required, job_bound, every_run, now, report, keep=None, timed=True,
+    def __init__(self, store, repo, gh, required, foreign, job_bound, every_run, now, report, keep=None, timed=True,
                  workflow_text=""):
         self.store, self.repo, self.gh, self.keep, self.timed = store, repo, gh, keep, timed
         self.required, self.job_bound, self.now, self.report = required, job_bound, now, report
+        self.foreign = foreign  # the foreign jobs, imported beside the required ones, never counted as them
         self.bounds = workflow_bounds(workflow_text)  # each job's own bound; `job_bound` only where it has none
         self.budgeted: set[int] = set()  # runs whose Actions budget reading is among the events built
         self.facts_of_run = {run["id"]: _facts(run) for run in every_run}
@@ -547,22 +575,32 @@ class _Importer:
         targets, present = [], set()
         for job in jobs:
             name = job.get("name")
-            if not isinstance(name, str) or name.strip() not in self.required:
+            if not isinstance(name, str):
                 continue
-            name, job_attempt = name.strip(), _attempt(job)
+            name = name.strip()
+            if name in self.required:
+                step = TEST_RUN_STEP
+            elif name in self.foreign:
+                if job.get("conclusion") is None:  # still running: its end is written by a later import
+                    continue
+                step = FOREIGN_STEP
+            else:
+                continue
+            job_attempt = _attempt(job)
             job_id = _need_id(job, "job")
             _objects(job.get("steps"), "steps")
-            if job_attempt <= attempt:
+            if step == TEST_RUN_STEP and job_attempt <= attempt:
                 present.add(name)
             if job.get("conclusion") != "skipped":
-                targets.append(_Target(f"{run_id}/{job_id}/{job_attempt}", name, job_attempt, job))
+                targets.append(_Target(f"{run_id}/{job_id}/{job_attempt}", name, job_attempt, job, step))
         targets += [_Target(f"{run_id}/{name}/{attempt}", name, attempt, None)
                     for name in self.required if name not in present]
 
         stored = self.store.existing_ids([i for t in targets for i in t.known_ids()])
         pending = []
         for target in targets:
-            self.report.jobs += 1
+            if target.step == TEST_RUN_STEP:  # the report's jobs are the required ones, as before
+                self.report.jobs += 1
             if target.id("step.ended") in stored:
                 self.report.already_stored += sum(i in stored for i in target.known_ids())
             else:
@@ -639,6 +677,7 @@ class _Importer:
     def _target_events(self, run: dict, target: _Target, listed: set, billed: dict) -> list[dict]:
         job = target.job
         created = _moment(run.get("created_at"))
+        bound = math.ceil(started_bound_of(self.bounds, target.name, run.get("event"), self.job_bound))  # whole minutes
         if job is None:  # a required job the run never had
             if run.get("conclusion") == "cancelled":
                 end = outcome.RunEnd("stopped", self._superseded_reason(run), (), False)
@@ -653,10 +692,14 @@ class _Importer:
             job_created, job_started = _moment(job.get("created_at")), _moment(job.get("started_at"))
             job_ended = _moment(job.get("completed_at"))
             hit_bound = self._ran_to_the_bound(run, target.name, job, job_started, job_ended)
-            end, found, reading = self._judge(run, target, listed, hit_bound or job.get("conclusion") == "timed_out")
-            if not found:
-                self.report.reports_missing += 1
-            end = self._by_conclusion(run, job, end, hit_bound)
+            if target.step == FOREIGN_STEP:  # no report is downloaded for a foreign job: its conclusion decides
+                end, reading = self._foreign_end(run, job, hit_bound), None
+            else:
+                end, found, reading = self._judge(run, target, listed,
+                                                  hit_bound or job.get("conclusion") == "timed_out")
+                if not found:
+                    self.report.reports_missing += 1
+                end = self._by_conclusion(run, job, end, hit_bound)
             started_at = job_started or job_created or created
             ended_at = job_ended or _moment(run.get("updated_at")) or started_at
             run_os = os_of(job)
@@ -675,29 +718,32 @@ class _Importer:
         envelope = {"repo": self.repo, "ticket": None, "role": "github", "session": None,
                     "parent_session": None, "run": target.run, "note": None}
         events = [self._event("step.started", target.id("step.started"), started_at,
-                              envelope | {"step": "test_run"}, {
+                              envelope | {"step": target.step}, {
                                   "place": "github", "chosen": "github", "reason": None,
                                   "run_os": run_os, "commit": run.get("head_sha"),
                                   "branch": run.get("head_branch"), "pr": pr,
                                   "selection": "nightly" if event_name in NIGHTLY_EVENTS else "full",
-                                  "event": event_name})]
-        if wait is not None:
+                                  "event": event_name, "job": target.name, "job_bound_minutes": bound})]
+        # a foreign job's queue wait and cases stay out of the `wait` and `test.result` events: their readers take
+        # the GitHub queue and the per-case times of every run, with or without a step filter
+        if wait is not None and target.step == TEST_RUN_STEP:
             events += [
                 self._event("step.started", target.id("wait.started"), wait[0],
                             envelope | {"step": "wait"},
                             {"reason": "github_queue", "on": target.run}),
                 self._event("step.ended", target.id("wait.ended"), wait[1],
                             envelope | {"step": "wait"}, {"outcome": "passed", "reason": None})]
-        for number, detail in enumerate(end.result_details(), start=1):
+        results = end.result_details() if target.step == TEST_RUN_STEP else []
+        for number, detail in enumerate(results, start=1):
             events.append(self._event("test.result", target.id(f"test.result/{number}"), ended_at,
-                                      envelope | {"step": "test_run"}, detail))
+                                      envelope | {"step": target.step}, detail))
         if reading is not None and run["id"] not in self.budgeted:  # one reading per run, whatever its jobs carry
             self.budgeted.add(run["id"])
             events.append(github_budget.reading_event(
                 self.repo, budget="actions", remaining=reading[0], limit=reading[1], reset=reading[2], at=ended_at,
                 event_id=import_id(SOURCE, str(run["id"]), "actions_budget")))
         events.append(self._event("step.ended", target.id("step.ended"), ended_at,
-                                  envelope | {"step": "test_run"}, end.ended_detail() | minutes))
+                                  envelope | {"step": target.step}, end.ended_detail() | minutes))
         return events
 
     def _ran_to_the_bound(self, run: dict, name: str, job: dict, started: datetime | None,
@@ -724,6 +770,22 @@ class _Importer:
         if conclusion == "timed_out":
             return end  # judged as cut
         return replace(end, outcome="no_result", reason="summary_missing")
+
+    def _foreign_end(self, run: dict, job: dict, hit_bound: bool) -> outcome.RunEnd:
+        """A foreign job's outcome from its conclusion alone (no report is read): success passed, failure failed,
+        timed out or cancelled at its bound no_result `cut`, another cancel stopped, anything else no_result
+        `summary_missing`."""
+
+        conclusion = job.get("conclusion")
+        if conclusion == "success":
+            return outcome.RunEnd("passed", None, (), False)
+        if conclusion == "failure":
+            return outcome.RunEnd("failed", None, (), False)
+        if conclusion == "timed_out" or (conclusion == "cancelled" and hit_bound):
+            return outcome.RunEnd("no_result", "cut", (), False)
+        if conclusion == "cancelled":
+            return outcome.RunEnd("stopped", self._superseded_reason(run), (), False)
+        return outcome.RunEnd("no_result", "summary_missing", (), False)
 
     def _superseded_reason(self, run: dict) -> str | None:
         return "superseded" if self._superseded(run) else None

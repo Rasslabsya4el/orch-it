@@ -11,7 +11,8 @@ entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1)
 concurrent job cap on a free account), `github_priority` (a whole number, 0 for every repo: between repos of one
 account a higher one starts first while the account is at its concurrency, #414 item 4; default in `defaults.json`, read
 by `github_priority`), `required_checks` (the names of the checks a merge is held to; default
-in `defaults.json` beside this module, read by `required_checks`), and the thin Windows job's four keys
+in `defaults.json` beside this module, read by `required_checks`), `github_foreign_jobs` (the names of the foreign jobs
+of the tests workflow, imported beside the required ones; default in the same file, read by `foreign_jobs`), and the thin Windows job's four keys
 (`windows_check`, `windows_os`, `windows_change_minutes`, `windows_change_runs`, `windows_slowest_listed`; defaults in the same
 file, read by `windows_thin`), `place_bounds.queue_minutes` (the longest a GitHub job may wait in the account's
 queue before the github place is left out, #414 item 6; default in `bound_defaults.json`). A key under `repos.<owner/name>` (any case)
@@ -35,6 +36,7 @@ DEFAULT_COMMAND = ("{python}", "-m", "pytest", "-q", "-p", "orch_it_ids", "--jun
 OSES = ("linux", "windows", "macos")
 MAX_BOUND_MINUTES = 7 * 24 * 60  # a week: a longer bound is no bound
 REQUIRED_CHECKS_SETTING = "required_checks"
+FOREIGN_JOBS_SETTING = "github_foreign_jobs"  # the foreign jobs of the tests workflow, imported beside the required ones
 PRIORITY_SETTING = "github_priority"
 REPLACED_SETTING = "github_required_jobs"  # the name `required_checks` replaced; a file that still has it is refused
 _MACHINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
@@ -49,6 +51,7 @@ def _default(key: str):
 
 
 DEFAULT_REQUIRED_CHECKS = tuple(_default(REQUIRED_CHECKS_SETTING))
+DEFAULT_FOREIGN_JOBS = tuple(_default(FOREIGN_JOBS_SETTING))
 DEFAULT_GITHUB_PRIORITY = _default(PRIORITY_SETTING)
 #: the longest a GitHub job may wait in the account's queue before the github place is left out: the same bound the
 #: bound check holds (`place_bounds.queue_minutes`); read from its defaults file here, as `bound_check` imports the
@@ -73,15 +76,30 @@ def required_checks(raw: dict, repo: str) -> tuple[str, ...]:
     (`repos.<owner/name>`, any case) overriding the top level, else the default. A non-empty list of
     non-empty names with no surrounding space; any other shape raises `SettingsError("bad_setting")`."""
 
-    merged = {**raw, **settings.repo_section(raw, repo)}
-    if REPLACED_SETTING in merged:
+    if REPLACED_SETTING in {**raw, **settings.repo_section(raw, repo)}:
         raise SettingsError("bad_setting", f"{REPLACED_SETTING} replaced by {REQUIRED_CHECKS_SETTING}")
-    if REQUIRED_CHECKS_SETTING not in merged:
-        return DEFAULT_REQUIRED_CHECKS
-    names = merged[REQUIRED_CHECKS_SETTING]
+    return _name_list(raw, repo, REQUIRED_CHECKS_SETTING, DEFAULT_REQUIRED_CHECKS)
+
+
+def foreign_jobs(raw: dict, repo: str) -> tuple[str, ...]:
+    """The job names of the tests workflow's foreign runs: the setting `github_foreign_jobs`, a repo's own section
+    (`repos.<owner/name>`, any case) overriding the top level, else the default in `defaults.json`. The same shape
+    rules as `required_checks`; any other shape raises `SettingsError("bad_setting")`."""
+
+    return _name_list(raw, repo, FOREIGN_JOBS_SETTING, DEFAULT_FOREIGN_JOBS)
+
+
+def _name_list(raw: dict, repo: str, key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """The setting `key` as a tuple of names: a non-empty list of non-empty names with no surrounding space; the
+    default when the setting is absent. Any other shape raises `SettingsError("bad_setting")` naming the key."""
+
+    merged = {**raw, **settings.repo_section(raw, repo)}
+    if key not in merged:
+        return default
+    names = merged[key]
     if (not isinstance(names, list) or not names
             or not all(isinstance(name, str) and name and name == name.strip() for name in names)):
-        raise SettingsError("bad_setting", REQUIRED_CHECKS_SETTING)
+        raise SettingsError("bad_setting", key)
     return tuple(dict.fromkeys(names))
 
 
