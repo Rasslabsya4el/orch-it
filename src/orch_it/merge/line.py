@@ -158,6 +158,8 @@ class _Line:
 
     def run(self) -> tuple[list[Served], str]:
         turns = self.turns
+        if self.suite is not None and self.settings.batch_size > 1:
+            self.clean_batches()
         while self.clock() < self.deadline:
             members = self.members()
             for member in [m for m in members if m.pull.mergeable == "conflicting"]:
@@ -171,6 +173,15 @@ class _Line:
             else:
                 self.end_turn(turns, self.serve(members[0]))
         return turns, "bound"
+
+    def clean_batches(self) -> None:
+        """A line that died leaves its batch branch: each one older than `lock_stale_minutes` (or with no time in its
+        name) goes; a young one may belong to a line on another machine."""
+
+        now = self.clock()
+        for name in self.hub.batch_branches(self.repo):
+            if batch.stale(name, now, self.settings.lock_stale_minutes):
+                self.hub.end_batch(self.repo, name)
 
     def end_turn(self, turns: list[Served], turn: Served) -> None:
         turns.append(turn)

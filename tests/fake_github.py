@@ -294,6 +294,9 @@ class FakeGitHub(FakeHub):
         self.branches.pop(branch, None)
         self.batch_members.pop(branch, None)
 
+    def batch_branches(self, repo):
+        return sorted(b for b in self.branches if b.startswith("orch-batch/"))
+
     def members_of(self, sha):
         """The pull requests whose heads the commit `sha` holds, ascending."""
 

@@ -9,6 +9,8 @@ import json
 import pytest
 from fake_github import REPO
 from line_world import line_world
+from required_names import LINUX_OS
+from scan_setup import INVENTED
 
 from orch_it import tickets
 from orch_it.merge import marks
@@ -30,7 +32,7 @@ class FixturePlace:
     naming `failing_id(pr)`, for each member of that commit in `red`. Each pass takes `PASS_MINUTES` of the hub's
     clock."""
 
-    id, os = "own", "lin" + "ux"
+    id, os = "own", LINUX_OS
 
     def __init__(self, hub, red):
         self.hub, self.red = hub, red
@@ -217,6 +219,47 @@ def test_a_base_whose_protection_refuses_the_landing_is_noted_and_the_line_goes_
     assert ci.merged == [prs[n] for n in (10, 11, 12, 13)] and done.reason == "empty"
 
 
+def leave_batch_branches(hub, age_minutes):
+    """Batch branches a line that died left: names by the second they were made, one that is not a time."""
+
+    now = int(hub.now.timestamp())
+    names = {"old": f"orch-batch/{now - age_minutes * 60}-1", "young": f"orch-batch/{now - 60}-1",
+             "unparsable": "orch-batch/made-by-hand"}
+    for name in names.values():
+        hub.branches[name] = list(hub.branches["main"])
+    return names
+
+
+def test_a_line_that_batches_deletes_the_old_and_unparsable_batch_branches_and_keeps_a_young_one(tmp_path):
+    world = line_world(tmp_path, tickets=(10,))
+    hub, store, prs, ci = world
+    names = leave_batch_branches(hub, MergeSettings().lock_stale_minutes + 1)
+    suite, place = make_suite(world, tmp_path)
+    line(world, tmp_path, suite)
+    assert hub.batch_branches(REPO) == [names["young"]]
+
+
+def test_batch_size_one_cleans_no_batch_branch(tmp_path):
+    world = line_world(tmp_path, tickets=(10,))
+    hub, store, prs, ci = world
+    names = leave_batch_branches(hub, MergeSettings().lock_stale_minutes + 1)
+    suite, place = make_suite(world, tmp_path)
+    line(world, tmp_path, suite, batch_size=1)
+    assert hub.batch_branches(REPO) == sorted(names.values())
+
+
+def test_stale_is_older_than_the_minutes_by_the_time_in_the_name_or_a_name_with_none():
+    from datetime import UTC, datetime
+
+    from orch_it.merge.batch import branch_name, stale
+
+    now = datetime(2026, 11, 2, 12, tzinfo=UTC)
+    made = datetime(2026, 11, 2, 10, tzinfo=UTC)
+    assert branch_name(made, 3) == f"orch-batch/{int(made.timestamp())}-3"
+    assert stale(branch_name(made, 3), now, 60) and not stale(branch_name(made, 3), now, 180)
+    assert stale("orch-batch/by-hand", now, 180) and stale("orch-batch/", now, 180)
+
+
 def test_batch_size_one_is_the_line_as_it_was_and_runs_no_suite(tmp_path):
     world = line_world(tmp_path, tickets=(10, 11))
     hub, store, prs, ci = world
@@ -238,17 +281,15 @@ def test_batch_size_is_a_setting_default_four_at_least_one():
 def git_in(folder, *args):
     from orch_it.merge import git as merge_git
 
-    identity = ["-c", "user.name=" + "t".join(("tes", "ter")), "-c", "user.email=" + "@".join(("tester", "example.invalid"))]
+    identity = ["-c", "user.name=" + INVENTED[("git", "config", "user.name")],
+                "-c", "user.email=" + INVENTED[("git", "config", "user.email")]]
     done = merge_git.run(["-C", str(folder), *identity, *args])
     assert done.code == 0, done.err
     return done.out.strip()
 
 
-def test_git_checkout_makes_a_work_tree_of_a_commit_only_the_origin_has_and_removes_it(tmp_path):
-    from pathlib import Path
-
-    from orch_it.merge.batch import git_checkout
-    from orch_it.merge.git import GitError
+def origin_with_a_batch(tmp_path):
+    """A bare origin holding main and a `batch` branch, and a clone of it that knows only main: (clone, batch sha)."""
 
     origin, maker, line_tree = tmp_path / "origin.git", tmp_path / "maker", tmp_path / "line"
     git_in(tmp_path, "init", "--quiet", "--bare", "--initial-branch=main", str(origin))
@@ -269,6 +310,16 @@ def test_git_checkout_makes_a_work_tree_of_a_commit_only_the_origin_has_and_remo
     git_in(maker, "merge", "--quiet", "--no-edit", "--no-ff", heads["second"])
     batch = git_in(maker, "rev-parse", "HEAD")
     git_in(maker, "push", "--quiet", "origin", "batch")
+    return line_tree, batch
+
+
+def test_git_checkout_makes_a_work_tree_of_a_commit_only_the_origin_has_and_removes_it(tmp_path):
+    from pathlib import Path
+
+    from orch_it.merge.batch import git_checkout
+    from orch_it.merge.git import GitError
+
+    line_tree, batch = origin_with_a_batch(tmp_path)
     checkout = git_checkout(line_tree)
     with checkout(batch) as tree:
         assert {p.name for p in Path(tree).iterdir() if p.name != ".git"} == {"base.txt", "first.txt", "second.txt"}
@@ -278,3 +329,18 @@ def test_git_checkout_makes_a_work_tree_of_a_commit_only_the_origin_has_and_remo
     assert len(git_in(line_tree, "worktree", "list").splitlines()) == 1
     with pytest.raises(GitError), checkout("0" * 40):
         pass
+
+
+def test_a_checkout_prunes_the_work_tree_a_dead_line_left_behind(tmp_path):
+    import shutil
+
+    from orch_it.merge.batch import git_checkout
+
+    line_tree, batch = origin_with_a_batch(tmp_path)
+    left = tmp_path / "left-by-a-dead-line"
+    git_in(line_tree, "worktree", "add", "--quiet", "--detach", str(left))
+    shutil.rmtree(left)  # the folder is gone, git still lists the work tree
+    assert len(git_in(line_tree, "worktree", "list").splitlines()) == 2
+    with git_checkout(line_tree)(batch):
+        pass
+    assert len(git_in(line_tree, "worktree", "list").splitlines()) == 1

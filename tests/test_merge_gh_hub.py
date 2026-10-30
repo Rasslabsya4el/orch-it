@@ -529,6 +529,13 @@ def test_any_other_failure_of_the_base_update_raises_github_error(error):
         GhPullHub(advance_gh(error)).advance_base(REPO, "main", "abc")
 
 
+def test_the_batch_branches_are_the_refs_under_the_batch_prefix_by_name():
+    gh = Gh(([f"repos/{REPO}/git/matching-refs/heads/orch-batch/"],
+             [{"ref": "refs/heads/orch-batch/1767225600-1"}, {"ref": "refs/heads/orch-batch/1767225700-2"}]))
+    assert GhPullHub(gh).batch_branches(REPO) == ["orch-batch/1767225600-1", "orch-batch/1767225700-2"]
+    assert "--paginate" in gh.calls[0]
+
+
 def test_the_base_is_advanced_without_force():
     gh = advance_gh({"ref": "refs/heads/main"})
     assert GhPullHub(gh).advance_base(REPO, "main", "abc") is True

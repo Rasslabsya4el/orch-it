@@ -79,6 +79,7 @@ def git_checkout(work_tree: Path, remote: str = "origin") -> Checkout:
     @contextmanager
     def checkout(sha: str):
         git(["fetch", "--quiet", "--no-tags", remote, sha])
+        git(["worktree", "prune"])  # the work tree of a line that died, its folder gone
         with tempfile.TemporaryDirectory(prefix="orch-it-batch-") as scratch:
             tree = Path(scratch) / "tree"
             git(["worktree", "add", "--quiet", "--detach", str(tree), sha])
