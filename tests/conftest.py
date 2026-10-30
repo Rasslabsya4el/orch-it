@@ -40,6 +40,22 @@ def no_login_call(monkeypatch):
     monkeypatch.setattr(github_budget, "_login_failed_at", None)
 
 
+@pytest.fixture(autouse=True)
+def no_real_gh_in_test_runs(monkeypatch):
+    """No test starts the real `gh` (#414 unit 14): every `gh` call of the layer goes through `_call_gh` in
+    `orch_it.testruns.github` (`run_gh` and `call_gh` both call it by name at call time), so that one name refuses
+    here as `gh_failed`. A github place then reads as GitHub unreadable and is off, whatever default `gh` it was built
+    with (`run_tests`, `GithubPlace` with no `gh`, the merge command). A test that wants a `gh` passes its own."""
+
+    from orch_it.testruns import github
+    from orch_it.testruns.github import GithubError
+
+    def refused(args, timeout=None):
+        raise GithubError("gh_failed", "no real gh in a test: " + " ".join(args[:3]))
+
+    monkeypatch.setattr(github, "_call_gh", refused)
+
+
 @pytest.fixture
 def ticket_language_ru(tmp_path, monkeypatch):
     """The human block of a ticket is Russian (#413 unit 10a): the `settings.json` at the root of the git work tree
