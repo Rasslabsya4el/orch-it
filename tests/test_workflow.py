@@ -354,15 +354,24 @@ def test_the_stand_in_pytest_is_called_with_the_ids_plugin_in_both_phases(tmp_pa
 # --- the job bounds (#414 unit 18): each per-change bound is ceil(1.5 x the first measured job of its kind, in minutes) ---
 
 # The first measured job of each kind (pull request 213, one run each): the job, its duration in seconds, the minutes its
-# comment must name, and the per-change bound that the rule gives. The nightly bounds have no measurement yet: they keep
-# today's values (NIGHTLY_BOUND) and say so in their comment (UNMEASURED).
+# comment must name, and the per-change bound that the rule gives.
 MEASURED_PER_CHANGE = (
     (LINUX_CHECK, 156, "2.6 minutes", 4),  # 2:36
     (WINDOWS_CHECK, 164, "2.7 minutes", 5),  # 2:44
     (FOREIGN_LINUX, 357, "5.95 minutes", 9),  # 5:57
     (FOREIGN_WINDOWS, 456, "7.6 minutes", 12),  # 7:36
 )
-NIGHTLY_BOUND = {LINUX_CHECK: 16, WINDOWS_CHECK: 16, FOREIGN_LINUX: 11, FOREIGN_WINDOWS: 40}
+# The first nightly job of each kind (run 41020341857, a manual run with slow_and_live, #414 unit 33): the
+# job, its duration in seconds, the time its comment must write as "X min Y s", and the nightly bound that the rule gives.
+MEASURED_NIGHTLY = (
+    (LINUX_CHECK, 204, "3 min 24 s", 6),
+    (WINDOWS_CHECK, 640, "10 min 40 s", 16),
+    (FOREIGN_LINUX, 461, "7 min 41 s", 12),
+    (FOREIGN_WINDOWS, 1319, "21 min 59 s", 33),
+)
+NIGHTLY_BOUND = {job: bound for job, _, _, bound in MEASURED_NIGHTLY}
+# macOS has no measurement yet: its nightly job did not start on the manual run (its gate is the nightly rule), so its
+# bound keeps today's value and says so in its comment (UNMEASURED)
 MACOS_BOUND = 30
 UNMEASURED = "unmeasured: set to 1.5 x the first nightly's job"
 
@@ -401,13 +410,18 @@ def test_each_job_gives_its_per_change_bound_outside_the_night_and_names_its_mea
     comment_text = " ".join(comment)
     assert minutes_text in comment_text, job
     assert "1.5" in comment_text, job
-    assert not re.search(r"\d+ seconds?|\b\d+ s\b", comment_text), job  # durations are written in minutes
+    # durations are written in minutes, or minutes and seconds ("3 min 24 s"); no bare count of seconds of 100 or more
+    assert not re.search(r"\b\d{3,} seconds?|\b\d{3,} s\b", comment_text), job
 
 
-@pytest.mark.parametrize("job", [LINUX_CHECK, WINDOWS_CHECK, FOREIGN_LINUX, FOREIGN_WINDOWS])
-def test_each_nightly_bound_is_unmeasured_and_says_so_beside_its_value(job):
+@pytest.mark.parametrize("job, seconds, minutes_text, bound", MEASURED_NIGHTLY)
+def test_each_nightly_bound_is_the_rule_of_its_measured_job_and_names_its_minutes(job, seconds, minutes_text, bound):
+    assert math.ceil(round(1.5 * seconds / 60, 6)) == bound, job
     _, comment = timeout_of(WORKFLOW.read_text("utf-8"), job)
-    assert UNMEASURED in " ".join(comment), job
+    comment_text = " ".join(comment)
+    assert f"{minutes_text} x 1.5" in comment_text, job  # the measured time and the arithmetic, in minutes and seconds
+    assert f"{bound} minutes" in comment_text, job  # the bound the arithmetic gives, the value the line sets
+    assert UNMEASURED not in comment_text, job
 
 
 def test_the_derived_wording_is_gone_from_the_workflow():
@@ -575,9 +589,12 @@ def test_the_foreign_linux_and_windows_jobs_run_on_every_change_as_the_suite_job
         assert not any(line.startswith("    if:") for line in jobs[name]), name  # no job-level condition
 
 
-def test_the_foreign_macos_job_runs_on_the_nightly_schedule_only():
+def test_the_foreign_macos_job_runs_on_the_nightly_rule_so_a_manual_slow_and_live_run_starts_it():
+    # the same rule as the workflow's NIGHTLY env (a schedule run, or a manual run with slow_and_live), so a manual
+    # run with the input set starts the macOS job too; a manual run without it leaves macOS out, as before
     jobs = job_lines(WORKFLOW.read_text("utf-8"))
-    assert jobs[FOREIGN_MACOS].count("    if: github.event_name == 'schedule'") == 1
+    night = re.fullmatch(r"\$\{\{ (.*) \}\}", workflow_env()["NIGHTLY"]).group(1)
+    assert jobs[FOREIGN_MACOS].count(f"    if: {night}") == 1
 
 
 def test_the_pytest_jobs_save_the_rate_limit_after_pytest_and_never_fail_the_job():
