@@ -61,16 +61,17 @@ def test_a_failed_suite_posts_no_name_not_even_an_os_free_one(tmp_path):
     assert hub.checks(REPO, w.place.tested[0][0]) == []
 
 
-def test_with_github_not_out_the_line_posts_no_name_os_free_or_not(tmp_path):
+def test_with_github_not_out_a_pass_at_own_posts_the_os_free_and_the_own_os_names(tmp_path):
     w = batch_world(tmp_path, "actions_off", tickets=(10,), required=(LINUX_CHECK, SCAN_CHECK))
-    w.actions.enabled = True  # Actions is on: the names are GitHub's to post
+    w.actions.enabled = True  # Actions is on
     hub, store, prs, ci = w.world
     w.place.id = "own"
     seed(store, "own", 5.0)
     seed(store, "github", 9.0)  # own is measured faster: it is chosen, GitHub is not out
     done = line(w, tmp_path)
-    assert ci.merged == [] and hub.advances == [] and done.reason == "next_run"
-    assert hub.checks(REPO, hub.branches["main"][-1]) == []
+    tip = w.place.tested[0][0]
+    assert {c.name: c.state for c in hub.checks(REPO, tip)} == {LINUX_CHECK: PASSED, SCAN_CHECK: PASSED}
+    assert ci.merged == [prs[10]] and hub.advances == [tip] and done.reason == "empty"
 
 
 def test_a_name_posted_red_by_somebody_is_left_red_even_when_it_is_os_free(tmp_path):
