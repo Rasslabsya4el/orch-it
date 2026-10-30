@@ -141,3 +141,51 @@ def pytest_runtest_makereport(item, call):
     if call.when == "teardown" and _PLACEHOLDERS_OPENED:
         item.user_properties.append((PLACEHOLDER_PROPERTY, "1"))
         _PLACEHOLDERS_OPENED.clear()
+
+
+# Progress (#406 decision 2): with `ORCH_IT_PROGRESS_FILE` set, the controller process appends one line `total done
+# failed` to that file when collection ends (done 0, failed 0) and after each finished test. `done` is the number of
+# node ids finished and `failed` the number of node ids with a failed phase, each counted per node id, so the reports
+# of several xdist workers that interleave count each test once and none is credited to another test. xdist workers
+# write nothing: the controller's hooks see every test.
+# Under xdist the controller collects nothing (xdist's `pytest_collection` returns True, so `pytest_collection_finish`
+# never runs there): the total then comes from the first worker's collected ids, every worker collects the same set.
+ENV_PROGRESS = "ORCH_IT_PROGRESS_FILE"  # the same word as `places.PROGRESS_ENV`: this file imports nothing of orch_it
+_PROGRESS = {"on": False, "total": None, "done": set(), "failed": set()}
+
+
+def pytest_configure(config):
+    _PROGRESS.update(on=bool(os.environ.get(ENV_PROGRESS)) and not hasattr(config, "workerinput"),
+                     total=None, done=set(), failed=set())
+
+
+def _progress_line(*counts: int) -> None:
+    with open(os.environ[ENV_PROGRESS], "a", encoding="utf-8") as f:
+        f.write(" ".join(str(c) for c in counts) + "\n")
+
+
+def _start_progress(total: int) -> None:
+    if _PROGRESS["on"] and _PROGRESS["total"] is None:
+        _PROGRESS["total"] = total
+        _progress_line(total, 0, 0)
+
+
+def pytest_collection_finish(session):
+    _start_progress(len(session.items))
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_node_collection_finished(node, ids):
+    _start_progress(len(ids))
+
+
+def pytest_runtest_logreport(report):
+    if _PROGRESS["on"] and report.failed:
+        _PROGRESS["failed"].add(report.nodeid)
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    if not _PROGRESS["on"] or _PROGRESS["total"] is None:
+        return
+    _PROGRESS["done"].add(nodeid)
+    _progress_line(_PROGRESS["total"], len(_PROGRESS["done"]), len(_PROGRESS["failed"]))

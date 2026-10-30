@@ -168,7 +168,7 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     if place is not None and place not in places:
         raise RunError("unknown_place", place)
     run = _Run(store, work_tree, repo, settings, ids, role, ticket, offers_of(settings, places),
-               need_os, now or (lambda: datetime.now(UTC)), places, pr)
+               need_os, now or (lambda: datetime.now(UTC)), places, pr, clock=clock)
     with store.writer() as writer:
         if place is not None:  # a human's choice: taken as it is, the rule's view kept beside it
             decision = place_rule.Decision(place, "forced", run.decide({}).offered)
@@ -212,15 +212,52 @@ def _wait_seconds(settings: TestSettings, wait_minutes: float | None) -> float:
     return min(max(minutes, 0.0), place_rule.MAX_MINUTES) * 60.0
 
 
+class _Progress:
+    """The `step.progressed` points of one attempt (#406 decision 2): a point when `done` rose and at least `interval`
+    seconds of `clock` have passed since the last point, so points are at most that far apart; and the end's counts
+    as the last point (`close`), whatever the time since the one before. A reading that comes while the interval is
+    still running is not kept: the next reading carries the same counts. The interval limits the mid-run points only."""
+
+    def __init__(self, writer, envelope: dict, interval: float, clock):
+        self.writer, self.envelope, self.interval, self.clock = writer, envelope, interval, clock
+        self.point: tuple[int, int, int] | None = None  # (total, done, failed) of the last point written
+        self.at: float | None = None  # `clock()` when the last point was written
+
+    def __call__(self, total: int, done: int, failed: int) -> None:
+        """A reading of the run's stream (its collected total, finished cases, failed cases)."""
+
+        if done <= (self.point[1] if self.point else 0):
+            return
+        if self.at is not None and self.clock() - self.at < self.interval:
+            return
+        self._write(total, done, failed)
+
+    def close(self, total: int, done: int, failed: int) -> None:
+        """The end's counts (`done` the report's collected, `failed` its failed) as the last point. Written whatever the
+        time since the last point, and whatever the last point's `done`, a zero included: the end wins, so a count
+        that goes down (a report with fewer cases than the run streamed, or none) is written too. A last point that
+        already holds these counts is the end point, not written twice."""
+
+        if (total, done, failed) == self.point:
+            return
+        self._write(total, done, failed)
+
+    def _write(self, total: int, done: int, failed: int) -> None:
+        self.writer.write(self.envelope | {"kind": "step.progressed", "detail": {
+            "done": done, "total": total, "failed": failed}})
+        self.point, self.at = (total, done, failed), self.clock()
+
+
 class _Run:
     """The facts every attempt of one run shares, and the events of one attempt."""
 
     def __init__(self, store, work_tree, repo, settings, ids, role, ticket, offers, need_os, now, places=None,
-                 pr=None):
+                 pr=None, clock=time.monotonic):
         self.store, self.work_tree, self.repo, self.settings = store, work_tree, repo, settings
         self.ids, self.selection = ids, selection_of(ids)
         self.offers, self.need_os, self.now, self.places = offers, need_os, now, places or {}
         self.pr = pr  # the PR whose head this run tests (#406 decision 1); None: a run with no PR
+        self.clock = clock  # the progress points' interval is read on it (`_Progress`)
         self.base = {"repo": repo, "ticket": ticket, "role": role, "session": None,
                      "parent_session": None, "turn": None, "note": None}
         self.commit = git_output(work_tree, "rev-parse", "HEAD")
@@ -332,8 +369,9 @@ class _Run:
         plan = workers.plan(self.settings.command, cap=getattr(adapter, "workers_max", None)) \
             if decision.chosen == "own" else None
         self._started(writer, envelope, decision, run_os, plan)
+        progress = _Progress(writer, envelope, self.settings.test_progress_seconds, self.clock)
         request = Request(self.work_tree, self.commit, self.settings.command, self.settings.test_env,
-                          self.settings.bound_minutes * 60, self.ids, plan)
+                          self.settings.bound_minutes * 60, self.ids, plan, progress=progress)
         with tempfile.TemporaryDirectory(prefix="orch-it-run-") as scratch:
             try:
                 place_end = adapter.run(request, Path(scratch))
@@ -348,6 +386,8 @@ class _Run:
                                     slept=place_end.slept)
             for detail in run_end.result_details():
                 writer.write(envelope | {"kind": "test.result", "detail": detail})
+        if decision.chosen != "github":  # GitHub's progress is its jobs' steps, not this stream (#406 decision 2)
+            progress.close(run_end.collected, run_end.collected, run_end.failed)
         red = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.outcome in outcome.RED_OUTCOMES))
         detail = run_end.ended_detail() | _timing(place_end, run_end)
         if place_end.workers is not None:

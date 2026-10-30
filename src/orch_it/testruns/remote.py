@@ -8,6 +8,8 @@ runs the command once under its bound in the clean environment of this OS, and p
 lines on stdout, each starting `ORCH-IT `:
 
     START <json>         the command is starting
+    PROGRESS <json>      total, done, failed: the run's counts so far (#406 decision 2); a reader that does not
+                         know this kind skips the line, so the protocol needs no version bump
     END <json>           rc, cut, slept, seconds, log_tail, workers, workers_note
     REPORT <base64>      the report's bytes, empty when the command wrote none
     SETUP-FAILED <json>  step and message; the command never started
@@ -63,6 +65,10 @@ class SetupFailed(Exception):
 def say(kind: str, payload: str) -> None:
     sys.stdout.write(f"{PREFIX}{kind} {payload}\n")
     sys.stdout.flush()
+
+
+def _say_progress(total: int, done: int, failed: int) -> None:
+    say("PROGRESS", json.dumps({"total": total, "done": done, "failed": failed}))
 
 
 def main(workdir: str) -> None:
@@ -234,7 +240,8 @@ def _setup(request: dict, slot: str, gone: threading.Event) -> str:
 
 def _run(request: dict, workdir: Path, checkout: str, gone: threading.Event) -> None:
     asked = places.Request(Path(checkout), request["commit"], tuple(request["command"]),
-                           request["test_env"], request["bound_seconds"], request.get("ids"))
+                           request["test_env"], request["bound_seconds"], request.get("ids"),
+                           progress=_say_progress)
     done = places.run_command(
         asked, Path(checkout), workdir, abort=gone, workers_max=request.get("workers_max"),
         on_start=lambda: say("START", json.dumps({"checkout": checkout, "python": sys.executable})))

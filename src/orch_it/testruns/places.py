@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,6 +20,9 @@ from orch_it.testruns.pytest_plugin import FOLDER as PLUGIN_FOLDER
 
 LOG_TAIL_CHARS = 2000
 ENV_IDS = "ORCH_IT_IDS_FILE"
+#: the file the layer's pytest plugin writes its progress to (`total done failed`, one line a step; #406 decision 2)
+PROGRESS_ENV = "ORCH_IT_PROGRESS_FILE"
+PROGRESS_TAIL_BYTES = 4096  # the last whole line of the file is always within this many bytes of its end
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,28 @@ class Request:
     bound_seconds: float
     ids: list[str] | None = None
     plan: workers.Plan | None = None  # the workers the runner already chose (the own place); None: the place chooses
+    #: the runner's reader of the run's stream, called with (total, done, failed) while the run goes; None: not read
+    progress: Callable[[int, int, int], None] | None = None
+
+
+def read_progress(path: Path) -> tuple[int, int, int] | None:
+    """The counts of the last whole line of a progress file (`total done failed`); None when the file has no whole
+    line yet, is missing or cannot be read. A line still being written has no newline and is not read."""
+
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - PROGRESS_TAIL_BYTES))
+            lines = f.read().split(b"\n")
+    except OSError:
+        return None
+    if len(lines) < 2:
+        return None
+    parts = lines[-2].split()
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    total, done, failed = (int(p) for p in parts)
+    return total, done, failed
 
 
 @dataclass(frozen=True)
@@ -105,8 +131,8 @@ def fill(command: tuple[str, ...], values: dict[str, str]) -> list[str]:
 
 
 def test_process_env(test_env: dict[str, str], ids_file: str | None, plugin_folder: str,
-                     *, source=None, os_name: str | None = None) -> dict[str, str]:
-    """The clean environment plus what the layer itself hands the test process: the ids file
+                     *, source=None, os_name: str | None = None, progress_file: str | None = None) -> dict[str, str]:
+    """The clean environment plus what the layer itself hands the test process: the ids file, the progress file
     and the folder of the `orch_it_ids` plugin ahead of any `PYTHONPATH` of `test_env`."""
 
     env = environment.clean_environment(test_env, source=source, os_name=os_name)
@@ -118,6 +144,8 @@ def test_process_env(test_env: dict[str, str], ids_file: str | None, plugin_fold
     env["PYTHONPATH"] = (";" if windows else ":").join(p for p in (plugin_folder, own_path) if p)
     if ids_file:
         env[ENV_IDS] = ids_file
+    if progress_file:
+        env[PROGRESS_ENV] = progress_file
     return env
 
 
@@ -127,9 +155,11 @@ def run_command(request: Request, work_tree: Path, scratch: Path, *,
     to `scratch`, the placeholders filled (the report in `scratch`), the clean environment, the
     bound. Shared by the own place and the far side of a machine place. `on_start` is called just
     before the command starts; `abort` kills the run when set. A pytest command runs on the cores free on this
-    machine (`workers.plan`, capped by `workers_max`) unless `request.plan` already says how."""
+    machine (`workers.plan`, capped by `workers_max`) unless `request.plan` already says how. While it runs, the
+    counts the plugin writes to the progress file in `scratch` go to `request.progress` at each poll of the process."""
 
     report = scratch / "junit.xml"
+    progress_file = scratch / "progress.txt"
     ids_file = None
     if request.ids is not None:
         ids_file = scratch / "ids.txt"
@@ -137,16 +167,35 @@ def run_command(request: Request, work_tree: Path, scratch: Path, *,
     plan = request.plan or workers.plan(request.command, cap=workers_max)
     argv = fill(plan.command, {"python": sys.executable, "report": str(report),
                                   "ids_file": str(ids_file or ""), "work_tree": str(work_tree)})
-    env = test_process_env(request.test_env, str(ids_file) if ids_file else None, str(PLUGIN_FOLDER))
+    env = test_process_env(request.test_env, str(ids_file) if ids_file else None, str(PLUGIN_FOLDER),
+                           progress_file=str(progress_file))
     if on_start is not None:
         on_start()
+    on_tick = _progress_reader(progress_file, request.progress)
     try:
         done = process.run_bounded(argv, cwd=work_tree, env=env, bound_seconds=request.bound_seconds,
-                                   abort=abort)
+                                   abort=abort, on_tick=on_tick)
     except process.CommandMissing as e:
         return PlaceEnd(None, False, False, None, 0.0, 0.0, str(e)[-LOG_TAIL_CHARS:], plan.workers, plan.note)
+    if on_tick is not None:  # the file as the process left it, a run that ended between two polls included
+        on_tick()
     return PlaceEnd(report if report.exists() else None, done.cut, done.slept, done.rc, 0.0,
                     done.seconds, done.log_tail[-LOG_TAIL_CHARS:], plan.workers, plan.note)
+
+
+def _progress_reader(path: Path, progress: Callable[[int, int, int], None] | None):
+    """The poll of a run's progress file for `process.run_bounded`: each reading that is whole goes to `progress`.
+    None when nothing reads it."""
+
+    if progress is None:
+        return None
+
+    def poll() -> None:
+        counts = read_progress(path)
+        if counts is not None:
+            progress(*counts)
+
+    return poll
 
 
 @dataclass
