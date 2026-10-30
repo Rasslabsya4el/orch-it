@@ -1,5 +1,6 @@
 {
   "required_checks": ["linux", "windows"],
+  "github_foreign_jobs": ["foreign-linux", "foreign-windows"],
   "github_priority": 0,
   "windows_check": "windows",
   "windows_os": "windows",

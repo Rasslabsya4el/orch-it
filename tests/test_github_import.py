@@ -23,7 +23,7 @@ from orch_it.testruns import github
 from orch_it.testruns.github import GithubError, import_github
 from orch_it.tickets import hook as ticket_hook
 from fake_github import DEFAULT_BRANCH
-from required_names import FOREIGN_LINUX, FOREIGN_MACOS, FOREIGN_WINDOWS, LINUX_CHECK, WINDOWS_CHECK
+from required_names import FOREIGN_LINUX, FOREIGN_MACOS, FOREIGN_PREFIX, FOREIGN_WINDOWS, LINUX_CHECK, WINDOWS_CHECK
 
 REPO = "acme-x/widgets-y"
 BASE = datetime(2026, 10, 26, 10, 0, tzinfo=UTC)
@@ -1394,6 +1394,7 @@ def started_by_job(store, step):
 @pytest.mark.parametrize("event, pr, bounds", [
     ("schedule", None, {LINUX_CHECK: 6, WINDOWS_CHECK: 16, FOREIGN_LINUX: 12, FOREIGN_WINDOWS: 33}),
     ("pull_request", 7, {LINUX_CHECK: 4, WINDOWS_CHECK: 5, FOREIGN_LINUX: 9, FOREIGN_WINDOWS: 12}),
+    ("workflow_dispatch", None, {LINUX_CHECK: 6, WINDOWS_CHECK: 16, FOREIGN_LINUX: 12, FOREIGN_WINDOWS: 33}),
 ])
 def test_each_job_of_a_run_names_its_job_and_the_bound_its_run_had(store, gh, event, pr, bounds):
     gh.add_run(100, jobs=FOREIGN_JOBS, event=event, pr=pr, branch=DEFAULT_BRANCH if pr is None else "feat/x")
@@ -1444,3 +1445,72 @@ def test_a_run_with_only_linux_still_gets_job_missing_for_windows_and_no_foreign
     _, ended = pairs(store)["github:100/" + WINDOWS_CHECK + "/1"]
     assert (ended["outcome"], ended["reason"]) == ("no_result", "job_missing")
     assert report.jobs == 2 and pairs(store, "foreign_run") == {}
+
+
+ALT_FOREIGN_LINUX = FOREIGN_PREFIX + "alt-" + LINUX_CHECK
+ALT_FOREIGN_WINDOWS = FOREIGN_PREFIX + "alt-" + WINDOWS_CHECK
+
+
+def one_run(gh, run_id=100):
+    """`gh` that also answers the one-run call `import_one_run` makes, from the recorded runs."""
+
+    def answer(args):
+        if args == ["api", f"repos/{REPO}/actions/runs/{run_id}"]:
+            return json.dumps(next(run for run in gh.runs if run["id"] == run_id))
+        return gh(args)
+    return answer
+
+
+def test_the_foreign_jobs_are_the_setting_github_foreign_jobs_and_not_the_defaults(store, gh):
+    settings.save("github_foreign_jobs", [ALT_FOREIGN_LINUX, ALT_FOREIGN_WINDOWS])
+    gh.add_run(100, jobs=(LINUX_CHECK, WINDOWS_CHECK, ALT_FOREIGN_LINUX, ALT_FOREIGN_WINDOWS, FOREIGN_LINUX))
+    run_import(store, gh)
+    assert set(pairs(store, "foreign_run")) == {"github:100/1003/1", "github:100/1004/1"}
+    assert set(started_by_job(store, "foreign_run")) == {ALT_FOREIGN_LINUX, ALT_FOREIGN_WINDOWS}
+
+
+@pytest.mark.parametrize("names", [[" " + FOREIGN_LINUX], [""], []])
+def test_foreign_job_names_with_blanks_or_empty_are_a_bad_setting(store, gh, names):
+    settings.save("github_foreign_jobs", names)
+    with pytest.raises(settings.SettingsError) as error:
+        run_import(store, gh)
+    assert error.value.code == "bad_setting"
+
+
+def test_a_foreign_job_report_is_not_kept_for_the_place_and_is_not_downloaded(store, gh, tmp_path):
+    gh.add_run(100, jobs=FOREIGN_JOBS, event="pull_request", pr=7, branch="feat/x")
+    keep = tmp_path / "keep"
+    keep.mkdir()
+    github.import_one_run(store, REPO, 100, gh=one_run(gh), now=NOW, keep=keep, workflow_text=WORKFLOW)
+    assert sorted(path.name for path in keep.iterdir()) == ["100-1001-1.xml", "100-1002-1.xml"]
+    assert all(FOREIGN_PREFIX not in call[call.index("-n") + 1] for call in gh.downloads())
+
+
+def test_a_foreign_job_still_running_is_skipped_and_its_pair_is_written_once_it_has_ended(store, gh):
+    gh.add_run(100, jobs=FOREIGN_JOBS, event="pull_request", pr=7, branch="feat/x",
+               **{FOREIGN_LINUX: {"conclusion": None, "cases": None, "completed": None}})
+    github.import_one_run(store, REPO, 100, gh=one_run(gh), now=NOW, workflow_text=WORKFLOW)
+    assert set(pairs(store, "foreign_run")) == {"github:100/1004/1"}
+    for job in gh.jobs[100]:
+        if job["name"] == FOREIGN_LINUX:
+            job.update(conclusion="success", completed_at=stamp(BASE, 360))
+    github.import_one_run(store, REPO, 100, gh=one_run(gh), now=NOW, workflow_text=WORKFLOW)
+    found = pairs(store, "foreign_run")
+    assert set(found) == {"github:100/1003/1", "github:100/1004/1"}
+    assert (found["github:100/1003/1"][1]["outcome"], found["github:100/1003/1"][1]["reason"]) == ("passed", None)
+
+
+def test_a_successful_foreign_job_is_passed_whatever_its_report_says(store, gh):
+    gh.add_run(100, jobs=FOREIGN_JOBS, event="pull_request", pr=7, branch="feat/x",
+               **{FOREIGN_LINUX: {"conclusion": "success", "cases": RED}})
+    run_import(store, gh, workflow_text=WORKFLOW)
+    _, ended = pairs(store, "foreign_run")["github:100/1003/1"]
+    assert (ended["outcome"], ended["reason"]) == ("passed", None)
+
+
+def test_a_failed_foreign_job_is_failed_whatever_its_report_says(store, gh):
+    gh.add_run(100, jobs=FOREIGN_JOBS, event="pull_request", pr=7, branch="feat/x",
+               **{FOREIGN_LINUX: {"conclusion": "failure", "cases": GREEN}})
+    run_import(store, gh, workflow_text=WORKFLOW)
+    _, ended = pairs(store, "foreign_run")["github:100/1003/1"]
+    assert (ended["outcome"], ended["reason"]) == ("failed", None)
