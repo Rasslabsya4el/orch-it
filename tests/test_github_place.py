@@ -16,7 +16,8 @@ from orch_it.events.store import Store
 from orch_it.testruns import place_rule, runner
 from orch_it.testruns.config import DEFAULT_QUEUE_BOUND_MINUTES, TestSettings
 from orch_it.testruns.github import GithubError
-from orch_it.testruns.github_place import QUEUE_GRACE_SECONDS, GithubPlace, oses_of_workflow
+from orch_it.testruns.github_busy import QUEUE_GRACE_SECONDS
+from orch_it.testruns.github_place import GithubPlace, oses_of_workflow
 from orch_it.testruns.places import PlaceEnd, PlaceRefused, Request
 from orch_it.testruns.runner import default_places, offers_of, run_tests
 
@@ -500,12 +501,20 @@ def test_the_github_poll_grows_while_the_budget_is_under_the_threshold(world):
 
 # --- the account's busy machines read at the pace (#406 decision 5) -----------------------------------
 
-def test_a_spent_budget_with_no_earlier_reading_holds_the_busy_count_and_says_so(world):
+def test_a_spent_core_budget_with_no_earlier_reading_still_reads_the_busy_count(world):
+    # the pace alone never turns GitHub off: with no earlier reading in this instance the read is made (#406 decision 5)
     world.actions.hold(OTHER, 3)
-    world.actions.core = (0, 5000)  # the core budget is spent: no account read is due
+    world.actions.core = (0, 5000)  # the core budget is spent: the pace would hold a later read
     availability = GithubPlace(REPO, world.store, DEFAULTS, world.actions).availability(NOW)
-    assert (availability.on, availability.note) == (False, "held by the budget")
-    assert world.store.query("SELECT COUNT(*) FROM events WHERE kind = 'github.busy'").rows == [(0,)]
+    assert (availability.on, availability.busy, availability.note) == (True, 3, "3 busy of 20")
+    assert world.store.query("SELECT COUNT(*) FROM events WHERE kind = 'github.busy'").rows == [(1,)]
+
+
+def test_a_repo_whose_own_budget_would_cross_still_gets_the_account_load_for_the_priority(world):
+    # the priority between repos asks the account, not this repo's Actions budget (#406 decision 5, finding 1)
+    world.actions.hold(OTHER, 3)
+    github_budget.record_budget(world.store, REPO, budget="actions", remaining=150, limit=1000, at=NOW)
+    assert github(world).account_load(NOW) == (3, 20)
 
 
 def test_a_paced_out_read_gives_the_load_of_the_earlier_read_of_the_same_place(world):

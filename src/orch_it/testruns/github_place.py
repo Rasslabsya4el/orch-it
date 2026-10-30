@@ -30,8 +30,7 @@ from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns import junit
 from orch_it.testruns.config import OSES, TestSettings
-from orch_it.testruns.github_busy import (PER_PAGE, QUEUE_GRACE_SECONDS, AccountLoad, BusyReader,  # noqa: F401
-                                          limit_of)
+from orch_it.testruns.github_busy import READ_ESTIMATE, AccountLoad, BusyReader, PER_PAGE, limit_of
 from orch_it.testruns.github_busy import rate_limit as read_rate_limit
 from orch_it.testruns.github import (WORKFLOW_FILE, Gh, GithubError, import_one_run, items_of, jobs_of,
                                      json_values, moment_of, os_of, run_gh)
@@ -40,7 +39,6 @@ from orch_it.testruns.places import (ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUN
 
 POLL_SECONDS = 20.0  # between two reads of a run's jobs
 CACHE_SECONDS = 60.0  # an availability reading stands this long
-REQUEST_ESTIMATE = 40  # Actions requests one availability reading and one run may make, asked of the budget
 REF_PREFIX = "orch-it-run-"
 RED = ("failed", "error")
 GOOD_CONCLUSIONS = ("success", "skipped")
@@ -212,7 +210,7 @@ class GithubPlace:
             permissions = self._object(self.gh(["api", f"repos/{self.repo}/actions/permissions"]))
             if permissions.get("enabled") is not True:
                 return Availability(False, 0, capacity, "Actions is off", ACTIONS_OFF)
-            if github_budget.would_cross(self.repo, REQUEST_ESTIMATE, store=self.store, now=now):
+            if github_budget.would_cross(self.repo, READ_ESTIMATE, store=self.store, now=now):
                 return Availability(False, 0, capacity, "Actions budget would cross its threshold")
             private = self._object(self.gh(["api", f"repos/{self.repo}"])).get("private") is True
             if private and self._minutes_spent():
@@ -220,12 +218,13 @@ class GithubPlace:
             load = self._busy_load(now)
         except GithubError as e:
             return Availability(False, 0, capacity, f"GitHub could not be read ({e.code})")
-        if load is None:
+        if load is None:  # only the Actions budget's real crossing holds the first read (the pace never does)
             return Availability(False, 0, capacity, "held by the budget")
         limit = limit_of(load, capacity)
         bound = self.settings.queue_bound_minutes
-        if load.longest > bound * 60:
-            note = f"a job has waited {load.longest / 60:.0f} min in the account's queue, past {bound:g} min"
+        if load.longest_wait_seconds > bound * 60:
+            wait = load.longest_wait_seconds
+            note = f"a job has waited {wait / 60:.0f} min in the account's queue, past {bound:g} min"
             return Availability(False, load.running, limit, note, QUEUE_PAST_BOUND)
         note = f"{load.running} busy of {limit}" + (", minutes are paid for" if private else "")
         return Availability(True, load.running, limit, note, None, private)
@@ -249,20 +248,22 @@ class GithubPlace:
 
     def account_load(self, now: datetime) -> tuple[int, int] | None:
         """The account's jobs in progress and the limit they are counted against, read whatever this repo's own Actions
-        or request budget say (the priority between repos asks the account, not this repo); None when GitHub could not
-        be read, or the pace holds and no reading was taken yet. The read is paced by `BusyReader` (#406 decision 5)."""
+        or request budget say (the priority between repos asks the account, not this repo: the budget gate is off). The
+        pace of `BusyReader` still applies (#406 decision 5): a pace hold gives the earlier reading of this instance.
+        None only when GitHub could not be read."""
 
         try:
-            load = self._busy_load(now)
+            load = self._busy_load(now, budget_gate=False)
         except GithubError:
             return None
         return None if load is None else (load.running, limit_of(load, self.settings.github_capacity))
 
-    def _busy_load(self, now: datetime) -> AccountLoad | None:
+    def _busy_load(self, now: datetime, *, budget_gate: bool = True) -> AccountLoad | None:
         """The account's busy machines now: the read the pace allows (`BusyReader.poll` writes its point), else the last
-        reading this place took; None when the pace holds and none was taken. Raises `GithubError` when a read fails."""
+        reading this place took; None only when no reading was taken and the budget gate holds the first read. Raises
+        `GithubError` when a read fails."""
 
-        load = self.busy.poll(now)
+        load = self.busy.poll(now, budget_gate=budget_gate)
         if load is not None:
             return load
         return self.busy.last[1] if self.busy.last is not None else None

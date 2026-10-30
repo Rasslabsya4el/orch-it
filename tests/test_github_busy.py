@@ -87,6 +87,16 @@ def test_no_read_when_the_actions_budget_of_the_repo_would_cross_its_threshold(w
     assert busy_points(world.store) == []
 
 
+def test_the_priority_read_is_not_gated_by_this_repos_budget_and_the_gated_read_is(world):
+    world.actions.hold_jobs(OTHER, ["ubuntu-latest"])
+    github_budget.record_budget(world.store, REPO, budget="actions", remaining=150, limit=1000, at=NOW)
+
+    assert reader(world).poll(NOW, budget_gate=True) is None  # this repo's budget would cross: no read, no point
+    assert busy_points(world.store) == []
+    assert reader(world).poll(NOW, budget_gate=False) is not None  # the account is read although the budget would cross
+    assert busy_points(world.store) == [(1, 0, 20)]
+
+
 def test_one_point_at_most_per_github_poll_seconds(world):
     world.actions.hold_jobs(OTHER, ["ubuntu-latest"])
     busy = reader(world, github_poll_seconds=10)

@@ -5,10 +5,12 @@ Every repo of the account and every trigger counts (a run started by hand on git
 count is the account's, not the tested repo's. `limit_of` is the account's limit the place rule and the view both read:
 the jobs running when a queued one has waited past the grace while others run, else the setting `github_capacity`.
 
-`BusyReader.poll` is the only writer of the point and the only reader of the lists for it. It reads at most once per
-`github_poll_seconds`, waits longer while GitHub's remaining hourly count is under `github_reads_reserve`, reads
-nothing once the remaining count is spent or the Actions budget of the repo would cross its threshold, and writes no
-point when a read fails (the error reaches the caller; the last point keeps its time).
+`BusyReader.poll` is the only writer of the point and the only reader of the lists for it. Once it has an earlier reading
+it reads at most once per `github_poll_seconds`, waits longer while GitHub's remaining hourly count is under
+`github_reads_reserve`, and reads nothing while the remaining count is spent; with no earlier reading the pace never
+holds the first read. The Actions budget of the repo holds a read only when the caller keeps that gate on (the
+availability read does; the priority between repos does not). A failed read writes no point and raises (the last
+point keeps its time).
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from orch_it.testruns.github import Gh, GithubError, items_of, json_values, mome
 KIND = "github.busy"
 ROLE = "github"  # the events a GitHub reading writes name the GitHub role, as the importer's do
 QUEUE_GRACE_SECONDS = 120.0  # a job queued longer than this while others run shows the account's limit
-READ_ESTIMATE = 40  # the requests one account read may make, asked of the Actions budget before it
+READ_ESTIMATE = 40  # the requests one account read, or one availability reading, may make: asked of the Actions budget first
 PER_PAGE = 100
 
 
@@ -34,14 +36,21 @@ class AccountLoad(NamedTuple):
 
     running: int
     queued: int
-    longest: float
+    longest_wait_seconds: float
+
+
+class RateLimit(NamedTuple):
+    """GitHub's core request budget as it reads now: `remaining` requests left of `limit` in the hour."""
+
+    remaining: int
+    limit: int
 
 
 def limit_of(load: AccountLoad, capacity: int) -> int:
     """The account's limit: the jobs running when a queued one has waited past the grace while others run, else
     `capacity` (the setting `github_capacity`). The one function the place rule and the view read."""
 
-    return load.running if load.longest >= QUEUE_GRACE_SECONDS and load.running else capacity
+    return load.running if load.longest_wait_seconds >= QUEUE_GRACE_SECONDS and load.running else capacity
 
 
 def account_load(gh: Gh, repo: str, now: datetime) -> AccountLoad:
@@ -51,7 +60,7 @@ def account_load(gh: Gh, repo: str, now: datetime) -> AccountLoad:
 
     owner = repo.split("/")[0].lower()
     listed = items_of(gh(["api", "--paginate", f"user/repos?per_page={PER_PAGE}"]), "repos")
-    running, queued, longest = 0, 0, 0.0
+    running, queued, longest_wait = 0, 0, 0.0
     for entry in listed:
         full = entry.get("full_name")
         if (not isinstance(full, str) or entry.get("archived")
@@ -72,8 +81,8 @@ def account_load(gh: Gh, repo: str, now: datetime) -> AccountLoad:
                         queued += 1
                         queued_at = moment_of(job.get("created_at"))
                         if queued_at is not None:
-                            longest = max(longest, (now - queued_at).total_seconds())
-    return AccountLoad(running, queued, longest)
+                            longest_wait = max(longest_wait, (now - queued_at).total_seconds())
+    return AccountLoad(running, queued, longest_wait)
 
 
 def _is_machine_of_the_limit(job: dict) -> bool:
@@ -88,9 +97,9 @@ def _is_machine_of_the_limit(job: dict) -> bool:
     return hosted and os_name is not None and os_name != "macos"
 
 
-def rate_limit(gh: Gh) -> tuple[int, int] | None:
-    """The core request budget of the token as GitHub reports it now: (remaining, limit); None when it cannot be read.
-    Not stored by this module: its call names no repo, the layer's counter stores the reading."""
+def rate_limit(gh: Gh) -> RateLimit | None:
+    """The core request budget of the token as GitHub reports it now; None when it cannot be read. Not stored by this
+    module: its call names no repo, the layer's counter stores the reading."""
 
     try:
         found = _object(gh(["api", "rate_limit"]))
@@ -103,20 +112,17 @@ def rate_limit(gh: Gh) -> tuple[int, int] | None:
     remaining, limit = core.get("remaining"), core.get("limit")
     if type(remaining) is not int or type(limit) is not int or limit <= 0:
         return None
-    return remaining, limit
+    return RateLimit(remaining, limit)
 
 
-def reserve_wait(base: float, left: tuple[int, int] | None, reserve: int) -> float:
+def reserve_wait(base: float, rate: RateLimit | None, reserve: int) -> float:
     """The wait before the next account read: `base` while the remaining count is at least `reserve` (or nothing is
     known); under it the interval doubles per halving of the level, as `github_budget.poll_interval` does, with the
     reserve as its level."""
 
-    if left is None or reserve <= 0:
+    if rate is None or reserve <= 0 or rate.limit <= 0:
         return float(base)
-    remaining, limit = left
-    if limit <= 0:
-        return float(base)
-    return github_budget.poll_interval(base, remaining, limit, reserve / limit)
+    return github_budget.poll_interval(base, rate.remaining, rate.limit, reserve / rate.limit)
 
 
 def write_point(store: Store, repo: str, load: AccountLoad, capacity: int, now: datetime) -> None:
@@ -139,21 +145,23 @@ class BusyReader:
         self.repo, self.store, self.settings, self.gh = repo, store, settings, gh
         self.last: tuple[datetime, AccountLoad] | None = None
 
-    def poll(self, now: datetime) -> AccountLoad | None:
-        """The account's load read now and written as the point, or None when no read is due: the last one is younger
-        than `github_poll_seconds`, the wait under the reserve has not passed, the remaining count is spent, or the
-        Actions budget of the repo would cross its threshold. A failed read raises `GithubError` and writes nothing."""
+    def poll(self, now: datetime, *, budget_gate: bool = True) -> AccountLoad | None:
+        """The account's load read now and written as the point, or None when no read is due. With an earlier reading
+        in this instance the pace holds a read: the last one is younger than `github_poll_seconds`, the wait under the
+        reserve has not passed, or the remaining count is spent. With no earlier reading the pace never holds it.
+        `budget_gate` (on by default) holds the read while the Actions budget of the repo would cross its threshold;
+        the priority between repos reads with it off. A failed read raises `GithubError` and writes nothing."""
 
         base = self.settings.github_poll_seconds
-        if self.last is not None and now - self.last[0] < timedelta(seconds=base):
-            return None
-        left = rate_limit(self.gh)
-        if self.last is not None and now - self.last[0] < timedelta(
-                seconds=reserve_wait(base, left, self.settings.github_reads_reserve)):
-            return None
-        if left is not None and left[0] <= 0:
-            return None
-        if github_budget.would_cross(self.repo, READ_ESTIMATE, store=self.store, now=now):
+        if self.last is not None:
+            if now - self.last[0] < timedelta(seconds=base):
+                return None
+            rate = rate_limit(self.gh)
+            if now - self.last[0] < timedelta(seconds=reserve_wait(base, rate, self.settings.github_reads_reserve)):
+                return None
+            if rate is not None and rate.remaining <= 0:
+                return None
+        if budget_gate and github_budget.would_cross(self.repo, READ_ESTIMATE, store=self.store, now=now):
             return None
         load = account_load(self.gh, self.repo, now)  # raises GithubError: no point is written
         capacity = limit_of(load, self.settings.github_capacity)
