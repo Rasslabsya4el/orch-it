@@ -7,8 +7,15 @@ A run counts for the run median only when it passed or failed (a cut or stopped 
 `test-places`). A crossing comments only when a run newer than the one the ticket last heard of is in the
 window; a check with no newer run says nothing again.
 
+The headroom rule (#468) is the second rule: a job cut at its bound never reaches the median, so per (job, kind)
+-- kind `nightly` when the run's start says selection `nightly`, else `per_change` -- the newest ten ended GitHub
+job runs (steps `test_run` and `foreign_run`, passed, failed, or no_result with reason `cut`) are measured by
+their wall time (end minus start) against the `job_bound_minutes` the run stored, a cut run counting as the whole
+bound. When the largest share is past HEADROOM_SHARE, one ticket opens under its own mark, so the two rules never
+comment on each other's tickets; a later run still past the line comments once.
+
 Bounds are settings, read with `dict.get` from the `place_bounds` key: `run_minutes` maps an OS to its bound,
-`queue_minutes` is one bound for every GitHub place. A key the settings do not give takes DEFAULT_BOUNDS; an OS
+`queue_minutes` is one bound for every GitHub place. A key the settings do not give takes `default_bounds()`; an OS
 with no run bound is not checked. The tickets go through `merge.main_check`'s triage helpers, the same path as
 the no-result ticket to the brain.
 """
@@ -30,11 +37,15 @@ from orch_it.tickets.model import CODE_WRITTEN_MARK
 from orch_it.tickets.reader import TRIAGE_LABEL
 
 BOUNDS_KEY = "place_bounds"
-DEFAULTS_FILE = Path(__file__).with_name("bound_defaults.json")  # measured durations: linux 6, windows 8, queue 5 min
+DEFAULTS_FILE = Path(__file__).with_name("bound_defaults.json")
 
 LAST_RUNS = 10
 MEASURED = ("passed", "failed")
 NOT_MEASURED = "n/a"
+HEADROOM_SHARE = 0.8  # the largest share of its bound a job run may take before the headroom ticket opens
+CUT = "cut"
+NIGHTLY = "nightly"
+PER_CHANGE = "per_change"
 KIND_WORDS = {"run": "run time", "queue": "GitHub queue wait"}
 
 
@@ -42,6 +53,8 @@ KIND_WORDS = {"run": "run time", "queue": "GitHub queue wait"}
 class BoundReport:
     opened: list[int] = field(default_factory=list)  # the bound tickets opened by this check
     commented: list[int] = field(default_factory=list)  # the open bound tickets a later crossing commented on
+    headroom_opened: list[int] = field(default_factory=list)  # the headroom tickets opened by this check
+    headroom_commented: list[int] = field(default_factory=list)  # the open headroom tickets commented on
 
 
 @dataclass(frozen=True)
@@ -50,6 +63,28 @@ class _Run:
     at: str  # when the run ended
     minutes: float | None  # the run's minutes, a passed or failed run only
     queue: float | None  # the minutes of its GitHub queue wait, a GitHub run only
+
+
+@dataclass(frozen=True)
+class _JobRun:
+    run: str
+    at: str  # when the run ended
+    minutes: float  # the job's wall time: end minus start
+    bound: float  # the job's timeout bound in minutes, as the run stored it
+    cut: bool  # the run ended at its bound
+
+    @property
+    def share(self) -> float:
+        return 1.0 if self.cut else self.minutes / self.bound
+
+
+@dataclass(frozen=True)
+class _Headroom:
+    job: str
+    kind: str  # `nightly` or `per_change`
+    runs: list[_JobRun]  # the newest ten ended runs, newest first
+    worst: _JobRun  # the run with the largest share of its bound
+    newest_crossing: _JobRun  # the newest run of the window past the line: the one a comment tells of
 
 
 @dataclass(frozen=True)
@@ -64,21 +99,33 @@ class _Crossing:
 
 
 def run_bound_check(store: Store, hub: PullHub, settings: dict) -> BoundReport:
-    """Open or comment on a `needs-triage` ticket for each place and OS whose median is past its bound."""
+    """Open or comment on a `needs-triage` ticket for each place and OS whose median is past its bound, and for
+    each job and kind whose largest share of its bound is past the headroom line."""
 
     repo = settings["repo"]
     run_bounds, queue_bound = _bounds(settings)
     opened, commented = [], []
     for crossing in _crossings(_recent_runs(store, repo), run_bounds, queue_bound):
         mark, note = _key_mark(crossing), _note_mark(crossing)
-        ticket = open_ticket_with(hub, repo, mark)
-        if ticket is None:
-            title, body = _ticket(crossing, mark, note)
-            opened.append(main_check.open_triage(hub, store, repo, ROLE, title, body, (TRIAGE_LABEL,)))
-        elif not told(hub, repo, ticket, note):
-            hub.comment(repo, ticket.number, _comment(crossing, note))
-            commented.append(ticket.number)
-    return BoundReport(opened=opened, commented=commented)
+        title, body = _ticket(crossing, mark, note)
+        _tell(store, hub, repo, mark, note, title, body, _comment(crossing, note), opened, commented)
+    headroom_opened, headroom_commented = [], []
+    for tight in _headrooms(_job_runs(store, repo)):
+        mark, note = _headroom_key_mark(tight), _headroom_note_mark(tight)
+        _tell(store, hub, repo, mark, note, _headroom_title(tight), _headroom_body(tight, mark, note),
+              f"{LAYER_MARK}{note}\nCrossed again. {_headroom_facts(tight)}", headroom_opened, headroom_commented)
+    return BoundReport(opened, commented, headroom_opened, headroom_commented)
+
+
+def _tell(store, hub, repo, mark, note, title, body, comment, opened, commented) -> None:
+    """Open the ticket when no open issue holds `mark`; else comment once per `note`."""
+
+    ticket = open_ticket_with(hub, repo, mark)
+    if ticket is None:
+        opened.append(main_check.open_triage(hub, store, repo, ROLE, title, body, (TRIAGE_LABEL,)))
+    elif not told(hub, repo, ticket, note):
+        hub.comment(repo, ticket.number, comment)
+        commented.append(ticket.number)
 
 
 def default_bounds() -> dict:
@@ -156,6 +203,76 @@ def _crossings(groups: dict, run_bounds: dict, queue_bound: float) -> list[_Cros
                 if median > queue_bound:
                     found.append(_Crossing(place, run_os, "queue", median, queue_bound, waited[0].run, len(waited)))
     return found
+
+
+def _job_runs(store: Store, repo: str) -> dict[tuple[str, str], list[_JobRun]]:
+    """(job, kind) -> the repo's ended GitHub job runs, newest first. `job_bound_minutes` is read from the detail
+    JSON: a start with no job or no bound, and a run that never ended or ended another way, is left out."""
+
+    started = {}  # run -> (job, kind, at, bound), the first start of the run
+    for run, job, selection, bound, at in store.query(
+            "SELECT run, json_extract(detail, '$.job'), json_extract(detail, '$.selection'),"
+            " json_extract(detail, '$.job_bound_minutes'), at FROM events WHERE kind = 'step.started'"
+            " AND step IN ('test_run', 'foreign_run') AND repo = :repo AND run IS NOT NULL ORDER BY at, id",
+            {"repo": repo}).rows:
+        if isinstance(job, str) and isinstance(bound, (int, float)) and bound > 0 and run not in started:
+            started[run] = (job, NIGHTLY if selection == NIGHTLY else PER_CHANGE, at, float(bound))
+
+    groups, seen = {}, set()
+    for run, outcome, reason, at in store.query(
+            "SELECT run, outcome, reason, at FROM events WHERE kind = 'step.ended'"
+            " AND step IN ('test_run', 'foreign_run') AND repo = :repo AND run IS NOT NULL ORDER BY at, id",
+            {"repo": repo}).rows:
+        if run not in started or run in seen:
+            continue
+        seen.add(run)
+        cut = outcome == "no_result" and reason == CUT
+        if outcome in MEASURED or cut:
+            job, kind, began, bound = started[run]
+            minutes = (_moment(at) - _moment(began)).total_seconds() / 60
+            groups.setdefault((job, kind), []).append(_JobRun(run, at, minutes, bound, cut))
+    return {key: sorted(runs, key=lambda r: (r.at, r.run), reverse=True) for key, runs in groups.items()}
+
+
+def _headrooms(groups: dict) -> list[_Headroom]:
+    found = []
+    for (job, kind), runs in sorted(groups.items()):
+        window = runs[:LAST_RUNS]
+        worst = window[0]
+        for candidate in window:
+            if candidate.share > worst.share:
+                worst = candidate
+        if worst.share > HEADROOM_SHARE:
+            found.append(_Headroom(job, kind, window, worst, next(r for r in window if r.share > HEADROOM_SHARE)))
+    return found
+
+
+def _headroom_key_mark(h: _Headroom) -> str:
+    return f"<!-- orch-it bound job={h.job} kind={h.kind} -->"
+
+
+def _headroom_note_mark(h: _Headroom) -> str:
+    return f"<!-- orch-it bound-note job={h.job} kind={h.kind} run={h.newest_crossing.run} -->"
+
+
+def _headroom_facts(h: _Headroom) -> str:
+    longest = max(r.minutes for r in h.runs)
+    median = statistics.median(r.minutes for r in h.runs)
+    cut = " (cut at its bound)" if h.worst.cut else ""
+    keys = ", ".join(f"`{r.run}`" for r in h.runs)
+    return (f"The job `{h.job}` ({h.kind.replace('_', ' ')} runs) took {h.worst.share:.0%} of its bound in its worst of "
+            f"the last {len(h.runs)} ended runs: `{h.worst.run}`, {h.worst.minutes:.1f} min of a bound of "
+            f"{h.worst.bound:g} min{cut}. The longest of those runs is {longest:.1f} min and their median is "
+            f"{median:.1f} min. The runs, newest first: {keys}.")
+
+
+def _headroom_title(h: _Headroom) -> str:
+    return f"Job {h.job} ({h.kind.replace('_', ' ')}) is over {HEADROOM_SHARE:.0%} of its time bound"
+
+
+def _headroom_body(h: _Headroom, mark: str, note: str) -> str:
+    return (f"{mark}\n{note}\n{CODE_WRITTEN_MARK}\n## Facts\n{_headroom_facts(h)} The bound check opened this "
+            "ticket; a later run still over the line comments here instead of opening another.\n")
 
 
 def _key_mark(c: _Crossing) -> str:
