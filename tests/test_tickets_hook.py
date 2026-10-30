@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from fake_hub import REPO, FakeHub
+from language_tree import git_tree, write_language
 from ticket_fixtures import EXPECTED, fixture
 
 from orch_it import tickets
@@ -28,6 +29,12 @@ def no_values_of_this_machine(monkeypatch):
     """The bodies of these tests are judged as text: no value of this machine is read (#413 unit 6)."""
     from orch_it.guards.values import Values
     monkeypatch.setattr("orch_it.guards.values.read_values", lambda **kwargs: Values())
+
+
+@pytest.fixture(autouse=True)
+def the_payload_folder_is_a_russian_tree(tmp_path):
+    """The hook judges a call in the language of its payload folder's tree (#464): these tests' payload cwd is `tmp_path`."""
+    write_language(git_tree(tmp_path), "ru")
 
 
 @pytest.fixture
@@ -159,6 +166,7 @@ def test_gh_s_own_alias_new_is_a_create(hub, tmp_path):
 def test_the_repo_of_an_edit_is_the_one_gh_would_use(hub, tmp_path, monkeypatch):
     monkeypatch.setenv("GH_REPO", "someone/else")
     hub.add(10, fixture("bad_weight_missing")[1], ["ready-for-agent"], repo="someone/else")
+    hub.files[("someone/else", "settings.json")] = json.dumps({"human_language": "ru"})  # the other repo's language
     refused = hook.judge(payload("gh issue edit 10 --add-label ready-for-agent", tmp_path), hub=hub,
                          repo_of=lambda folder: REPO)
     assert refused.codes == ["weight_missing"] and refused.repo == "someone/else"
@@ -240,16 +248,17 @@ def test_the_hook_prints_a_deny_with_every_violation_and_fails_open_on_its_own_e
     assert hook.main("not json") == 0
 
 
-def test_a_refusal_and_a_pass_are_written_to_the_store(hub, tmp_path, monkeypatch):
+def test_a_refusal_and_a_pass_are_written_to_the_store(hub, tmp_path, tmp_path_factory, monkeypatch):
     from orch_it.events.store import Store
 
-    monkeypatch.setenv("ORCH_IT_STORE", str(tmp_path / "events"))
+    events = tmp_path_factory.mktemp("events")  # the store is no folder inside a git tree, which tmp_path is here
+    monkeypatch.setenv("ORCH_IT_STORE", str(events))
     monkeypatch.setattr(hook, "make_hub", lambda: hub)
     monkeypatch.setattr(hook, "repo_of", lambda folder: REPO)
     hook.main(json.dumps(payload(create(body_file(tmp_path, BODY)), Path.cwd(), transcript=WITHOUT_SKILL)))
     hook.main(json.dumps(payload(create(body_file(tmp_path, BODY)), Path.cwd())))
     hook.main(json.dumps(payload("ls", Path.cwd())))
-    rows = Store.open(tmp_path / "events").query(
+    rows = Store.open(events).query(
         "SELECT hook, action, reason, rules FROM events WHERE kind = 'hook.ran' ORDER BY at").rows
     assert [tuple(row) for row in rows] == [("tickets", "acted", "write_ticket_missing", '["write_ticket_missing"]'),
                                             ("tickets", "skipped", "passed", "[]")]

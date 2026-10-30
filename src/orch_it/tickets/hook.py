@@ -36,6 +36,7 @@ ready that way is judged by the workflow `ticket-shape` on GitHub.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -106,7 +107,8 @@ def judge(payload: dict, *, hub, repo_of, values=None) -> Refusal | None:
     for call in judged:
         try:
             found, lines, repo = call.judge(payload, hub, repo_of, cwd, values, memo)
-        except settings.HumanLanguageError as e:  # a named bad setting: its own words, after the earlier calls
+        except (settings.HumanLanguageError, settings.SettingsFileError) as e:  # a named bad setting: its own words,
+            # after the earlier calls; the file or the repo it names is in them (D4 amd 2, #464)
             return Refusal(codes + [BAD_SETTING], "\n".join(said + [str(e)]), repo)
         codes += [code for code in found if code not in codes]
         said += [line for line in lines if line not in said]
@@ -240,13 +242,24 @@ class _Call:
 
     def judge(self, payload: dict, hub, repo_of, cwd: str | None, values, memo: dict
               ) -> tuple[list[str], list[str], str | None]:
-        from orch_it.tickets import shape
-        from orch_it.tickets.model import PARKED_LABEL, READY_LABEL, parse
+        """The refusals of this call, its words in the language of the repo the call is for (#464): the repo of the
+        `gh` call (`--repo` / `-R`, the issue URL, else `GH_REPO`, as gh itself picks), else the repo of the `cd`
+        folder or the payload cwd. The repo of the tree at hand reads that tree's `settings.json`; another repo reads
+        its `settings.json` on its default branch through the hub."""
 
         flags, targets, unreadable = self._read()
         here = self.cwd or cwd
         repo = (flags.get("repo", [None])[-1] or next((t[0] for t in targets if t and t[0]), None)
                 or os.environ.get("GH_REPO") or None)  # as gh itself picks the repo
+        with _target_of(repo, here, hub, repo_of, memo):
+            return self._judge(payload, hub, repo_of, here, values, memo, (flags, targets, unreadable, repo))
+
+    def _judge(self, payload: dict, hub, repo_of, here: str | None, values, memo: dict, read: tuple
+               ) -> tuple[list[str], list[str], str | None]:
+        from orch_it.tickets import shape
+        from orch_it.tickets.model import PARKED_LABEL, READY_LABEL, parse
+
+        flags, targets, unreadable, repo = read
         if unreadable:
             return (["command_unreadable"],
                     [language.text_or_refusal("ticket_command_unreadable", reason=unreadable)], repo)
@@ -296,7 +309,8 @@ class _Call:
             if problem:
                 continue
             text = body if body is not None else current.body
-            found = shape.violations(parse(text, title=title if title is not None else current.title))
+            with _target_of(target_repo or repo, here, hub, repo_of, memo):  # each ticket in its own repo's language
+                found = shape.violations(parse(text, title=title if title is not None else current.title))
             found += shape.literal_violations(text, values=_values_of(values, memo), checks=_checks(here, memo))
             for violation in found:
                 refuse(violation.code, violation.rule)
@@ -360,6 +374,32 @@ class _Call:
         if "body" in flags:
             return flags["body"][-1], None
         return None, None
+
+
+class _Files:
+    """The hub's `file`, asked once per repo and path in one hook run: a language read comes for every text of a
+    refusal, and each read of another repo's `settings.json` is a call to GitHub. A failed read is not kept."""
+
+    def __init__(self, hub, kept: dict):
+        self._hub, self._kept = hub, kept
+
+    def file(self, repo: str, path: str) -> str | None:
+        key = (repo, path)
+        if key not in self._kept:
+            self._kept[key] = self._hub.file(repo, path)
+        return self._kept[key]
+
+
+def _target_of(repo: str | None, here: str | None, hub, repo_of, memo: dict):
+    """The target block for text about `repo` (#464): the tree at `here` when `repo` is none or is that tree's own
+    repo, else `repo` itself, its `settings.json` read through the hub. With no folder named by the payload the
+    target the entry point named stays."""
+
+    if repo is not None and repo.lower() != (repo_of(here) or "").lower():
+        return settings.target(repo=repo, hub=_Files(hub, memo.setdefault("files", {})))
+    if here is not None:
+        return settings.target(folder=here)
+    return contextlib.nullcontext()
 
 
 def _current(hub, repo: str | None, number: int):
