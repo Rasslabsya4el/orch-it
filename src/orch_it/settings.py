@@ -7,6 +7,7 @@ A missing file is no settings at all, never an error.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import re
@@ -26,6 +27,24 @@ class SettingsError(ValueError):
     def __init__(self, code: str, detail: str = ""):
         self.code = code
         super().__init__(f"{code}: {detail}" if detail else code)
+
+
+class SettingsFileError(SettingsError):
+    """`settings_unreadable` of a work tree's or a repo's `settings.json`: not read, no JSON, no object. `file` is the
+    name the error carries: the tree file's path, or `<owner/name>:settings.json` for another repo's. A named bad
+    setting like `HumanLanguageError`: the caller that refuses on a bad setting refuses on it too (#464)."""
+
+    def __init__(self, file: str, detail: str):
+        self.file = file
+        super().__init__("settings_unreadable", f"{file}: {detail}")
+
+
+class NoTargetError(SettingsError):
+    """`no_target`: the human language was read with no target named. Every entry point names the repo its text is
+    for (`target`); a read never falls back to the process's own folder (#464)."""
+
+    def __init__(self):
+        super().__init__("no_target", "the human language was read with no target repo named by the entry point")
 
 
 class HumanLanguageError(SettingsError):
@@ -206,27 +225,77 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 def tree_settings(root: Path) -> dict | None:
     """The settings file a work tree carries at its root, parsed; None when it has none. A file that is
-    no JSON object raises `SettingsError`, as the installation's does. The one reader of that file: the
+    no JSON object raises `SettingsFileError`, as the installation's does. The one reader of that file: the
     required checks (`research.names`) and the language read it through here."""
 
     path = Path(root) / TREE_SETTINGS
     if not path.is_file():
         return None
     try:
-        raw = json.loads(path.read_text("utf-8-sig"))
+        text = path.read_text("utf-8-sig")
     except (OSError, ValueError) as e:
-        raise SettingsError("settings_unreadable", f"{path}: {e}") from None
+        raise SettingsFileError(str(path), str(e)) from None
+    return parse_tree_settings(text, str(path))
+
+
+def parse_tree_settings(text: str, file: str) -> dict:
+    """The JSON object in the text of a `settings.json` named `file`; else `SettingsFileError` carrying `file`."""
+
+    try:
+        raw = json.loads(text.removeprefix("﻿"))
+    except ValueError as e:
+        raise SettingsFileError(file, str(e)) from None
     if not isinstance(raw, dict):
-        raise SettingsError("settings_unreadable", f"{path}: not an object")
+        raise SettingsFileError(file, "not an object")
     return raw
 
 
-def _work_tree_of_cwd() -> Path | None:
-    """The top level of the git work tree around the current folder; None when there is none or git cannot say."""
+@dataclasses.dataclass(frozen=True)
+class _Target:
+    folder: object  # a path or an `os.PathLike` (read when the language is, not when the target is named)
+    repo: str | None
+    hub: object  # answers `file(repo, path) -> str | None`
+
+
+_target: _Target | None = None  # the repo the text being written is for; set by an entry point, never by a default
+
+
+@contextlib.contextmanager
+def target(*, folder: object = None, repo: str | None = None, hub: object = None):
+    """Name the repo the human text of this block is for, once, at an entry point: `folder`, any folder in a work tree
+    on this machine (its `settings.json` at the tree's root is read), or `repo` (`owner/name`) with a `hub` that
+    answers `file(repo, path)` (its `settings.json` on the default branch is read). The block restores the target it
+    found. A read of the language outside every block raises `NoTargetError`."""
+
+    global _target
+    if (folder is None) == (repo is None) or (repo is None) != (hub is None):
+        raise ValueError("target: name a folder, or a repo with a hub")
+    previous = _target
+    _target = _Target(folder, repo, hub)
+    try:
+        yield
+    finally:
+        _target = previous
+
+
+def payload_folder(raw: str) -> str:
+    """The folder a hook payload (JSON text) says its call runs in; this process's own when it names none. The one
+    place a hook entry point takes its own folder as the target, and only because the payload named none."""
 
     try:
-        done = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=GIT_SECONDS,
+        payload = json.loads(raw)
+    except ValueError:
+        payload = None
+    folder = payload.get("cwd") if isinstance(payload, dict) else None
+    return folder if isinstance(folder, str) and folder else os.getcwd()
+
+
+def work_tree_of(folder: object) -> Path | None:
+    """The top level of the git work tree around `folder`; None when there is none or git cannot say."""
+
+    try:
+        done = subprocess.run(["git", "-C", os.fspath(folder), "rev-parse", "--show-toplevel"], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=GIT_SECONDS,
                               stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -234,23 +303,44 @@ def _work_tree_of_cwd() -> Path | None:
     return Path(top) if done.returncode == 0 and top else None
 
 
+def _target_settings(chosen: _Target) -> tuple[str, dict | None]:
+    """(where the target's `settings.json` is, named for a message; its object, or None when there is no file)."""
+
+    if chosen.repo is not None:
+        where = f"{chosen.repo}:{TREE_SETTINGS}"
+        try:
+            text = chosen.hub.file(chosen.repo, TREE_SETTINGS)
+        except Exception as e:  # noqa: BLE001 - any failed read but not-found is the named bad setting
+            raise SettingsFileError(where, f"the file could not be read from GitHub: {e}") from None
+        return where, None if text is None else parse_tree_settings(text, where)
+    tree = work_tree_of(chosen.folder)
+    if tree is None:
+        return f"the {TREE_SETTINGS} of the git work tree", None
+    return str(tree / TREE_SETTINGS), tree_settings(tree)
+
+
 def human_language(work_tree: Path | None = None) -> str:
-    """The language of text written to a human: the `human_language` of the `settings.json` at the root of the
-    git work tree (`work_tree`, else the tree around the current folder), `en` when there is no such tree, no such
-    file or no such key. The installation file never sets it: a `human_language` there is `bad_setting`, naming
-    the tree file the value moves to (D4 amd 2). A value with no table (`<language>.toml` in a folder of
-    `language_tables_dirs`) is `bad_setting` naming the files looked for: no other language is written instead."""
+    """The language of text written to a human: the `human_language` of the `settings.json` of the repo the entry
+    point named with `target` (a work tree's file at its root, or another repo's on its default branch), or of
+    `work_tree` when a caller names a tree root itself; `en` when there is no such tree, no such file or no such key.
+    With neither, `NoTargetError`: the process's own folder is no default. The installation file never sets it: a
+    `human_language` there is `bad_setting`, naming the file the value moves to (D4 amd 2). A settings file that is no
+    JSON object, or a repo's that cannot be read, is `SettingsFileError`. A value with no table (`<language>.toml` in a
+    folder of `language_tables_dirs`) is `bad_setting` naming the files looked for: no other language is written
+    instead."""
 
     installation = load()
-    tree = Path(work_tree) if work_tree is not None else _work_tree_of_cwd()
+    if work_tree is not None:
+        where, raw = str(Path(work_tree) / TREE_SETTINGS), tree_settings(Path(work_tree))
+    elif _target is None:
+        raise NoTargetError
+    else:
+        where, raw = _target_settings(_target)
     if "human_language" in installation:
-        where = str(tree / TREE_SETTINGS) if tree is not None else f"the {TREE_SETTINGS} of the git work tree"
         raise HumanLanguageError(
             "bad_setting", f"human_language: {installation['human_language']!r} is set in the installation file; "
                            f"move it to {where}")
-    if tree is None:
-        return "en"
-    chosen = (tree_settings(tree) or {}).get("human_language", "en")
+    chosen = (raw or {}).get("human_language", "en")
     if not isinstance(chosen, str) or not _LANGUAGE.fullmatch(chosen):
         raise HumanLanguageError("bad_setting", f"human_language: {chosen!r} is no language code")
     if table_path(chosen) is None:

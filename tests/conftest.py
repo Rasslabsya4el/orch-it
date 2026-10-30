@@ -6,9 +6,16 @@ temporary base. A test that sets the variable itself runs later and its own monk
 The language (#453 unit 1) is read from the `settings.json` at the root of the cwd's git work tree. The cwd of every
 test is a folder of its own that is no git tree (GIT_CEILING_DIRECTORIES stops the lookup at the test's base), so the
 suite's language is English unless a test writes its own tree file.
+
+The target (#464): the language is read from the repo an entry point names (`settings.target`), never from a default.
+A test is its own entry point and names "the folder I run in" (`TestFolder`, read when the language is, so a test that
+changes folder is followed). A test that checks what a read does with no target, or with another one, names its own.
 """
 
+import os
+
 import pytest
+from orch_it import settings
 from orch_it.testruns.junit import MARKER_PROPERTY
 
 from language_tree import git_tree, write_language
@@ -26,6 +33,21 @@ def isolated_settings(tmp_path_factory, monkeypatch):
     cwd = folder / "cwd"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
+
+
+class TestFolder(os.PathLike):
+    """The folder the test runs in, read when asked (a test may change folder after the fixture ran)."""
+
+    __test__ = False
+
+    def __fspath__(self) -> str:
+        return os.getcwd()
+
+
+@pytest.fixture(autouse=True)
+def test_names_its_folder_as_the_target():
+    with settings.target(folder=TestFolder()):
+        yield
 
 
 @pytest.fixture(autouse=True)

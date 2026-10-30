@@ -460,10 +460,20 @@ def make_hub():  # the GitHub the hook reads; the tests replace it
 
 
 def main(text: str | None = None) -> int:
-    """Read the PreToolUse payload (stdin), print a deny when refused; always exit 0."""
+    """Read the PreToolUse payload (stdin), print a deny when refused; always exit 0. The words are for the repo of
+    the payload's folder (#464), named once."""
 
     try:
-        payload = json.loads(sys.stdin.read() if text is None else text)
+        raw = sys.stdin.read() if text is None else text
+    except Exception:  # noqa: BLE001 - a payload that cannot be read is read as none: the hook then fails open
+        raw = ""
+    with settings.target(folder=settings.payload_folder(raw)):
+        return _main(raw)
+
+
+def _main(raw: str) -> int:
+    try:
+        payload = json.loads(raw)
         if not isinstance(payload, dict):
             return 0
         refusal = judge(payload, hub=make_hub(), repo_of=repo_of)

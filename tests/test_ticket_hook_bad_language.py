@@ -53,6 +53,9 @@ def configure(setting_file, **values):
 
 
 def payload(command, cwd):
+    """The call's folder is the work tree the test runs in: the hook reads the language of the payload's folder (#464);
+    `cwd` is the folder the test gave before that and no longer says where the language file is."""
+    cwd = Path.cwd()
     return {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": command},
             "cwd": str(cwd), "transcript_path": str(WITH_SKILL)}
 

@@ -222,7 +222,7 @@ def test_the_hook_prints_a_deny_with_every_violation_and_fails_open_on_its_own_e
     title, body = fixture("bad_empty_body")
     monkeypatch.setattr(hook, "make_hub", lambda: hub)
     monkeypatch.setattr(hook, "repo_of", lambda folder: REPO)
-    data = json.dumps(payload(create(body_file(tmp_path, body), title=title), tmp_path))
+    data = json.dumps(payload(create(body_file(tmp_path, body), title=title), Path.cwd()))  # main reads the payload folder
     assert hook.main(data) == 0
     said = json.loads(capsys.readouterr().out)
     assert said["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -246,9 +246,9 @@ def test_a_refusal_and_a_pass_are_written_to_the_store(hub, tmp_path, monkeypatc
     monkeypatch.setenv("ORCH_IT_STORE", str(tmp_path / "events"))
     monkeypatch.setattr(hook, "make_hub", lambda: hub)
     monkeypatch.setattr(hook, "repo_of", lambda folder: REPO)
-    hook.main(json.dumps(payload(create(body_file(tmp_path, BODY)), tmp_path, transcript=WITHOUT_SKILL)))
-    hook.main(json.dumps(payload(create(body_file(tmp_path, BODY)), tmp_path)))
-    hook.main(json.dumps(payload("ls", tmp_path)))
+    hook.main(json.dumps(payload(create(body_file(tmp_path, BODY)), Path.cwd(), transcript=WITHOUT_SKILL)))
+    hook.main(json.dumps(payload(create(body_file(tmp_path, BODY)), Path.cwd())))
+    hook.main(json.dumps(payload("ls", Path.cwd())))
     rows = Store.open(tmp_path / "events").query(
         "SELECT hook, action, reason, rules FROM events WHERE kind = 'hook.ran' ORDER BY at").rows
     assert [tuple(row) for row in rows] == [("tickets", "acted", "write_ticket_missing", '["write_ticket_missing"]'),
