@@ -139,8 +139,18 @@ def test_with_own_faster_the_rule_picks_own_and_places_offered_still_lists_githu
     assert world.actions.calls and not any("dispatches" in " ".join(c) for c in world.actions.calls)
 
 
-def test_github_stays_switched_off_while_the_setting_github_tests_is_off(world):
+def test_with_the_default_settings_and_actions_on_github_is_offered(world):
+    seed(world.store, "own", 5.0)
+    seed(world.store, "github", 1.0)
     done = run(world, settings=TestSettings())
+    assert done.place == "github"
+    [start] = starts(world.store)
+    assert "github" in [o["place"] for o in start["places_offered"]]
+    assert offered(start) == {"place": "github", "expected_minutes": 1.0, "dropped": None, "note": "0 busy of 20"}
+
+
+def test_github_stays_switched_off_while_the_setting_github_tests_is_false(world):
+    done = run(world, settings=TestSettings(github_tests=False))
     assert done.place == "own"
     assert offered(starts(world.store)[0]) == {"place": "github", "expected_minutes": None, "dropped": "place_off"}
 

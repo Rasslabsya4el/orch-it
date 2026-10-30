@@ -163,7 +163,7 @@ def test_the_wait_polls_at_its_base_while_the_github_budget_is_above_the_thresho
     store = Store.open(tmp_path / "store")
     occupy_own(store)
     ticks = Ticks()
-    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
+    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(github_tests=False),
               places={"own": OwnPlace(), "github": Budgeted(2500)}, wait_minutes=1, sleep=ticks.sleep,
               clock=ticks.clock)
     assert ticks.sleeps == [15.0] * 4  # half of the 5000 left is above the 20% threshold: the base, 15 s
