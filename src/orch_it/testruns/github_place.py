@@ -144,6 +144,7 @@ class GithubPlace:
         self.repo, self.store, self.settings, self.gh, self.oses = repo, store, settings, gh, oses
         self.sleep, self.clock = sleep, clock  # injectable: the run's bound is counted on `clock`
         self._cached: tuple[datetime, Availability] | None = None
+        self._loaded: tuple[datetime, tuple[int, int]] | None = None
 
     @classmethod
     def for_work_tree(cls, work_tree: Path, *, repo: str, store: Store, settings: TestSettings, gh: Gh = run_gh,
@@ -187,8 +188,27 @@ class GithubPlace:
             busy, waited = self._account_load(now)
         except GithubError as e:
             return Availability(False, 0, capacity, f"GitHub could not be read ({e.code})")
-        limit = busy if waited and busy else capacity
+        limit = self._limit(busy, waited)
         return Availability(True, busy, limit, f"{busy} busy of {limit}")
+
+    def account_load(self, now: datetime) -> tuple[int, int] | None:
+        """The account's jobs in progress and the limit they are counted against, read whatever this repo's own Actions
+        or request budget say (the priority between repos asks the account, not this repo); None when GitHub could not
+        be read. Stands `CACHE_SECONDS`, as the availability does."""
+
+        cached = self._loaded
+        if cached is not None and timedelta(0) <= now - cached[0] < timedelta(seconds=CACHE_SECONDS):
+            return cached[1]
+        try:
+            busy, waited = self._account_load(now)
+        except GithubError:
+            return None
+        load = (busy, self._limit(busy, waited))
+        self._loaded = (now, load)
+        return load
+
+    def _limit(self, busy: int, waited: bool) -> int:
+        return busy if waited and busy else self.settings.github_capacity
 
     def _account_load(self, now: datetime) -> tuple[int, bool]:
         """The account's jobs in progress, and whether a queued job has waited past the grace while others run."""

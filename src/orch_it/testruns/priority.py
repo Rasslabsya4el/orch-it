@@ -3,11 +3,15 @@ layer holds a start itself. When the account's live jobs reach its concurrency, 
 while a repo of the same account with a higher `github_priority` has a ready member; below the concurrency, with equal
 priorities, or when a reading fails, the start is as it always was.
 
-`holder` is the decision, pure over `Readings` (what the account's load is, and whether a repo has a ready member). It
+`outranking_repo` is the decision, pure over `Readings` (what the account's load is, and whether a repo has a ready member). It
 reads nothing while no repo outranks this one, and asks for a repo's members only once the account is at its
 concurrency. `HubReadings` answers the readings from GitHub: the busy count the `github` place already computes
 (`GithubPlace.availability`, the account's jobs, never a constant) and each repo's merge-line members. `hold_of` is
 what a line calls, or None when no repo of its account is set above it.
+
+The hold is the batch line's only: a line that serves one pull request at a time (`batch_size` 1, or no suite) never asks
+the place rule and is never held. The rivals are the repos under `repos` in this machine's settings file; a repo of the
+account that file does not name is not seen.
 """
 
 from __future__ import annotations
@@ -20,7 +24,6 @@ from orch_it.merge import marks
 from orch_it.merge.hub import PullHub
 from orch_it.testruns.config import github_priority
 from orch_it.testruns.github import GithubError
-from orch_it.testruns.places import Availability
 
 
 class Readings(Protocol):
@@ -46,8 +49,8 @@ def priorities_of(raw: dict, repo: str) -> dict[str, int]:
     return found
 
 
-def holder(repo: str, priorities: Mapping[str, int], readings: Readings) -> str | None:
-    """The repo whose ready member holds `repo`'s start, or None. `priorities` as `priorities_of` gives them. A reading
+def outranking_repo(repo: str, priorities: Mapping[str, int], readings: Readings) -> str | None:
+    """The repo of higher priority whose ready member holds `repo`'s start, or None. `priorities` as `priorities_of` gives them. A reading
     that fails never holds."""
 
     own = priorities[repo]
@@ -61,15 +64,17 @@ def holder(repo: str, priorities: Mapping[str, int], readings: Readings) -> str 
 
 
 class HubReadings:
-    """`Readings` from GitHub for the account `owner`: `availability(now)` is the `github` place's, `clock` the line's."""
+    """`Readings` from GitHub for the account `owner`: `account_load(now)` is the `github` place's reading of the
+    account's jobs, (busy, limit) or None when it could not be read, whatever this repo's own Actions says; `clock` is
+    the line's."""
 
-    def __init__(self, hub: PullHub, owner: str, availability: Callable[[datetime], Availability],
+    def __init__(self, hub: PullHub, owner: str, account_load: Callable[[datetime], tuple[int, int] | None],
                  clock: Callable[[], datetime]):
-        self.hub, self.owner, self.availability, self.clock = hub, owner, availability, clock
+        self.hub, self.owner, self.account_load, self.clock = hub, owner, account_load, clock
 
     def load(self) -> tuple[int, int] | None:
-        found = self.availability(self.clock())
-        return (found.busy, found.limit) if found.on and found.limit > 0 else None
+        found = self.account_load(self.clock())
+        return found if found is not None and found[1] > 0 else None
 
     def has_ready(self, repo: str) -> bool | None:
         try:
@@ -85,4 +90,4 @@ def hold_of(raw: dict, repo: str, readings: Readings) -> Callable[[], str | None
     priorities = priorities_of(raw, repo)
     if not any(value > priorities[repo] for value in priorities.values()):
         return None
-    return lambda: holder(repo, priorities, readings)
+    return lambda: outranking_repo(repo, priorities, readings)

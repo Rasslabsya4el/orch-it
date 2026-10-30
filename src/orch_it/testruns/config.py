@@ -136,7 +136,6 @@ class TestSettings:
     own_capacity: int = 1
     github_capacity: int = 20
     required_checks: tuple[str, ...] = DEFAULT_REQUIRED_CHECKS
-    github_priority: int = DEFAULT_GITHUB_PRIORITY
 
     @classmethod
     def from_settings(cls, raw: dict, repo: str) -> TestSettings:
@@ -175,7 +174,6 @@ class TestSettings:
         if "test_machines" in merged:
             values["machines"] = _machines(merged["test_machines"])
         values["required_checks"] = required_checks(raw, repo)
-        values["github_priority"] = github_priority(raw, repo)
         return cls(**values)
 
 

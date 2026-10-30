@@ -234,7 +234,7 @@ def _line(args, store_of, repo_of) -> str:
             test_settings = TestSettings.from_settings(raw, repo)
             suite = batch.place_rule_suite(store, repo, test_settings, batch.git_checkout(Path(args.work_tree)))
             readings = priority.HubReadings(hub, (owner_login(raw) or repo.split("/")[0]).lower(),
-                                            GithubPlace(repo, store, test_settings).availability,
+                                            GithubPlace(repo, store, test_settings).account_load,
                                             lambda: datetime.now(UTC))
             hold = priority.hold_of(raw, repo, readings)
         else:
