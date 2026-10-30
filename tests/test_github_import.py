@@ -238,7 +238,7 @@ def test_the_started_detail_holds_where_on_what_and_for_which_pull_request(store
     run_import(store, gh)
     started, _ = pairs(store)["github:100/1001/1"]
     assert started == {"place": "github", "chosen": "github", "reason": None, "run_os": "linux",
-                       "commit": "sha100", "branch": "feat/x", "pr": 7, "selection": "full",
+                       "commit": "sha100", "branch": "feat/x", "pr": 7, "part": "linux", "selection": "full",
                        "event": "pull_request"}
 
 
@@ -1211,7 +1211,7 @@ NEWEST = github.DEFAULT_NEWEST_RUNS
 SHORT_HISTORY, LONG_HISTORY = 30, 300
 FIRST_ID = 8000  # the id of the newest run of `add_history`
 RUN_SPACING_S = 1000
-CALLS_PER_RUN = 5  # jobs, artifacts and timing of the run, one download per required job
+CALLS_PER_RUN = 8  # jobs, artifacts and timing of the run, one download per required job, and the 3 reads of its PR's ticket (#406 decision 1)
 
 
 def add_history(gh, count):

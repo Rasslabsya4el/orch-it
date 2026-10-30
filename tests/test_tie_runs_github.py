@@ -20,6 +20,7 @@ from orch_it.events.ids import import_id
 from orch_it.events.store import Store
 from orch_it.testruns import github
 from orch_it.testruns.config import required_checks
+from orch_it.testruns.runner import run_tests
 from test_github_import import NOW, REPO, FakeGh
 from test_tie_runs import BOX, fixture as tie_fixture, run_at, starts
 
@@ -199,3 +200,15 @@ def test_a_planted_pr_start_without_its_part_is_reported_by_the_tie_check(tmp_pa
     with store.writer() as writer:
         writer.write(event)
     assert tie_gaps(store, pr_head=True) == [("github:999/1/1", ["part"])]
+
+
+def test_a_refused_start_of_a_pr_head_still_names_its_pr_part_commit_and_ticket(tmp_path):
+    """#406 decision 1, `_Run.refused` -> `_started`: no place takes the PR's head, so the run ends refused and its
+    start is written with no place. That start still carries the PR, the part (the run's selection), the head's
+    commit and the PR's ticket in its envelope; the tie check finds no gap in it."""
+    repos, store, _places, settings = tie_fixture(tmp_path)
+    done = run_tests(store, work_tree=repos.caller, repo=REPO, settings=settings, places={}, pr=PR,
+                     ticket=TICKET, wait_minutes=0, sleep=lambda seconds: None)
+    assert done.outcome == "refused"
+    assert starts(store) == [(None, TICKET, PR, "full", repos.old)]
+    assert tie_gaps(store, pr_head=True) == []
