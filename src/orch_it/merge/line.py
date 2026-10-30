@@ -31,9 +31,10 @@ every name of `required_checks` is green on that exact sha, whichever place post
 forward to the tested commit by one non-forced ref update (the base's sha is the tested tree's, each pull request ends
 merged), which the base's own protection accepts or refuses and the line never pushes around. A repo whose base
 protects nothing is held by this same wait and refusal. A name still not green when the wait ends (note `required
-checks not green on <sha>: <names>`) lands nothing and stops the run, the members stay for the next run; a name red
-splits the batch like a red test. A red test splits the batch in halves, each half is combined again from the base as it then is and checked, down to the one
-red pull request, which goes back to its ticket by the follow's red rule while the others land. A red whose every
+checks not green on <sha>: <names>`) lands nothing and stops the run: every member not landed stays for the next run.
+A red test or a red required name splits the batch in halves, each half is combined again from the base as it then is
+and checked, down to the one red pull request, which goes back to its ticket by the follow's red rule while the others
+land. A red whose every
 failing test also fails on main (an open red-on-main ticket covers them, and a run of those ids alone on the sha main had
 when the batch was made fails them all) is not a member's fault: the line stops there (note `main is red on <ids>`), the
 members stay for the next run, none is sent back. A base that moved under a green pass rebuilds the batch on the new
@@ -163,7 +164,8 @@ class _Line:
     ready_at: dict[int, datetime] = field(default_factory=dict)  # pr -> its ready time, as members() read it
     suite: batch.Suite | None = None  # the required suite on a commit; None: no batches
     batches_made: int = 0
-    held: bool = False  # the run stops, nothing is sent back: main is red on every test a batch failed, or a name stays unposted
+    held: str | None = None  # the run stops, nothing is sent back; why (a turn's detail): main is red on every test a
+    # batch failed (`main_red`), or a required name stays not green (`checks_missing`)
     refused: str | None = None  # the base's own reason for refusing a batch landing: the rest goes one by one
     notes: list[str] = field(default_factory=list)
 
@@ -261,6 +263,7 @@ class _Line:
                             continue
                     elif result.outcome == batch.FAILED and result.failing and len(made.included) == 1:
                         self.red(made.included[0], list(result.failing), by_check)
+                    # a red check name skips the main comparison: that rule speaks of test ids only (brain answer 1)
                     elif (result.outcome == batch.FAILED and result.failing and not by_check
                           and self.red_on_main(made, result.failing)):
                         pass  # main itself is red on all of it: nothing to split, nothing to send back
@@ -273,6 +276,8 @@ class _Line:
             finally:
                 self.hub.end_batch(self.repo, made.branch)
             group = made.apart
+        if group and self.held:  # a hold ends the run: the members it did not reach wait for the next one
+            self.postpone(group, "bound", self.held)
 
     def tested(self, made: _Batch) -> tuple[batch.SuiteResult, bool, tuple[str, ...]]:
         """What the combined tree earned: the suite's result, and when the suite passed the required names on its sha
@@ -292,19 +297,26 @@ class _Line:
         `required` is green: `((), ())`. A name red ends the wait at once: `(red names, ())`. At `check_minutes` (or
         the run's bound) the names not green: `((), those)`."""
 
-        ends = min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
+        ends = self.check_ends()
         while True:
             states = {check.name: check.state for check in self.hub.checks(self.repo, sha)}
             red = tuple(name for name in self.required if states.get(name) == CHECK_FAILED)
             unmet = tuple(name for name in self.required if states.get(name) != CHECK_PASSED)
-            if red or not unmet or self.clock() >= ends:
-                return red, unmet if not red else ()
+            if red:
+                return red, ()
+            if not unmet or self.clock() >= ends:
+                return (), unmet
             self.sleep(poll_wait(self.hub, self.settings))
+
+    def check_ends(self) -> datetime:
+        """When a wait for checks that starts now ends: `check_minutes` from now, or the run's bound if sooner."""
+
+        return min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
 
     def hold(self, made: _Batch, unmet: tuple[str, ...]) -> None:
         """A required name not green when the wait ended: nothing lands, the run stops, no member is sent back."""
 
-        self.held = True
+        self.held = "checks_missing"
         self.notes.append(f"required checks not green on {made.tip[:SHORT_SHA]}: {', '.join(unmet)}")
         self.postpone(made.included, "bound", "checks_missing")
 
@@ -321,7 +333,7 @@ class _Line:
         on_main = self.suite(made.base_sha, only=failing)
         if on_main.outcome != batch.FAILED or not ids <= {red_main.normal(test_id) for test_id in on_main.failing}:
             return False
-        self.held = True
+        self.held = "main_red"
         self.notes.append(f"main is red on {', '.join(sorted(ids))}")
         self.postpone(made.included, "bound", "main_red")
         return True
@@ -422,7 +434,7 @@ class _Line:
 
     def serve(self, member: _Member) -> Served:
         number, updates, refused = member.pull.number, 0, 0
-        turn_ends = min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
+        turn_ends = self.check_ends()
         while True:
             pull = self.hub.pull(self.repo, number)
             if pull is None or pull.state != "open":  # merged or closed by a person
@@ -443,7 +455,7 @@ class _Line:
                 fresh = self.hub.pull(self.repo, number)
                 record.write(self.store, self.repo, member.ticket, self.role, self.run_id, None,
                              [record.pr_updated(number, pull.head_sha, fresh.head_sha if fresh else None)])
-                turn_ends = min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
+                turn_ends = self.check_ends()
                 continue
             if done.outcome == "green" and pull.behind == 0:
                 try:

@@ -51,6 +51,7 @@ class FixturePlace:
         self.posted = list(REQUIRED)
         self.pending = set()
         self.red_names = {}  # check name -> the pull requests whose presence in a tree makes it red
+        self.unposted_for = {}  # check name -> the pull requests whose presence in a tree leaves it unposted
         self.tested = []  # (tip, outcome) per pass, in order
         self.id_runs = []  # (tip, the ids asked) per pass that was given ids
         self.during = []  # callables run while a pass runs (the world moves under it)
@@ -68,6 +69,8 @@ class FixturePlace:
         if request.ids is None:
             held = set(self.hub.members_of(tip))
             for name in self.posted:
+                if held & self.unposted_for.get(name, set()):
+                    continue
                 state = FAILED if held & self.red_names.get(name, set()) else PENDING if name in self.pending else PASSED
                 self.hub.checks_on(tip, state, names=(name,))
         report = scratch / "junit.xml"
@@ -515,3 +518,29 @@ def test_the_bases_own_protection_still_decides_a_name_the_line_does_not_require
     done = line(world, tmp_path, suite)
     assert len(done.notes) == 1 and done.notes[0].startswith("batch landing refused:")
     assert [c for c in hub.calls if c[0] == "advance_base"] and hub.advances == []  # the line asked, GitHub refused
+
+
+def test_a_hold_during_a_split_puts_every_member_not_landed_and_not_sent_back_off_to_the_next_run(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    suite, place = make_suite(world, tmp_path)
+    place.red_names = {WINDOWS_CHECK: {prs[13]}}  # the whole batch is red on a name: it splits
+    place.unposted_for = {LINUX_CHECK: {prs[12]}}  # the half holding 12 never gets the other name: the run holds
+    done = line(world, tmp_path, suite)
+    results = {s.pr: (s.result, s.detail) for s in done.served}
+    assert results == {prs[10]: ("merged", ""), prs[11]: ("merged", ""), prs[12]: ("bound", "checks_missing"),
+                       prs[13]: ("bound", "checks_missing")}
+    assert done.reason == "next_run" and ci.merged == [prs[10], prs[11]]
+    assert hub.pull(REPO, prs[13]).state == "open" and hub.issues[(REPO, 13)].open
+
+
+def test_a_hold_also_puts_off_the_member_that_did_not_combine_with_the_batch(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    hub.clashes.add(frozenset((prs[11], prs[12])))  # 12 does not combine: it waits `apart`
+    suite, place = make_suite(world, tmp_path)
+    place.posted = [LINUX_CHECK]
+    done = line(world, tmp_path, suite)
+    assert main_untouched(hub)
+    assert {s.pr: (s.result, s.detail) for s in done.served} == {prs[n]: ("bound", "checks_missing")
+                                                                 for n in (10, 11, 12, 13)}
