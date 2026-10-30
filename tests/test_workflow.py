@@ -589,12 +589,49 @@ def test_the_foreign_linux_and_windows_jobs_run_on_every_change_as_the_suite_job
         assert not any(line.startswith("    if:") for line in jobs[name]), name  # no job-level condition
 
 
-def test_the_foreign_macos_job_runs_on_the_nightly_rule_so_a_manual_slow_and_live_run_starts_it():
-    # the same rule as the workflow's NIGHTLY env (a schedule run, or a manual run with slow_and_live), so a manual
-    # run with the input set starts the macOS job too; a manual run without it leaves macOS out, as before
+def test_the_foreign_macos_job_runs_only_on_a_manual_run_that_sets_its_own_input():
+    # macOS is out of the nightly (its red or cut run must not turn the nightly red): the job starts by hand only
     jobs = job_lines(WORKFLOW.read_text("utf-8"))
-    night = re.fullmatch(r"\$\{\{ (.*) \}\}", workflow_env()["NIGHTLY"]).group(1)
-    assert jobs[FOREIGN_MACOS].count(f"    if: {night}") == 1
+    assert jobs[FOREIGN_MACOS].count("    if: github.event_name == 'workflow_dispatch' && inputs.foreign_macos") == 1
+
+
+def test_the_manual_run_has_a_foreign_macos_input_of_boolean_type_defaulting_to_false():
+    text = WORKFLOW.read_text("utf-8")
+    block = re.search(r"^  workflow_dispatch:\n((?:    .*\n)+)", text, re.M).group(1)
+    body = re.search(r"^      foreign_macos:\n((?:        .*\n)+)", block, re.M)
+    assert body is not None, block
+    assert re.search(r"^        type: boolean$", body.group(1), re.M)
+    assert re.search(r"^        default: false$", body.group(1), re.M)
+    assert re.search(r"^        description: .*macOS.*$", body.group(1), re.M)
+
+
+def test_the_foreign_macos_job_has_no_schedule_and_no_slow_and_live_in_its_condition():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    conditions = [line for line in jobs[FOREIGN_MACOS] if line.startswith("    if:")]
+    assert len(conditions) == 1, conditions
+    assert "schedule" not in conditions[0]
+    assert "slow_and_live" not in conditions[0]
+
+
+def test_the_nightly_rule_and_the_slow_and_live_input_are_unchanged():
+    text = WORKFLOW.read_text("utf-8")
+    assert workflow_env()["NIGHTLY"] == (
+        "${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live) }}")
+    block = re.search(r"^  workflow_dispatch:\n((?:    .*\n)+)", text, re.M).group(1)
+    body = re.search(r"^      slow_and_live:\n((?:        .*\n)+)", block, re.M)
+    assert body is not None, block
+    assert re.search(r"^        type: boolean$", body.group(1), re.M)
+    assert re.search(r"^        default: false$", body.group(1), re.M)
+
+
+def test_the_foreign_macos_run_sets_nightly_true_so_a_manual_run_takes_the_nightly_selection():
+    # the workflow's NIGHTLY is false for a foreign_macos run without slow_and_live: the macOS step sets it itself,
+    # so the script selects and bounds the run as the nightly did; the other foreign jobs keep the workflow's NIGHTLY
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    run = "\n".join(step_named(steps_of(jobs[FOREIGN_MACOS]), "the foreign run"))
+    assert re.search(r'^\s+NIGHTLY: "true"$', run, re.M), run
+    for name in (FOREIGN_LINUX, FOREIGN_WINDOWS):
+        assert "NIGHTLY" not in "\n".join(step_named(steps_of(jobs[name]), "the foreign run")), name
 
 
 def test_the_pytest_jobs_save_the_rate_limit_after_pytest_and_never_fail_the_job():

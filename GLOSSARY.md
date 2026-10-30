@@ -105,7 +105,7 @@ _Avoid_: sandbox, isolated environment
 A run of orch-it's suite and its setup commands in a copy that is not the owner's setup: an invented account and repo, a
 folder with another name, no git identity, no GitHub variable, a fresh home. The foreign job of each OS (see
 `.github/workflows/tests.yml`; the script is `.github/scripts/foreign_run.py`) runs it: the Linux and Windows jobs per change
-and on the nightly, the macOS one on the nightly only. Per change the Linux job runs the not-slow, not-live tests and the
+and on the nightly, the macOS one only on a manual run that asks for it (its input `foreign_macos`). Per change the Linux job runs the not-slow, not-live tests and the
 Windows job only those of them marked as touching the OS; on the nightly every job runs everything but the live tests.
 _Avoid_: sandbox run, clean run, outside run
 

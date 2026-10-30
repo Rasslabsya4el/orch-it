@@ -2,7 +2,8 @@ name: tests
 
 # The job names `linux` and `windows` are required by branch protection by name: never rename them.
 # Pull request, push and manual (workflow_dispatch) runs leave the `slow` and `live` tests out; the nightly run (schedule) and a manual
-# run started with `-f slow_and_live=true` run the full suite with them (#394 decision 8, #421 rule 7).
+# run started with `-f slow_and_live=true` run the full suite with them (#394 decision 8, #421 rule 7). macOS is out of the
+# nightly: only a manual run started with `-f foreign_macos=true` runs its foreign job.
 on:
   # `edited` too: a title or body edit reruns the closing check (the home repo's ticket #422), which reads the text as it stands then
   pull_request:
@@ -15,6 +16,10 @@ on:
     inputs:
       slow_and_live:
         description: "run the tests marked slow and live too"
+        type: boolean
+        default: false
+      foreign_macos:
+        description: "macOS is out of the nightly: this starts its foreign job by hand"
         type: boolean
         default: false
 
@@ -237,12 +242,12 @@ jobs:
           path: junit.xml
           if-no-files-found: ignore
 
-  # The nightly rule only (a schedule run, or a manual run with slow_and_live, as `env.NIGHTLY`): macOS is no machine of the
-  # owner's, so its foreign run is read on the nightly. Its PATH takes the same bin rule as Linux's (no bare `python`); on
-  # the nightly the script runs the slow tests too, as the nightly windows job does, and leaves out the live ones (no token
-  # in the foreign setup).
+  # Out of the nightly: a schedule run never starts this job, and a manual run starts it only with its own input
+  # `foreign_macos` set, so a red or cut macOS run cannot turn the nightly or main red. Its PATH takes the same bin rule as
+  # Linux's (no bare `python`). The step sets NIGHTLY itself, so the script runs the nightly selection (the slow tests too,
+  # the live ones left out: no token in the foreign setup) whatever slow_and_live says. The bound stays unmeasured at 30.
   foreign-macos:
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)
+    if: github.event_name == 'workflow_dispatch' && inputs.foreign_macos
     runs-on: macos-latest
     timeout-minutes: 30  # unmeasured: set to 1.5 x the first nightly's job
     steps:
@@ -254,6 +259,8 @@ jobs:
           python-version: "3.12"
       - name: the foreign run
         shell: bash
+        env:
+          NIGHTLY: "true"  # this job runs by hand on the nightly selection and bound: the workflow's NIGHTLY is false without slow_and_live
         run: python3 .github/scripts/foreign_run.py
       - name: upload the JUnit report
         if: always()
