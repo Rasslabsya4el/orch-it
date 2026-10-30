@@ -71,6 +71,10 @@ The time a GitHub job waits from its queued to its started, the wait for a machi
 from the run's status.
 _Avoid_: queue time, pending time, waiting time
 
+**Placeholder file**:
+A stub a test place puts where a file of private data should be, because that place does not have the real one; a test that read one has not been run on the real file until it reruns at a place that has it.
+_Avoid_: mock file, fixture, dummy data
+
 **Clean environment**:
 What a test run's process sees of its environment: the OS's base variables and the repo's own test settings, nothing of whoever started it.
 _Avoid_: sandbox, isolated environment

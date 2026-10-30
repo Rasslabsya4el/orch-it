@@ -11,7 +11,9 @@ A case's outcome is `failed` with a `<failure>` child, `error` with an `<error>`
 one wins over `<skipped>`), `skipped` with a `<skipped>` child, else `passed`.
 
 A case is `marked` when it has a `<property name="os_touching">` child under `<properties>`: the repo's
-conftest writes it for a test carrying the `os_touching` marker (#414 unit 4).
+conftest writes it for a test carrying the `os_touching` marker (#414 unit 4). A case is `placeholder` when it
+has a `<property name="reads_placeholder">` child: the `orch_it_ids` plugin writes it for a test that opened a file
+named in `ORCH_IT_PLACEHOLDERS` (#414 row 15).
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ REPORT_ERROR_CODES = ("missing", "broken")
 _RANK = {"passed": 0, "skipped": 1, "error": 2, "failed": 3}
 _CHILD_OUTCOME = {"failure": "failed", "error": "error", "skipped": "skipped"}
 MARKER_PROPERTY = "os_touching"  # the name of the `<property>` a marked test's case carries
+PLACEHOLDER_PROPERTY = "reads_placeholder"  # the one a test that read a placeholder file carries
 
 
 class ReportUnreadable(Exception):
@@ -54,6 +57,7 @@ class Case:
     seconds: float | None
     skip_reason: str | None  # the `message` (else `type`) of a skipped case's <skipped>
     marked: bool = False  # the case has the `os_touching` property
+    placeholder: bool = False  # the case has the `reads_placeholder` property
 
     @property
     def test_id(self) -> str:
@@ -116,11 +120,13 @@ class _Reader:
                 self.open_case = {"classname": (attrs.get("classname") or "")[:NAME_CHARS],
                                   "name": (attrs.get("name") or "")[:NAME_CHARS],
                                   "outcome": "passed", "seconds": _seconds(attrs.get("time")),
-                                  "skip_reason": None, "marked": False}
+                                  "skip_reason": None, "marked": False, "placeholder": False}
             elif tag in ("failure", "error") and self.suites and self.depth == self.suites[-1].depth + 1:
                 self._suite_red(self.suites[-1])
         elif tag == "property" and self.depth == self.case_depth + 2 and attrs.get("name") == MARKER_PROPERTY:
             self.open_case["marked"] = True
+        elif tag == "property" and self.depth == self.case_depth + 2 and attrs.get("name") == PLACEHOLDER_PROPERTY:
+            self.open_case["placeholder"] = True
         elif self.depth == self.case_depth + 1 and tag in _CHILD_OUTCOME:
             outcome = _CHILD_OUTCOME[tag]
             case = self.open_case
