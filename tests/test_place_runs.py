@@ -144,8 +144,8 @@ def test_a_wait_stopped_by_a_person_is_ended_stopped(tmp_path):
 
 
 class Budgeted:
-    """A github place for the wait only: it is not offered (github_tests is off), and it reads the request budget
-    GitHub has left, as the real place does."""
+    """A github place for the wait only: its run passes github_tests=False, so the rule does not offer it (the setting's
+    default is on), and it reads the request budget GitHub has left, as the real place does."""
 
     id, os = "github", "linux"
 

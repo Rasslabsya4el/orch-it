@@ -3,6 +3,7 @@ adapter runs the required suite there for a sha, the busy machines are the accou
 jobs' queueing to their end. `FakeActions` is GitHub's Actions API for one account (tests/fake_github.py)."""
 
 import json
+import subprocess
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -13,14 +14,15 @@ from required_names import LINUX_CHECK, WINDOWS_CHECK
 
 from orch_it.events import github_budget
 from orch_it.events.store import Store
-from orch_it.testruns import place_rule
+from orch_it.testruns import place_rule, runner
 from orch_it.testruns.config import DEFAULT_QUEUE_BOUND_MINUTES, TestSettings
 from orch_it.testruns.github import GithubError
 from orch_it.testruns.github_place import QUEUE_GRACE_SECONDS, GithubPlace, oses_of_workflow
 from orch_it.testruns.places import PlaceEnd, PlaceRefused, Request
-from orch_it.testruns.runner import offers_of, run_tests
+from orch_it.testruns.runner import default_places, offers_of, run_tests
 
 REPO = "acme-x/widgets-y"
+DEFAULTS = TestSettings()  # the settings of a repo that sets nothing: github_tests on, github_capacity 20
 OTHER = "acme-x/gadgets-z"
 NOW = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
 GREEN_JOBS = {LINUX_CHECK: DispatchedJob(), WINDOWS_CHECK: DispatchedJob(label="windows-latest")}
@@ -119,22 +121,27 @@ def offered(start, place="github"):
 # --- the rule offers github with its measured finish (row 2) ------------------------------------------
 
 def test_with_github_measured_fastest_the_rule_picks_github_and_the_test_run_says_so(world):
+    world.settings = DEFAULTS  # the defaults: github_tests on
     seed(world.store, "own", 5.0)
     seed(world.store, "github", 1.0)
     done = run(world)
     assert (done.place, done.outcome) == ("github", "passed")
     [start] = starts(world.store)
     assert (start["place"], start["chosen"], start["reason"]) == ("github", "github", "earliest_finish")
-    assert offered(start) == {"place": "github", "expected_minutes": 1.0, "dropped": None, "note": "0 busy of 20"}
+    assert "github" in [o["place"] for o in start["places_offered"]]
+    assert offered(start) == {"place": "github", "expected_minutes": 1.0, "dropped": None,
+                              "note": f"0 busy of {DEFAULTS.github_capacity}"}
 
 
 def test_with_own_faster_the_rule_picks_own_and_places_offered_still_lists_github(world):
+    world.settings = DEFAULTS  # the defaults: github_tests on
     seed(world.store, "own", 1.0)
     seed(world.store, "github", 5.0)
     done = run(world)
     assert done.place == "own"
     [start] = starts(world.store)
     assert (start["place"], start["reason"]) == ("own", "earliest_finish")
+    assert "github" in [o["place"] for o in start["places_offered"]]
     assert offered(start)["expected_minutes"] == 5.0 and offered(start)["dropped"] is None
     assert world.actions.calls and not any("dispatches" in " ".join(c) for c in world.actions.calls)
 
@@ -142,11 +149,40 @@ def test_with_own_faster_the_rule_picks_own_and_places_offered_still_lists_githu
 def test_with_the_default_settings_and_actions_on_github_is_offered(world):
     seed(world.store, "own", 5.0)
     seed(world.store, "github", 1.0)
-    done = run(world, settings=TestSettings())
+    done = run(world, settings=DEFAULTS)
     assert done.place == "github"
     [start] = starts(world.store)
     assert "github" in [o["place"] for o in start["places_offered"]]
-    assert offered(start) == {"place": "github", "expected_minutes": 1.0, "dropped": None, "note": "0 busy of 20"}
+    assert offered(start) == {"place": "github", "expected_minutes": 1.0, "dropped": None,
+                              "note": f"0 busy of {DEFAULTS.github_capacity}"}
+
+
+def test_the_default_places_build_the_github_place_with_run_gh_by_default_and_none_when_off(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_gh(args):  # the fake gh the production path takes, never the real one
+        calls.append(args)
+        return "{}"
+
+    monkeypatch.setattr(runner, "run_gh", fake_gh)
+    store, work = Store.open(tmp_path / "store"), Repos(tmp_path).caller
+    places = default_places(DEFAULTS, work, repo=REPO, store=store)
+    assert places["github"].gh is fake_gh and calls == []
+    assert "github" not in default_places(TestSettings(github_tests=False), work, repo=REPO, store=store)
+
+
+def test_a_github_place_built_with_no_gh_argument_starts_no_gh_process(world, monkeypatch):
+    real_run, started = subprocess.run, []
+
+    def spy(argv, *args, **kwargs):
+        if argv and argv[0] == "gh":
+            started.append(argv)
+            raise OSError("spy: a real gh start")
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    entry = GithubPlace(REPO, world.store, DEFAULTS).availability(NOW)
+    assert started == [] and entry.on is False
 
 
 def test_github_stays_switched_off_while_the_setting_github_tests_is_false(world):

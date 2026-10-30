@@ -42,17 +42,18 @@ def no_login_call(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_real_gh_in_test_runs(monkeypatch):
-    """No test runs the real `gh` through a test run's github place (#414 unit 14): `run_tests` builds that place
-    with `runner.run_gh` (its default, since `github_tests` is on), so that name refuses here as `gh_failed`, which
-    reads as GitHub unreadable and leaves the place off. A test that wants a github place passes its own `gh`."""
+    """No test starts the real `gh` (#414 unit 14): every `gh` call of the layer goes through `_call_gh` in
+    `orch_it.testruns.github` (`run_gh` and `call_gh` both call it by name at call time), so that one name refuses
+    here as `gh_failed`. A github place then reads as GitHub unreadable and is off, whatever default `gh` it was built
+    with (`run_tests`, `GithubPlace` with no `gh`, the merge command). A test that wants a `gh` passes its own."""
 
-    from orch_it.testruns import runner
+    from orch_it.testruns import github
     from orch_it.testruns.github import GithubError
 
-    def refused(args):
+    def refused(args, timeout=None):
         raise GithubError("gh_failed", "no real gh in a test: " + " ".join(args[:3]))
 
-    monkeypatch.setattr(runner, "run_gh", refused)
+    monkeypatch.setattr(github, "_call_gh", refused)
 
 
 @pytest.fixture
