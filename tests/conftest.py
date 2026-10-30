@@ -41,13 +41,16 @@ def no_login_call(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_real_gh_in_test_runs(monkeypatch):
+def no_real_gh_in_test_runs(monkeypatch, request):
     """No test starts the real `gh` (#414 unit 14): every `gh` call of the layer ends in `subprocess.run(["gh", ...])`
     inside `_call_gh` in `orch_it.testruns.github`, so that one process start refuses here as `gh_failed`. A github
     place then reads as GitHub unreadable and is off, whatever default `gh` it was built with (`run_tests`,
     `GithubPlace` with no `gh`, the merge command). The refusal sits at the process start, below `run_gh` and `_call_gh`,
     so a test of their error mapping (timeout, failed exit, missing `gh`) puts its own `subprocess.run` over it and
     still reaches the real code; any other command passes through. A test that wants a `gh` passes its own."""
+
+    if request.node.get_closest_marker("live"):  # a live test is the one that asks the real `gh` (the nightly runs it)
+        return
 
     import subprocess
 
