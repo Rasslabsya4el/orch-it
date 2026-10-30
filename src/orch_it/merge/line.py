@@ -273,9 +273,11 @@ class _Line:
                             if rebuilt > self.settings.max_updates:
                                 return self.postpone(group, "starved")
                             continue
+                    elif (result.outcome == batch.FAILED and result.failing and by_check
+                          and self.name_red_on_main(made, result.failing)):
+                        pass  # main's head is red on every one of these names: nothing to split, nothing to send back
                     elif result.outcome == batch.FAILED and result.failing and len(made.included) == 1:
                         self.red(made.included[0], list(result.failing), by_check)
-                    # a red check name skips the main comparison: that rule speaks of test ids only (brain answer 1)
                     elif (result.outcome == batch.FAILED and result.failing and not by_check
                           and self.red_on_main(made, result.failing)):
                         pass  # main itself is red on all of it: nothing to split, nothing to send back
@@ -383,6 +385,22 @@ class _Line:
             return False
         self.held = "main_red"
         self.notes.append(f"main is red on {', '.join(sorted(ids))}")
+        self.postpone(made.included, "bound", "main_red")
+        return True
+
+    def name_red_on_main(self, made: _Batch, red: tuple[str, ...]) -> bool:
+        """Whether every red required name of `made` is red on the head main had when the batch was made (a name main
+        has no result for, or green or pending there, is not red on main). Then the line holds as `red_on_main` does:
+        the members wait for main's next sha, none is sent back."""
+
+        on_main = {check.name: check.state for check in self.hub.checks(self.repo, made.base_sha, statuses=True)}
+        if not all(on_main.get(name) == CHECK_FAILED for name in red):
+            return False
+        if rival := self.wait_for_turn():
+            self.yield_to(made, rival)
+            return True
+        self.held = "main_red"
+        self.notes.append(f"main is red on {', '.join(sorted(red))}")
         self.postpone(made.included, "bound", "main_red")
         return True
 
