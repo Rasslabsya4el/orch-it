@@ -42,6 +42,8 @@ POINT_KINDS = [
     "github.called",
     # #406 decision 3: the account's busy GitHub machines, read at the GitHub pace
     "github.busy",
+    # #406 decision 4: the account's GitHub minutes of the UTC month, read at the GitHub pace
+    "github.minutes",
 ]
 
 OUTCOMES = ["passed", "failed", "no_result", "refused", "lost", "stopped"]
@@ -155,7 +157,7 @@ def test_every_step_id_of_the_list_and_no_other():
 
 def test_every_point_kind_of_the_list_and_no_other():
     assert sorted(schema.point_kinds()) == sorted(POINT_KINDS)
-    assert len(POINT_KINDS) == 52  # 47 of the list, + github.called (#414), + skill.shadowed (#397), lock.removed, line.served (#400), + github.busy (#406)
+    assert len(POINT_KINDS) == 53  # 47 of the list, + github.called (#414), + skill.shadowed (#397), lock.removed, line.served (#400), + github.busy, github.minutes (#406)
 
 
 def test_kinds_are_the_point_kinds_and_the_pair():

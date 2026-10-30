@@ -10,7 +10,8 @@ entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1)
 `workers.py`) and `github_capacity` (20, GitHub's
 concurrent job cap on a free account), `github_poll_seconds` (30.0, #406 decision 5: the most often one account read
 of GitHub's busy machines is made, a number of seconds over 0 up to an hour), `github_reads_reserve` (1000, the remaining
-hourly GitHub count under which the reads wait longer; 0 never waits), `test_progress_seconds` (10.0, #406 decision 2:
+hourly GitHub count under which the reads wait longer; 0 never waits), `github_minutes_allowance` (2000, #406 decision 4: the
+GitHub Actions minutes a month the place rule lets a private repo's runs use; a whole number, 0 or more), `test_progress_seconds` (10.0, #406 decision 2:
 the most often a running own or machine test_run writes its `step.progressed`, a number of seconds over 0 up to an hour), `github_priority` (a whole number, 0 for every repo: between repos of one
 account a higher one starts first while the account is at its concurrency, #414 item 4; default in `defaults.json`, read
 by `github_priority`), `required_checks` (the names of the checks a merge is held to; default
@@ -149,6 +150,7 @@ class TestSettings:
     github_capacity: int = 20
     github_poll_seconds: float = 30.0  # #406 decision 5: the most often an account read of GitHub's busy machines is made
     github_reads_reserve: int = 1000  # #406 decision 5: the remaining hourly GitHub count under which reads wait longer
+    github_minutes_allowance: int = 2000  # #406 decision 4: the month's GitHub minutes a private repo's runs may use
     test_progress_seconds: float = 10.0  # #406 decision 2: the most often a running test_run writes step.progressed
     required_checks: tuple[str, ...] = DEFAULT_REQUIRED_CHECKS
     queue_bound_minutes: float = DEFAULT_QUEUE_BOUND_MINUTES
@@ -186,7 +188,8 @@ class TestSettings:
                 raise SettingsError("bad_setting", "github_tests")
             values["github_tests"] = merged["github_tests"]
         for key, name in (("own_capacity", "own_capacity"), ("github_capacity", "github_capacity"),
-                          ("github_reads_reserve", "github_reads_reserve")):
+                          ("github_reads_reserve", "github_reads_reserve"),
+                          ("github_minutes_allowance", "github_minutes_allowance")):
             if key in merged:
                 values[name] = _count(key, merged[key])
         if "github_poll_seconds" in merged:

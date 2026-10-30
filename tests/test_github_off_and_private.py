@@ -33,7 +33,7 @@ from orch_it.testruns.runner import run_tests
 
 OTHER = "owner-x/other-z"
 QUEUE_BOUND_SECONDS = bound_check.default_bounds()["queue_minutes"] * 60
-SPENT = {"total_minutes_used": 2000, "included_minutes": 2000, "total_paid_minutes_used": 0}
+SPENT = {"total_minutes_used": 2001, "included_minutes": 2000, "total_paid_minutes_used": 0}  # past the allowance (2000)
 LEFT = {"total_minutes_used": 300, "included_minutes": 2000, "total_paid_minutes_used": 0}
 JUNIT = "<testsuites><testsuite name='pytest'><testcase classname='t' name='test_a'/></testsuite></testsuites>"
 
@@ -69,12 +69,21 @@ def github_place(store, actions, **settings):
 
 # --- the place rule leaves GitHub out, and says which cause (decision 6) ------------------------------------
 
-@pytest.mark.parametrize("cause", CAUSES)
+@pytest.mark.parametrize("cause", ["actions_off", "queue_past_bound"])
 def test_each_cause_leaves_the_github_place_out_and_names_itself(tmp_path, cause):
     actions = actions_for(tmp_path)
     turn_off(actions, cause)
     room = github_place(Store.open(tmp_path / "store"), actions).availability(now())
     assert room.on is False and room.cause == cause and room.note
+
+
+def test_the_minutes_are_the_place_rules_to_refuse_not_the_availability(tmp_path):
+    # #406 decision 4: availability keeps GitHub on and hands the month's minutes over; the rule drops it (`out_of_minutes`)
+    actions = actions_for(tmp_path)
+    turn_off(actions, "minutes_spent")
+    room = github_place(Store.open(tmp_path / "store"), actions).availability(now())
+    assert room.on is True and room.cause is None and room.metered is True
+    assert (room.budget.used, room.budget.allowance) == (2001, 2000)
 
 
 def test_a_public_repo_with_every_minute_spent_on_the_account_still_runs_on_github(tmp_path):
@@ -91,11 +100,12 @@ def test_a_private_repo_with_minutes_left_runs_on_github_and_pays_for_it(tmp_pat
     assert room.on is True and room.cause is None and room.metered is True
 
 
-def test_minutes_paid_for_are_not_spent(tmp_path):
+def test_minutes_paid_for_are_the_allowance_setting_the_owner_raises(tmp_path):
     actions = actions_for(tmp_path)
     actions.private = True
-    actions.billing = SPENT | {"total_paid_minutes_used": 40}  # past the free ones, on a plan that pays on
-    assert github_place(Store.open(tmp_path / "store"), actions).availability(now()).on is True
+    actions.billing = SPENT  # past 2000, on a plan that pays on: the owner raises `github_minutes_allowance`
+    room = github_place(Store.open(tmp_path / "store"), actions, github_minutes_allowance=3000).availability(now())
+    assert room.on is True and (room.budget.used, room.budget.allowance) == (2001, 3000)
 
 
 def test_a_queue_wait_inside_its_bound_leaves_github_on(tmp_path):
@@ -152,7 +162,7 @@ def test_a_run_with_github_out_goes_to_own_and_the_decision_carries_the_cause(tm
     [(detail,)] = store.query("SELECT detail FROM events WHERE kind = 'step.started' AND step = 'test_run'"
                               " AND run != 'seed-own' AND run != 'seed-github'").rows
     entry = next(p for p in json.loads(detail)["places_offered"] if p["place"] == "github")
-    assert entry["dropped"] == "place_off" and entry["note"]
+    assert entry["dropped"] == ("out_of_minutes" if cause == "minutes_spent" else "place_off") and entry["note"]
 
 
 def test_a_run_with_github_on_names_no_cause(tmp_path):

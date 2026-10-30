@@ -69,10 +69,10 @@ _Avoid_: weight, rank, precedence
 
 **Availability**:
 The readiness verdict of the `github` test place: whether it may be offered (Actions on, its request budget with room,
-GitHub readable, for a private repo the account's included minutes not spent, no job of the account waiting in the queue past
-its bound), its machines busy of their limit, whether a run there costs money (a private repo's does, so the place rule
+GitHub readable, no job of the account waiting in the queue past its bound; a private repo's minutes are the place rule's
+to judge, see GitHub minutes), its machines busy of their limit, whether a run there costs money (a private repo's does, so the place rule
 ranks it after the places that are free), and the note the decision carries (its busy-of-limit count, or why it is off).
-A place off because its runs would not start also carries the cause: Actions off, minutes spent, or queue wait past the bound.
+A place left out because its runs would not start also carries the cause: Actions off, minutes spent, or queue wait past the bound.
 _Avoid_: status, health, state
 
 **Queue wait**:
@@ -85,6 +85,14 @@ The account's GitHub machines in use: the jobs in progress and queued on GitHub'
 the account and every trigger, read from GitHub's own lists and written as one `github.busy` point; the limit they are
 counted against is the account's capacity (the setting `github_capacity`, or the running count while a queued job has waited).
 _Avoid_: GitHub load, runners busy, machines in use
+
+**GitHub minutes**:
+The account's GitHub Actions minutes of the current UTC month: those used (GitHub's own figure for the account, else the sum
+of the layer's own ended GitHub runs of the month, a Windows job counted twice), the allowance (the setting
+`github_minutes_allowance`) and what is left, written as one `github.minutes` point. A run counts in the month it ended; a
+public repo's runs bill nothing. The place rule leaves `github` out of a private repo's run with `out_of_minutes` when the
+minutes used plus the median billed minutes of that part's ended GitHub runs pass the allowance.
+_Avoid_: GitHub quota, billing, credits
 
 **Poll**:
 The layer's repeated read of GitHub or a machine until a result appears. The polls that go through the request budget (the

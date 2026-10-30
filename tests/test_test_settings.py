@@ -23,6 +23,13 @@ def test_the_busy_reader_keys_default_to_30_seconds_and_1000_reads_and_read_thei
     assert (tuned.github_poll_seconds, tuned.github_reads_reserve) == (45.0, 0)
 
 
+def test_github_minutes_allowance_defaults_to_2000_and_reads_its_value():
+    assert TestSettings.from_settings({}, REPO).github_minutes_allowance == 2000
+    assert TestSettings.from_settings({"github_minutes_allowance": 3000}, REPO).github_minutes_allowance == 3000
+    own = TestSettings.from_settings({"github_minutes_allowance": 3000, "repos": {REPO: {"github_minutes_allowance": 500}}}, REPO)
+    assert own.github_minutes_allowance == 500
+
+
 def test_github_tests_set_false_is_the_opt_out():
     assert TestSettings.from_settings({"github_tests": False}, REPO).github_tests is False
 
@@ -70,6 +77,9 @@ def test_a_machine_may_name_its_origin_and_extra_ssh_options():
     ({"github_poll_seconds": float("nan")}, "github_poll_seconds"),
     ({"github_reads_reserve": -1}, "github_reads_reserve"),
     ({"github_reads_reserve": 2.5}, "github_reads_reserve"),
+    ({"github_minutes_allowance": -1}, "github_minutes_allowance"),
+    ({"github_minutes_allowance": 2000.5}, "github_minutes_allowance"),
+    ({"github_minutes_allowance": "2000"}, "github_minutes_allowance"),
     ({"repos": []}, "repos"),
     ({"test_machines": {}}, "test_machines"),
     ({"test_machines": [{"id": "a", "host": "-oProxyCommand=x", "os": "linux", "checkout": "/x"}]},

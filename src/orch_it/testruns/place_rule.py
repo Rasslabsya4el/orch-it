@@ -6,8 +6,10 @@ measured durations per place, both read from the store by `read_facts`, so a dec
 from the store alone and reads the same on every OS (load is a count of live runs, never the
 OS's CPU load). In order:
 
-1. drop a place without that OS (`os_missing`), switched off (`place_off`), at capacity
-   (`busy`), or lost earlier in this same run (`excluded`, e.g. `place_vanished`);
+1. drop a place without that OS (`os_missing`), switched off (`place_off`), a private repo's GitHub over its
+   month's minutes (`out_of_minutes`: #406 decision 4, `Offer.budget`: the minutes used plus the median billed minutes
+   of the part's ended GitHub runs, else of all of them, else 0, pass the allowance), at capacity (`busy`), or lost
+   earlier in this same run (`excluded`, e.g. `place_vanished`);
 2. for each place left, expected finish = start overhead (median of its measured starts, 0 with
    none) + run time (median of its measured runs). A place with no measured run takes the own
    place's median; when own has none either, the median of every place's measured runs;
@@ -24,10 +26,11 @@ import json
 import math
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from orch_it.events import index
 from orch_it.events.store import Store, machine_id
+from orch_it.testruns.github_minutes import charged
 
 TIE_DIGITS = 9  # finishes equal to this many decimals of a minute are a tie
 MEASURED_RUNS = 10  # decision 5: the median of the last 10 ended passed / failed runs
@@ -36,9 +39,19 @@ DEFAULT_BOUND_MINUTES = 15.0
 MAX_MINUTES = 7 * 24 * 60  # a bound or a measurement over a week is no reading
 # The drop reasons, each a code of `test_run_reason`, in the order the rule checks them; a place
 # left out after it refused or vanished in this run keeps that attempt's own code.
-OS_MISSING, PLACE_OFF, BUSY = "os_missing", "place_off", "busy"
-DROP_CODES = (OS_MISSING, PLACE_OFF, BUSY)
+OS_MISSING, PLACE_OFF, OUT_OF_MINUTES, BUSY = "os_missing", "place_off", "out_of_minutes", "busy"
+DROP_CODES = (OS_MISSING, PLACE_OFF, OUT_OF_MINUTES, BUSY)
 EARLIEST, NOTHING_MEASURED = "earliest_finish", "nothing_measured"
+
+
+@dataclass(frozen=True)
+class Budget:
+    """A private repo's GitHub minutes of the UTC month at a decision: `used` of `allowance`, and the day (`resets`, the 1st
+    of the next month) they start again at 0."""
+
+    used: float
+    allowance: int
+    resets: date
 
 
 @dataclass(frozen=True)
@@ -48,12 +61,17 @@ class Offer:
     on: bool
     capacity: int
     metered: bool = False  # a run there costs money: it is chosen only when no free place is left
+    budget: Budget | None = None  # the month's minutes of a metered place; None: a public repo's, never refused on minutes
 
 
 @dataclass(frozen=True)
 class Measured:
     starts: tuple[float, ...] = ()  # start overheads in minutes
     runs: tuple[float, ...] = ()  # run times in minutes (the last ended passed/failed runs)
+    # GitHub minutes the ended runs counted (`github_minutes.charged`, the OS multiplier in): the part's own, and every
+    # run's at the place, the last `MEASURED_RUNS` of each; only the `github` place has them
+    billed: tuple[float, ...] = ()
+    billed_all: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,11 +97,31 @@ class Decision:
                  "dropped": o.dropped} | ({"note": o.note} if o.note else {}) for o in self.offered]
 
 
-def _drop(offer: Offer, need_os: str, live: dict[str, int], excluded: dict[str, str]) -> str | None:
+def _over_budget(offer: Offer, measured: dict[str, Measured]) -> str | None:
+    """Why a metered place is out of minutes: `used` plus the median billed minutes of the part's ended runs there (with
+    none, of all its ended runs; with none at all, 0) passes the allowance; None when it does not or the offer has no
+    budget. The words name used, median, allowance and the day the minutes start again (`dd.mm`)."""
+
+    budget = offer.budget
+    if budget is None:
+        return None
+    place = measured.get(offer.place, Measured())
+    sample = place.billed or place.billed_all
+    median = statistics.median(sample) if sample else 0
+    if budget.used + median <= budget.allowance:
+        return None
+    return (f"GitHub minutes used {budget.used:g} + median run {median:g} pass the allowance {budget.allowance:g}"
+            f" until {budget.resets:%d.%m}")
+
+
+def _drop(offer: Offer, need_os: str, live: dict[str, int], excluded: dict[str, str],
+          measured: dict[str, Measured] | None = None) -> str | None:
     if need_os != "any" and need_os not in offer.oses:
         return OS_MISSING
     if not offer.on:
         return PLACE_OFF
+    if _over_budget(offer, measured or {}) is not None:
+        return OUT_OF_MINUTES
     if live.get(offer.place, 0) >= offer.capacity:
         return BUSY
     return excluded.get(offer.place)
@@ -96,7 +134,8 @@ def choose(need_os: str, places: list[Offer], live: dict[str, int],
 
     excluded = excluded or {}
     notes = notes or {}
-    drops = {o.place: _drop(o, need_os, live, excluded) for o in places}
+    drops = {o.place: _drop(o, need_os, live, excluded, measured) for o in places}
+    notes = notes | {o.place: _over_budget(o, measured) for o in places if drops[o.place] == OUT_OF_MINUTES}
     left = [o for o in places if drops[o.place] is None]
     candidates = [o for o in left if not o.metered] or left
     every_run = [m for place in measured.values() for m in place.runs]
@@ -157,7 +196,7 @@ def read_facts(store: Store, *, repo: str, selection: str, need_os: str, now: da
         started.setdefault(run, _Started(place, run_repo, run_selection, run_os, at, run_machine,
                                          bound))
     ends = store.query(
-        "SELECT run, outcome, run_minutes, start_minutes FROM events"
+        "SELECT run, outcome, run_minutes, start_minutes, billed_minutes FROM events"
         " WHERE kind = 'step.ended' AND step = 'test_run' AND run IS NOT NULL ORDER BY at DESC, id").rows
 
     ended_runs = {run for run, *_ in ends}
@@ -170,7 +209,9 @@ def read_facts(store: Store, *, repo: str, selection: str, need_os: str, now: da
 
     runs: dict[str, list[float]] = {}
     starts: dict[str, list[float]] = {}
-    for run, outcome, run_minutes, start_minutes in ends:
+    billed: dict[str, list[float]] = {}
+    billed_all: dict[str, list[float]] = {}
+    for run, outcome, run_minutes, start_minutes, billed_minutes in ends:
         start = started.get(run)
         if start is None or (need_os != "any" and start.run_os != need_os):
             continue
@@ -181,8 +222,17 @@ def read_facts(store: Store, *, repo: str, selection: str, need_os: str, now: da
                 and _minutes(run_minutes) is not None
                 and len(runs.setdefault(place, [])) < MEASURED_RUNS):
             runs[place].append(_minutes(run_minutes))
-    measured = {place: Measured(tuple(starts.get(place, ())), tuple(runs.get(place, ())))
-                for place in set(starts) | set(runs) if starts.get(place) or runs.get(place)}
+        if place == "github" and outcome in ("passed", "failed") and _minutes(billed_minutes) is not None:
+            cost = charged(_minutes(billed_minutes), start.run_os)
+            if len(billed_all.setdefault(place, [])) < MEASURED_RUNS:
+                billed_all[place].append(cost)
+            if (start.repo == repo and start.selection == selection
+                    and len(billed.setdefault(place, [])) < MEASURED_RUNS):
+                billed[place].append(cost)
+    measured = {place: Measured(tuple(starts.get(place, ())), tuple(runs.get(place, ())),
+                                tuple(billed.get(place, ())), tuple(billed_all.get(place, ())))
+                for place in set(starts) | set(runs) | set(billed_all)
+                if starts.get(place) or runs.get(place) or billed_all.get(place)}
     return live, measured
 
 
