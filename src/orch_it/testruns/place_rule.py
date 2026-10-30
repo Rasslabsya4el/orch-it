@@ -13,7 +13,8 @@ OS's CPU load). In order:
    place's median; when own has none either, the median of every place's measured runs;
 3. with nothing measured anywhere the run goes to own, or, when own is dropped, to the first
    place left (`nothing_measured`); else to the earliest expected finish (`earliest_finish`),
-   a tie going to the earlier place in tie order;
+   a tie going to the earlier place in tie order. A metered place (a private repo's GitHub: its minutes cost
+   money) is a candidate only when no free place is left; it is still offered, with its expected finish;
 4. no place left: no choice (the caller writes a `wait` with reason `test_place`).
 """
 
@@ -46,6 +47,7 @@ class Offer:
     oses: tuple[str, ...]
     on: bool
     capacity: int
+    metered: bool = False  # a run there costs money: it is chosen only when no free place is left
 
 
 @dataclass(frozen=True)
@@ -96,12 +98,13 @@ def choose(need_os: str, places: list[Offer], live: dict[str, int],
     notes = notes or {}
     drops = {o.place: _drop(o, need_os, live, excluded) for o in places}
     left = [o for o in places if drops[o.place] is None]
+    candidates = [o for o in left if not o.metered] or left
     every_run = [m for place in measured.values() for m in place.runs]
     if not every_run:
         offered = tuple(Offered(o.place, None, drops[o.place], notes.get(o.place)) for o in places)
         if not left:
             return Decision(None, None, offered)
-        pick = next((o for o in left if o.place == "own"), left[0])
+        pick = next((o for o in candidates if o.place == "own"), candidates[0])
         return Decision(pick.place, NOTHING_MEASURED, offered)
     own_runs = measured.get("own", Measured()).runs
     reference = statistics.median(own_runs or every_run)
@@ -113,7 +116,7 @@ def choose(need_os: str, places: list[Offer], live: dict[str, int],
     offered = tuple(Offered(o.place, finish.get(o.place), drops[o.place], notes.get(o.place)) for o in places)
     if not left:
         return Decision(None, None, offered)
-    best = min(left, key=lambda o: round(finish[o.place], TIE_DIGITS))  # min keeps the first of a tie
+    best = min(candidates, key=lambda o: round(finish[o.place], TIE_DIGITS))  # min keeps the first of a tie
     return Decision(best.place, EARLIEST, offered)
 
 

@@ -112,21 +112,30 @@ def run_gh(args: list[str]) -> str:
     """The default `gh` runner: `_call_gh`, then the call counted in the store (#414 decision 9) whatever its outcome.
     The count is written after the call and never fails it."""
 
+    answer = None
     try:
-        return _call_gh(args)
+        answer = _call_gh(args)
+        return answer
     finally:
-        github_budget.count_call(github_budget.repo_of(args))
+        github_budget.after_call(args, answer)
 
 
-def _call_gh(args: list[str]) -> str:
-    """`gh <args>` bounded by a timeout, its stdout as text."""
+def call_gh(args: list[str], *, timeout: int | None = None) -> str:
+    """`gh <args>` with no count: for a call that names no repo and is made by the counter itself."""
 
-    if args[:1] == ["run"]:
-        timeout = DOWNLOAD_TIMEOUT_S
-    elif any(f"/workflows/{WORKFLOW_FILE}/runs" in arg for arg in args):
-        timeout = RUNS_LIST_TIMEOUT_S
-    else:
-        timeout = API_TIMEOUT_S
+    return _call_gh(args, timeout)
+
+
+def _call_gh(args: list[str], timeout: int | None = None) -> str:
+    """`gh <args>` bounded by a timeout (default by the kind of call), its stdout as text."""
+
+    if timeout is None:
+        if args[:1] == ["run"]:
+            timeout = DOWNLOAD_TIMEOUT_S
+        elif any(f"/workflows/{WORKFLOW_FILE}/runs" in arg for arg in args):
+            timeout = RUNS_LIST_TIMEOUT_S
+        else:
+            timeout = API_TIMEOUT_S
     try:
         done = subprocess.run(
             ["gh", *args], capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL,
@@ -417,6 +426,7 @@ class _Importer:
     def __init__(self, store, repo, gh, required, job_bound, every_run, now, report, keep=None, timed=True):
         self.store, self.repo, self.gh, self.keep, self.timed = store, repo, gh, keep, timed
         self.required, self.job_bound, self.now, self.report = required, job_bound, now, report
+        self.budgeted: set[int] = set()  # runs whose Actions budget reading is among the events built
         self.facts_of_run = {run["id"]: _facts(run) for run in every_run}
 
     def import_run(self, run: dict, writer) -> None:
@@ -489,19 +499,30 @@ class _Importer:
                         found[job["job_id"]] = math.ceil(ms / 60000)
         return found
 
-    def _judge(self, run: dict, target: _Target, listed: set, cut: bool) -> tuple[outcome.RunEnd, bool]:
-        """How the job's report reads, and whether it had one to download."""
+    def _judge(self, run: dict, target: _Target, listed: set, cut: bool) -> tuple[outcome.RunEnd, bool, tuple | None]:
+        """How the job's report reads, whether it had one to download, and the Actions budget reading of the artifact's
+    `actions-rate-limit.json` (remaining, limit, reset; None: no file or no reading in it)."""
 
         name = next((n for n in (f"junit-{target.name}-{target.attempt}", f"junit-{target.name}")
                      if n in listed), None)
         if name is None:
-            return outcome.judge(None, cut=cut), False
+            return outcome.judge(None, cut=cut), False, None
         with tempfile.TemporaryDirectory(prefix="orch-it-gh-") as folder:
             self.gh(["run", "download", str(run["id"]), "-R", self.repo, "-n", name, "-D", folder])
             report = next(iter(sorted(Path(folder).rglob(REPORT_FILE))), None)
             if report is not None and self.keep is not None:
                 shutil.copyfile(report, self.keep / f"{target.key.replace('/', '-')}.xml")
-            return outcome.judge(report, cut=cut), report is not None
+            return outcome.judge(report, cut=cut), report is not None, self._budget_reading(Path(folder))
+
+    @staticmethod
+    def _budget_reading(folder: Path) -> tuple[int, int, datetime | None] | None:
+        file = next(iter(sorted(folder.rglob(github_budget.ACTIONS_FILE))), None)
+        if file is None:
+            return None
+        try:
+            return github_budget.read_core(file.read_text("utf-8"))
+        except (OSError, UnicodeDecodeError):
+            return None
 
     # --- the events of one job -------------------------------------------------------------
 
@@ -517,11 +538,12 @@ class _Importer:
             run_os = os_of({"name": target.name})
             minutes = {"billed_minutes": 0, "start_minutes": None, "run_minutes": None}
             wait = None
+            reading = None
         else:
             job_created, job_started = _moment(job.get("created_at")), _moment(job.get("started_at"))
             job_ended = _moment(job.get("completed_at"))
             hit_bound = self._ran_to_the_bound(job, job_started, job_ended)
-            end, found = self._judge(run, target, listed, hit_bound or job.get("conclusion") == "timed_out")
+            end, found, reading = self._judge(run, target, listed, hit_bound or job.get("conclusion") == "timed_out")
             if not found:
                 self.report.reports_missing += 1
             end = self._by_conclusion(run, job, end, hit_bound)
@@ -559,6 +581,11 @@ class _Importer:
         for number, detail in enumerate(end.result_details(), start=1):
             events.append(self._event("test.result", target.id(f"test.result/{number}"), ended_at,
                                       envelope | {"step": "test_run"}, detail))
+        if reading is not None and run["id"] not in self.budgeted:  # one reading per run, whatever its jobs carry
+            self.budgeted.add(run["id"])
+            events.append(github_budget.reading_event(
+                self.repo, budget="actions", remaining=reading[0], limit=reading[1], reset=reading[2], at=ended_at,
+                event_id=import_id(SOURCE, str(run["id"]), "actions_budget")))
         events.append(self._event("step.ended", target.id("step.ended"), ended_at,
                                   envelope | {"step": "test_run"}, end.ended_detail() | minutes))
         return events

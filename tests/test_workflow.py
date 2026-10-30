@@ -7,6 +7,7 @@ dropped, a job is a two-space-indented key under `jobs:`, a step a `- ` item of 
 pytest step's script is then run for real under bash with a stand-in `pytest`, so the test
 checks the arguments the workflow passes, not the text it holds."""
 
+import math
 import os
 import re
 import shlex
@@ -23,15 +24,21 @@ import pytest
 from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo, default_host
 
 from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
-from required_names import LINUX_CHECK, WINDOWS_CHECK
+from required_names import LINUX_CHECK, MACOS_OS, WINDOWS_CHECK
+from test_foreign_run import foreign_run  # the script's module, loaded once by its own test file
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
+# the jobs that run pytest themselves; the foreign jobs run `.github/scripts/foreign_run.py`
+PYTEST_JOBS = (LINUX_CHECK, WINDOWS_CHECK)
+FOREIGN_PREFIX = "foreign-"  # the job names are built from the required names and the OS words (no quoted job name in code)
+FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS = FOREIGN_PREFIX + LINUX_CHECK, FOREIGN_PREFIX + WINDOWS_CHECK, FOREIGN_PREFIX + MACOS_OS
+FOREIGN_JOBS = (FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS)
 
 
-pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks
 
 
 def without_comments(text: str) -> list[str]:
@@ -65,6 +72,10 @@ def job_lines(text: str) -> dict[str, list[str]]:
         elif current:
             by_job[current].append(line)
     return by_job
+
+
+def pytest_job_lines() -> dict[str, list[str]]:
+    return {name: lines for name, lines in job_lines(WORKFLOW.read_text("utf-8")).items() if name in PYTEST_JOBS}
 
 
 def steps_of(lines: list[str]) -> list[list[str]]:
@@ -120,11 +131,19 @@ def test_the_linux_job_lints_every_workflow_file_before_pytest_and_never_skips_i
 def test_each_job_uploads_its_junit_report_even_when_red():
     for name, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
         steps = steps_of(lines)
-        assert "--junitxml=junit.xml" in run_script(step_named(steps, "pytest")), name
+        if name in PYTEST_JOBS:
+            assert "--junitxml=junit.xml" in run_script(step_named(steps, "pytest")), name
+        else:
+            assert name in FOREIGN_JOBS, name
+            assert "foreign_run.py" in "\n".join(step_named(steps, "the foreign run")), name
         upload = "\n".join(step_named(steps, "upload the JUnit report"))
         assert "uses: actions/upload-artifact@v4" in upload, name
         assert "if: always()" in upload, name
-        assert "path: junit.xml" in upload, name
+        if name in PYTEST_JOBS:  # the report and the rate-limit file beside it, one artifact
+            assert re.search(r"^          path: \|\n            junit\.xml\n            actions-rate-limit\.json$", upload, re.M), name
+            assert "if-no-files-found: ignore" in upload, name  # a missing file never fails the upload
+        else:
+            assert "path: junit.xml" in upload, name
         # a re-run of a job uploads under a new name, never onto the first attempt's
         assert "name: junit-${{ github.job }}-${{ github.run_attempt }}" in upload, name
 
@@ -183,7 +202,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         "@pytest.mark.serial\ndef test_slow_serial():\n    pass\n\n"
         "@pytest.mark.os_touching\ndef test_touching():\n    pass\n\n"
         "def test_plain():\n    pass\n", "utf-8")
-    for job in job_lines(WORKFLOW.read_text("utf-8")):
+    for job in PYTEST_JOBS:
         done, calls = run_pytest_step(tmp_path, job, nightly)
         assert done.returncode == 0, done.stderr
         ids = []
@@ -201,7 +220,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         if nightly == "true":
             expected += ["suite/test_marks.py::test_live", "suite/test_marks.py::test_slow",
                          "suite/test_marks.py::test_slow_serial"]
-        if job == WINDOWS_CHECK and nightly == "false":  # the Windows change run takes only the marked tests (#414 unit 4)
+        if job == WINDOWS_CHECK and nightly == "false":  # the Windows change run takes only the marked tests
             expected = ["suite/test_marks.py::test_touching"]
         assert sorted(ids) == sorted(expected), job
         assert len(ids) == len(set(ids)), job  # no test runs in both phases
@@ -210,7 +229,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
 # --- the parallel run (#421 rules 1, 3, 5) ---------------------------------------------------
 
 def test_every_job_runs_xdist_on_the_core_count_read_at_run_time_and_prints_it(tmp_path):
-    for job, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
+    for job, lines in pytest_job_lines().items():
         script = run_script(step_named(steps_of(lines), "pytest"))
         assert "os.cpu_count()" in script, job
         assert not re.search(r"(^|\s)-n[ =]?\d", script, re.M), job  # no core count written in the workflow
@@ -232,7 +251,7 @@ def pyproject_bounds() -> dict:
                                                    ("true", "nightly_timeout_seconds", 600)])
 def test_every_test_is_bound_by_the_setting_of_its_run_kind_in_both_phases(tmp_path, nightly, key, seconds):
     assert pyproject_bounds()[key] == seconds
-    for job, lines in job_lines(WORKFLOW.read_text("utf-8")).items():
+    for job, lines in pytest_job_lines().items():
         script = run_script(step_named(steps_of(lines), "pytest"))
         assert not re.search(r"\b(120|600)\b", script), job  # read from the config, not written here
         done, calls = run_pytest_step(tmp_path, job, nightly)
@@ -244,7 +263,7 @@ def test_every_test_is_bound_by_the_setting_of_its_run_kind_in_both_phases(tmp_p
 
 
 def test_the_serial_phase_runs_after_the_parallel_one_and_the_job_has_one_report_with_both(tmp_path):
-    for job in job_lines(WORKFLOW.read_text("utf-8")):
+    for job in PYTEST_JOBS:
         done, calls = run_pytest_step(tmp_path, job, "true", RC_SERIAL="0")
         assert done.returncode == 0, done.stderr
         parallel, serial = (call_args(c) for c in calls)
@@ -257,7 +276,7 @@ def test_the_serial_phase_runs_after_the_parallel_one_and_the_job_has_one_report
 
 
 def test_no_serial_test_is_no_failure_but_a_red_test_in_either_phase_is(tmp_path):
-    for job in job_lines(WORKFLOW.read_text("utf-8")):
+    for job in PYTEST_JOBS:
         done, _ = run_pytest_step(tmp_path, job, "false", RC_SERIAL="5")
         assert done.returncode == 0, done.stderr  # pytest exit code 5, no tests collected
         assert [c.get("name") for c in ET.parse(tmp_path / "junit.xml").getroot().iter("testcase")] == ["parallel"]
@@ -289,6 +308,49 @@ def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_do
     windows = "\n".join(step_named(steps_of(jobs[WINDOWS_CHECK]), "pytest"))
     assert re.search(r'^\s+ORCH_IT_REQUIRE_SSHD: "1"$', linux, re.M)
     assert "ORCH_IT_REQUIRE_SSHD" not in windows
+
+
+def pytest_calls_of(script: str) -> list[str]:
+    """The lines of a step's script that start a pytest call."""
+
+    return [line.strip() for line in script.splitlines() if re.match(r"\s*pytest\s", line)]
+
+
+def test_every_pytest_call_of_the_test_jobs_loads_the_ids_plugin_which_flags_placeholder_reads():
+    for job, lines in pytest_job_lines().items():
+        script = run_script(step_named(steps_of(lines), "pytest"))
+        calls = pytest_calls_of(script)
+        assert len(calls) == 2, job  # the parallel and the serial phase
+        for call in calls:
+            assert re.search(r"(^|\s)-p orch_it_ids(\s|$)", call), (job, call)
+
+
+def test_the_pytest_step_of_each_test_job_sets_the_placeholder_list_from_a_repository_variable_and_the_plugin_path():
+    for job, lines in pytest_job_lines().items():
+        step = "\n".join(step_named(steps_of(lines), "pytest"))
+        assert re.search(r"^\s+ORCH_IT_PLACEHOLDERS: \$\{\{ vars\.ORCH_IT_PLACEHOLDERS \}\}$", step, re.M), job
+        assert re.search(r"^\s+PYTHONPATH: \$\{\{ github\.workspace \}\}/src/orch_it/testruns/pytest_plugin$", step, re.M), job
+
+
+def test_the_plugin_path_the_workflow_sets_loads_the_plugin_in_a_real_pytest(tmp_path):
+    step = "\n".join(step_named(steps_of(pytest_job_lines()[LINUX_CHECK]), "pytest"))
+    value = re.search(r"^\s+PYTHONPATH: (.*)$", step, re.M).group(1).replace("${{ github.workspace }}", str(ROOT))
+    (tmp_path / "test_x.py").write_text("def test_x():\n    pass\n", "utf-8")
+    done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "orch_it_ids", "-p", "no:cacheprovider"],
+                          capture_output=True, text=True, timeout=60, cwd=tmp_path, creationflags=NO_WINDOW,
+                          env={k: v for k, v in os.environ.items() if k != "ORCH_IT_PLACEHOLDERS"}
+                          | {"PYTHONPATH": value})
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+@pytest.mark.parametrize("job", PYTEST_JOBS)
+def test_the_stand_in_pytest_is_called_with_the_ids_plugin_in_both_phases(tmp_path, job):
+    done, calls = run_pytest_step(tmp_path, job, "false", ORCH_IT_PLACEHOLDERS="")
+    assert done.returncode == 0, done.stderr
+    assert len(calls) == 2
+    for call in calls:
+        args = call_args(call)
+        assert args[args.index("-p") + 1] == "orch_it_ids", (job, call)
 
 
 # --- the job bounds (#411 unit 4): 9 minutes per change and 16 for the night, each ceil(longest measured job x 1.5) (#421 rule 6) ---
@@ -479,3 +541,117 @@ def test_the_scan_step_passes_names_that_only_look_like_a_default_host_name(tmp_
     repo, base, head = pull_request_with(tmp_path, {"notes.txt": lookalikes})
     done = run_scan_step(tmp_path, repo, base, head)
     assert (done.returncode, done.stdout) == (0, "hits=0 commits=1\n"), done.stderr
+
+
+# --- the foreign run (#414) and the rate-limit file of the pytest jobs (#414) ------------------------------------------
+
+def test_the_foreign_jobs_run_the_script_under_bash_and_upload_their_report():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    for name in FOREIGN_JOBS:
+        steps = steps_of(jobs[name])
+        run = "\n".join(step_named(steps, "the foreign run"))
+        assert re.search(r"^\s+shell: bash$", run, re.M), name
+        assert re.search(r"^\s+run: python3? \.github/scripts/foreign_run\.py$", run, re.M), name
+        upload = "\n".join(step_named(steps, "upload the JUnit report"))
+        assert "if: always()" in upload and "path: junit.xml" in upload, name
+        assert "name: junit-${{ github.job }}-${{ github.run_attempt }}" in upload, name
+
+
+def test_the_foreign_linux_and_windows_jobs_run_on_every_change_as_the_suite_jobs_do():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    for name in (FOREIGN_LINUX, FOREIGN_WINDOWS):
+        assert not any(line.startswith("    if:") for line in jobs[name]), name  # no job-level condition
+
+
+def test_the_foreign_macos_job_runs_on_the_nightly_schedule_only():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    assert jobs[FOREIGN_MACOS].count("    if: github.event_name == 'schedule'") == 1
+
+
+def test_the_pytest_jobs_save_the_rate_limit_after_pytest_and_never_fail_the_job():
+    for job in PYTEST_JOBS:
+        steps = steps_of(pytest_job_lines()[job])
+        step = step_named(steps, "save the rate limit of the account")
+        text = "\n".join(step)
+        assert "continue-on-error: true" in text, job
+        if job == LINUX_CHECK:
+            assert re.search(r"^\s+run: gh api rate_limit > actions-rate-limit\.json \|\| rm -f actions-rate-limit\.json$",
+                             text, re.M), job
+        else:  # the Windows job's step is PowerShell: a failed call removes the file it made
+            assert re.search(r"^\s+shell: pwsh$", text, re.M), job
+            assert "gh api rate_limit > actions-rate-limit.json" in text, job
+            assert "if ($LASTEXITCODE -ne 0) { Remove-Item" in text and "actions-rate-limit.json" in text, job
+        assert steps.index(step) > steps.index(step_named(steps, "pytest")), job
+        assert steps.index(step) < steps.index(step_named(steps, "upload the JUnit report")), job
+
+
+@pytest.mark.parametrize("answer", ["ok", "fails"])
+def test_a_failed_rate_limit_call_leaves_no_file_on_linux(tmp_path, answer):
+    # the workflow's own command line, run under bash with a stand-in `gh` defined as a function (no PATH, no file)
+    step = step_named(steps_of(pytest_job_lines()[LINUX_CHECK]), "save the rate limit of the account")
+    command = re.search(r"^\s+run: (.*)$", "\n".join(step), re.M).group(1)
+    stand_in = ("gh() { echo '{\"resources\":{}}'; }" if answer == "ok"
+                else "gh() { echo 'partial'; return 1; }")
+    done = subprocess.run([a_bash(), "--noprofile", "--norc", "-c", f"{stand_in}\n{command}"], cwd=tmp_path,
+                          capture_output=True, text=True, creationflags=NO_WINDOW)
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "actions-rate-limit.json").exists() is (answer == "ok")
+
+
+def test_the_foreign_linux_job_passes_the_suite_switch_the_linux_pytest_step_sets_and_the_others_do_not():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    linux = "\n".join(step_named(steps_of(jobs[LINUX_CHECK]), "pytest"))
+    assert re.search(r'^\s+ORCH_IT_REQUIRE_SSHD: "1"$', linux, re.M)
+    for name in (FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS):
+        run = "\n".join(step_named(steps_of(jobs[name]), "the foreign run"))
+        assert bool(re.search(r'^\s+ORCH_IT_REQUIRE_SSHD: "1"$', run, re.M)) is (name == FOREIGN_LINUX), name
+        assert "GH_TOKEN" not in run, name  # the foreign setup holds no token
+
+
+# The numbers each foreign bound is derived from (#414), in minutes: (measured, ratio, margin). The linux job was
+# measured on GitHub (run 40989896505); the windows bounds are derived from the owner's machine and a lower-bound ratio of
+# GitHub's runner to it (20 minutes unfinished over 16 minutes), unmeasured on GitHub.
+LINUX_FOREIGN = {"change": (6.2, 1, 1.5), "nightly": (6.2, 1.17, 1.5)}
+WINDOWS_FOREIGN = {"change": (5.6, 1.25, 2), "nightly": (20, 1, 2)}
+
+
+def derived_minutes(measured: float, ratio: float, margin: float) -> int:
+    return math.ceil(round(measured * ratio * margin, 6))
+
+
+@pytest.mark.parametrize("job, numbers", [(FOREIGN_LINUX, LINUX_FOREIGN), (FOREIGN_WINDOWS, WINDOWS_FOREIGN)])
+def test_each_foreign_bound_is_the_ceiling_of_the_numbers_its_comment_names(job, numbers):
+    text = WORKFLOW.read_text("utf-8")
+    night = re.fullmatch(r"\$\{\{ (.*) \}\}", workflow_env()["NIGHTLY"]).group(1)
+    change, nightly = (derived_minutes(*numbers[kind]) for kind in ("change", "nightly"))
+    value, comment = timeout_of(text, job)
+    assert value == f"${{{{ ({night}) && {nightly} || {change} }}}}", (job, value)
+    comment_text = " ".join(line.removeprefix("#").strip() for line in comment)
+    for number in {n for kind in numbers.values() for n in kind if n != 1}:
+        assert str(number) in comment_text, (job, number)
+    assert f"{change} minutes per change" in comment_text and f"{nightly} minutes" in comment_text, job
+    assert not re.search(r"\d+ s", comment_text), job  # durations are written in minutes
+    assert "unmeasured" not in comment_text.replace("unmeasured on GitHub", ""), job
+    assert ("unmeasured on GitHub" in comment_text) is (job == FOREIGN_WINDOWS), job
+
+
+def test_the_foreign_macos_bound_still_says_it_is_unmeasured_as_no_run_of_it_exists():
+    value, _ = timeout_of(WORKFLOW.read_text("utf-8"), FOREIGN_MACOS)
+    assert "# unmeasured" in value, value
+
+
+@pytest.mark.parametrize("job, os_name", [(LINUX_CHECK, "posix"), (WINDOWS_CHECK, "nt")])
+def test_the_foreign_child_selects_per_change_as_the_ordinary_job_of_its_os_does(tmp_path, job, os_name):
+    # the ordinary job's `-m` of its parallel phase, read from the step run for real; the foreign child runs one pytest
+    # without the serial split, so the same set is `-m` without its trailing "and not serial"
+    done, calls = run_pytest_step(tmp_path, job, "false")
+    assert done.returncode == 0, done.stderr
+    parallel = call_args(calls[0])
+    ordinary = parallel[parallel.index("-m") + 1].removesuffix(" and not serial")
+    if ordinary.startswith("(") and ordinary.endswith(")") and ordinary.count("(") == 1:
+        ordinary = ordinary[1:-1]  # the workflow wraps the marks in parentheses before it adds a term
+    marks = workflow_env()["MARKS_LEFT_OUT_OF_CHANGE_RUNS"]
+    assert foreign_run.selection(False, marks, os_name=os_name) == ordinary, job
+    assert ("os_touching" in ordinary) is (os_name == "nt"), job  # Windows takes the thin set only
+
+

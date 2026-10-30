@@ -1,5 +1,6 @@
 {
   "required_checks": ["linux", "windows"],
+  "github_priority": 0,
   "windows_check": "windows",
   "windows_os": "windows",
   "windows_change_minutes": 3.5,
