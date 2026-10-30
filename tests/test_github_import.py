@@ -777,6 +777,35 @@ def test_the_bound_is_the_setting_github_job_timeout_minutes(store, gh):
     assert ended_of(store, LINUX_CHECK)["reason"] == "cut"
 
 
+WORKFLOW = (Path(__file__).parents[1] / ".github" / "workflows" / "tests.yml").read_text("utf-8")
+
+
+def test_the_workflow_bounds_are_read_per_job_with_the_nightly_value_beside_the_per_change_one():
+    assert github.workflow_bounds(WORKFLOW) == {
+        LINUX_CHECK: (4, 16), WINDOWS_CHECK: (5, 40), "foreign-linux": (9, 11), "foreign-windows": (12, 40),
+        "foreign-macos": (30, 30)}
+
+
+@pytest.mark.parametrize("job, minutes", [(LINUX_CHECK, 4), (WINDOWS_CHECK, 5)])
+def test_a_job_cancelled_at_its_workflow_bound_is_read_as_cut(store, gh, job, minutes):
+    gh.add_run(100, **{job: {"conclusion": "cancelled", "cases": None, "completed": 60 + minutes * 60}})
+    run_import(store, gh, workflow_text=WORKFLOW)
+    assert ended_of(store, job)["reason"] == "cut"
+
+
+def test_a_job_cancelled_by_a_person_at_2_minutes_is_not_cut(store, gh):
+    gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "completed": 60 + 2 * 60})
+    run_import(store, gh, workflow_text=WORKFLOW)
+    assert ended_of(store, LINUX_CHECK)["outcome"] == "stopped"
+
+
+def test_a_nightly_run_reads_the_nightly_bound_of_its_job(store, gh):
+    gh.add_run(100, event="schedule", pr=None, branch="main",
+               linux={"conclusion": "cancelled", "cases": None, "completed": 60 + 5 * 60})
+    run_import(store, gh, workflow_text=WORKFLOW)
+    assert ended_of(store, LINUX_CHECK)["outcome"] == "stopped"
+
+
 def test_a_cancelled_job_that_never_started_is_never_cut(store, gh):
     gh.add_run(100, linux={"conclusion": "cancelled", "cases": None, "started": False,
                            "completed": 99999})

@@ -29,8 +29,8 @@ from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns import junit
 from orch_it.testruns.config import OSES, TestSettings
-from orch_it.testruns.github import (WORKFLOW_FILE, Gh, GithubError, import_one_run, items_of, json_values,
-                                     moment_of, os_of, run_gh)
+from orch_it.testruns.github import (WORKFLOW_FILE, Gh, GithubError, import_one_run, items_of, jobs_of,
+                                     json_values, moment_of, os_of, run_gh)
 from orch_it.testruns.places import (ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUND, Availability, PlaceEnd,
                                      PlaceRefused, PlaceVanished, Request)
 
@@ -51,7 +51,7 @@ def oses_of_workflow(text: str, required: tuple[str, ...]) -> tuple[str, ...]:
     YAML parser in the dependencies), its first label that names an OS. A job is found by its `name`, else its key; a
     label that is no OS word (a `${{ matrix }}` expression, `self-hosted`) gives none."""
 
-    jobs = _jobs_of(text)
+    jobs = jobs_of(text)
     found: list[str] = []
     for check in required:
         for job in jobs:
@@ -70,7 +70,7 @@ def checks_on_os(text: str, required: tuple[str, ...], os_name: str | None) -> t
 
     if os_name is None:
         return ()
-    jobs = _jobs_of(text)
+    jobs = jobs_of(text)
     return tuple(check for check in required if any(
         (job["name"] or job["key"]) == check
         and os_name in (os_of({"labels": [label]}) for label in job["labels"]) for job in jobs))
@@ -83,56 +83,6 @@ def workflow_text_of(work_tree: Path) -> str:
         return (Path(work_tree) / ".github" / "workflows" / WORKFLOW_FILE).read_text("utf-8")
     except OSError:
         return ""
-
-
-def _jobs_of(text: str) -> list[dict]:
-    """The jobs of a workflow's `jobs:` section: `key`, `name` (or None) and `labels` (the `runs-on` labels)."""
-
-    jobs: list[dict] = []
-    in_jobs, job_indent, child_indent, listing = False, None, None, False
-    for raw in text.splitlines():
-        line = raw.split(" #")[0].rstrip()
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent == 0:
-            in_jobs, job_indent, child_indent, listing = stripped == "jobs:", None, None, False
-            continue
-        if not in_jobs:
-            continue
-        if job_indent is None:
-            job_indent = indent
-        if indent == job_indent:
-            jobs.append({"key": _unquote(stripped.partition(":")[0]), "name": None, "labels": []})
-            child_indent, listing = None, False
-            continue
-        if not jobs:
-            continue
-        if child_indent is None:
-            child_indent = indent
-        job = jobs[-1]
-        if listing and stripped.startswith("-"):
-            job["labels"].append(_unquote(stripped[1:].strip()))
-            continue
-        listing = False
-        if indent != child_indent:
-            continue
-        key, _, value = stripped.partition(":")
-        value = value.strip()
-        if key == "name":
-            job["name"] = _unquote(value)
-        elif key == "runs-on":
-            if value:
-                job["labels"] += [_unquote(v.strip()) for v in value.strip("[]").split(",") if v.strip()]
-            else:
-                listing = True
-    return jobs
-
-
-def _unquote(text: str) -> str:
-    text = text.strip()
-    return text[1:-1] if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"" else text
 
 
 def _is_machine_of_the_limit(job: dict) -> bool:
@@ -164,13 +114,15 @@ def _stored_oses(store: Store, repo: str) -> tuple[str, ...]:
 
 
 class GithubPlace:
-    """The place `github`. `oses`: the OSes its required jobs run on (see `for_work_tree`)."""
+    """The place `github`. `oses`: the OSes its required jobs run on (see `for_work_tree`). `workflow_text`: the
+    `tests.yml` text whose `timeout-minutes` bound each job when its run is read (empty: the setting only)."""
 
     id = "github"
 
     def __init__(self, repo: str, store: Store, settings: TestSettings, gh: Gh = run_gh,
-                 oses: tuple[str, ...] = (), sleep=time.sleep, clock=time.monotonic):
+                 oses: tuple[str, ...] = (), sleep=time.sleep, clock=time.monotonic, workflow_text: str = ""):
         self.repo, self.store, self.settings, self.gh, self.oses = repo, store, settings, gh, oses
+        self.workflow_text = workflow_text
         self.sleep, self.clock = sleep, clock  # injectable: the run's bound is counted on `clock`
         self._cached: tuple[datetime, Availability] | None = None
         self._loaded: tuple[datetime, tuple[int, int]] | None = None
@@ -184,7 +136,7 @@ class GithubPlace:
         if workflow_text is None:
             workflow_text = workflow_text_of(work_tree)
         oses = oses_of_workflow(workflow_text, settings.required_checks) or _stored_oses(store, repo)
-        return cls(repo, store, settings, gh, oses)
+        return cls(repo, store, settings, gh, oses, workflow_text=workflow_text)
 
     def _owner(self) -> str:
         """The account the repo belongs to: the part of `owner/name` before the slash."""
@@ -443,7 +395,8 @@ class GithubPlace:
         kept = scratch / "reports"
         kept.mkdir(parents=True, exist_ok=True)
         import_one_run(self.store, self.repo, run_id, gh=self.gh, now=datetime.now(UTC),
-                       required=self.settings.required_checks, keep=kept, timed=False)
+                       required=self.settings.required_checks, keep=kept, timed=False,
+                       workflow_text=self.workflow_text)
         cases, readable = [], False
         for path in sorted(kept.glob("*.xml")):
             try:

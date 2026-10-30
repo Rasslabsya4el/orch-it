@@ -42,6 +42,7 @@ from orch_it.skills.copies import SkillsError
 from orch_it.skills.forge import GithubForge
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
+from orch_it.testruns.github_place import workflow_text_of
 from orch_it.testruns.runner import NEED_OSES, RunError, run_tests
 from orch_it.tickets import commands as ticket_commands
 from orch_it.tickets import hook as ticket_hook
@@ -601,7 +602,8 @@ def _run(args) -> str:
                 f" pending_lines={done.pending_lines} refused_events={done.refused_events}"
                 f" unreadable_files={done.unreadable_files}\n")
     if command == "import-github":
-        done = github.import_github(_store(args), args.repo or _repo_of("."), since=args.since)
+        done = github.import_github(_store(args), args.repo or _repo_of("."), since=args.since,
+                                    workflow_text=workflow_text_of(Path(".")))
         failed = f" failure_codes={','.join(done.failure_codes)}" if done.failure_codes else ""
         return (f"runs_read={done.runs_read} jobs={done.jobs} written={done.written}"
                 f" already_stored={done.already_stored} reports_missing={done.reports_missing}"
