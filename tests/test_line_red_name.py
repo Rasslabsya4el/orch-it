@@ -9,12 +9,16 @@ from test_merge_batch import line, make_suite, passes
 from orch_it.merge import marks
 
 
+def main_head(hub):
+    return hub.branches[hub.main_branch][-1]
+
+
 def red_on_every_tree(world, place, name):
     """`name` is red on the batch's tree whichever members it holds, and on main's head."""
 
     hub, _, prs, _ = world
     place.red_names = {name: set(prs.values())}
-    hub.checks_on(hub.branches["main"][-1], FAILED, names=(name,))
+    hub.checks_on(main_head(hub), FAILED, names=(name,))
 
 
 @pytest.mark.parametrize("tickets", [(10, 11, 12, 13), (10,)])
@@ -39,7 +43,7 @@ def test_a_name_red_on_the_batch_and_not_on_mains_head_still_splits(tmp_path):
     hub, store, prs, ci = world
     suite, place = make_suite(world, tmp_path)
     place.red_names = {WINDOWS_CHECK: {prs[12]}}
-    hub.checks_on(hub.branches["main"][-1], PASSED, names=(WINDOWS_CHECK,))  # main is green on it
+    hub.checks_on(main_head(hub), PASSED, names=(WINDOWS_CHECK,))  # main is green on it
     done = line(world, tmp_path, suite)
     assert passes(store) > 1 and done.left == 1
     assert ci.merged == [prs[10], prs[11], prs[13]]
@@ -58,7 +62,9 @@ def test_a_batch_red_on_two_names_with_main_red_on_only_one_splits_as_before(tmp
     world = line_world(tmp_path)
     hub, store, prs, ci = world
     suite, place = make_suite(world, tmp_path)
-    place.red_names = {WINDOWS_CHECK: set(prs.values()), LINUX_CHECK: {prs[12]}}
-    hub.checks_on(hub.branches["main"][-1], FAILED, names=(WINDOWS_CHECK,))
+    place.red_names = {WINDOWS_CHECK: {prs[12]}, LINUX_CHECK: {prs[12]}}
+    hub.checks_on(main_head(hub), FAILED, names=(WINDOWS_CHECK,))
     done = line(world, tmp_path, suite)
-    assert passes(store) > 1 and hub.advances == []  # the whole batch is red on a name main is green on: it splits
+    assert passes(store) > 1  # the whole batch is red on a name main is green on: it splits to the end
+    assert ci.merged == [prs[10], prs[11], prs[13]] and done.left == 1 and hub.pull(REPO, prs[12]).state == "open"
+    assert [s.result for s in done.served if s.pr == prs[12]] == ["left"] and done.notes == ()
