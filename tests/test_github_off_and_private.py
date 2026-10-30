@@ -4,7 +4,7 @@ GitHub's runs do not start when Actions is off for the repo, when the account's 
 waited in the account's queue past its bound: the `github` place is then left out (and the decision names which cause),
 the required suite runs at the other places, and the line posts the result to the batch sha under the required check
 names, so the wait for the names is satisfied and the batch merges. A repo whose base has no protection is held by the
-line alone: every required name must be green. `guards status` says who holds the gate. For a private repo GitHub's
+line alone: every required name must be green. `guards status` says who holds the required checks. For a private repo GitHub's
 minutes are a cost: the machine places go first."""
 
 import contextlib
@@ -168,7 +168,7 @@ def test_a_run_with_github_on_names_no_cause(tmp_path):
 
 # --- the line merges on a result of another place, posted under the required names ------------------------
 
-SCAN_CHECK = "scan-of-another-kind"  # a required name no test job posts: a scan of the pull request, not of the tests
+SCAN_CHECK = "scan-of-another-kind"  # a required name tied to no OS (no job of the workflow): a scan of the pull request
 SUITE_JOBS = {LINUX_CHECK: LINUX_OS, WINDOWS_CHECK: WINDOWS_OS}  # the test jobs of the repo's `tests` workflow, by OS
 
 
@@ -179,10 +179,10 @@ def workflow_of(jobs):
         f"  {name}:\n    name: {name}\n    runs-on: {os_name}-latest\n" for name, os_name in jobs.items())
 
 
-def batch_world(tmp_path, cause, *, tickets=(10, 11, 12, 13), required=(LINUX_CHECK,), jobs=None):
+def batch_world(tmp_path, cause, *, tickets=(10, 11, 12, 13), required=(LINUX_CHECK,), jobs=None, workflow=None):
     """The line with the suite at `own` (which runs on the Linux word) and GitHub out for `cause`. `required`: the
     names the repo requires (the setting, and what the base's protection requires on the fake); `jobs`: the test jobs
-    of its workflow, name -> OS."""
+    of its workflow, name -> OS; `workflow`: its text, instead of one built from `jobs`."""
 
     world = line_world(tmp_path, tickets=tickets)
     hub, store, prs, ci = world
@@ -190,7 +190,7 @@ def batch_world(tmp_path, cause, *, tickets=(10, 11, 12, 13), required=(LINUX_CH
     actions = actions_for(tmp_path)
     turn_off(actions, cause)
     settings = TestSettings(github_tests=True, required_checks=tuple(required))
-    workflow = workflow_of(SUITE_JOBS if jobs is None else jobs)
+    workflow = workflow or workflow_of(SUITE_JOBS if jobs is None else jobs)
     place = FixturePlace(hub, set())
     place.posted = []  # the pass at this place runs the suite and posts nothing
 
@@ -230,9 +230,10 @@ def test_with_github_out_the_suite_runs_at_own_the_names_are_posted_on_the_sha_a
 
 
 @pytest.mark.parametrize("cause", CAUSES)
-@pytest.mark.parametrize("uncovered", [WINDOWS_CHECK, SCAN_CHECK], ids=["other_os_test_job", "scan_not_a_test_job"])
-def test_a_name_the_suite_run_did_not_cover_stays_unposted_and_holds_the_batch_naming_it(tmp_path, cause, uncovered):
-    # the pass ran the test suite at a Linux place: it covers the Linux job only, not the Windows job, not a scan
+def test_a_name_of_another_os_stays_unposted_and_holds_the_batch_naming_it(tmp_path, cause):
+    # the pass ran the test suite at a Linux place: it covers the Linux job only, not the Windows job (a name tied to no
+    # OS, like SCAN_CHECK, is posted with it: tests/test_line_os_free_names.py)
+    uncovered = WINDOWS_CHECK
     w = batch_world(tmp_path, cause, tickets=(10,), required=(LINUX_CHECK, uncovered))
     hub, store, prs, ci = w.world
     done = line(w, tmp_path)
@@ -299,7 +300,7 @@ def test_a_red_name_merges_nothing_on_a_protected_and_on_an_unprotected_base(tmp
     w = batch_world(tmp_path, "minutes_spent", tickets=(10,), required=(LINUX_CHECK, WINDOWS_CHECK))
     hub, store, prs, ci = w.world
     if not protected:
-        hub.required_by_base = {}  # nothing on GitHub holds the gate: only the line does
+        hub.required_by_base = {}  # nothing on GitHub holds the required checks: only the line does
     w.place.posted = [WINDOWS_CHECK]
     w.place.red_names = {WINDOWS_CHECK: {prs[10]}}
     line(w, tmp_path)
@@ -317,7 +318,7 @@ def test_every_name_green_merges_on_a_protected_and_on_an_unprotected_base(tmp_p
     assert ci.merged == [prs[10]]
 
 
-# --- guards status: who holds the gate (decision 7) -----------------------------------------------------
+# --- guards status: who holds the required checks (decision 7) -----------------------------------------------------
 
 def protection(names=(LINUX_CHECK, WINDOWS_CHECK)):
     return {"required_status_checks": {"strict": True, "contexts": list(names)},
@@ -329,26 +330,26 @@ def detail_of(report, name):
     return next(fact.detail for fact in report.facts if fact.name == name)
 
 
-def test_guards_status_says_the_line_holds_the_gate_where_the_base_has_no_protection(tmp_path):
+def test_guards_status_says_the_line_holds_the_required_checks_where_the_base_has_no_protection(tmp_path):
     store = Store.open(tmp_path / "store")
 
     def reader(repo):
         raise github.GithubError("gh_failed", "api: Branch not protected (HTTP 404)")
 
     report = guards_status.status(store, "o/n", tmp_path, protection=reader)
-    assert report.gate == "line"
+    assert report.required_holder == "line"
     assert "held by the merge line, not by GitHub" in detail_of(report, "required_checks")
 
 
-def test_guards_status_says_github_holds_the_gate_where_the_base_is_protected(tmp_path):
+def test_guards_status_says_github_holds_the_required_checks_where_the_base_is_protected(tmp_path):
     store = Store.open(tmp_path / "store")
     report = guards_status.status(store, "o/n", tmp_path, protection=lambda repo: protection())
-    assert report.gate == "github"
+    assert report.required_holder == "github"
     assert "held by GitHub's branch protection" in detail_of(report, "required_checks")
     assert "merge line" not in detail_of(report, "required_checks")
 
 
-def test_guards_status_says_the_line_holds_the_gate_where_the_plan_has_no_protection_to_give(tmp_path):
+def test_guards_status_says_the_line_holds_the_required_checks_where_the_plan_has_no_protection_to_give(tmp_path):
     store = Store.open(tmp_path / "store")
 
     def reader(repo):  # a private repo on a plan without protection: GitHub answers 403 and asks to upgrade
@@ -356,7 +357,7 @@ def test_guards_status_says_the_line_holds_the_gate_where_the_plan_has_no_protec
                                               " this feature. (HTTP 403)")
 
     report = guards_status.status(store, "o/n", tmp_path, protection=reader)
-    assert report.gate == "line"
+    assert report.required_holder == "line"
     assert "held by the merge line, not by GitHub" in detail_of(report, "required_checks")
 
 
@@ -366,17 +367,17 @@ def test_guards_status_claims_no_holder_when_the_answer_is_a_403_that_is_no_plan
     def reader(repo):
         raise github.GithubError("gh_failed", "gh: Resource not accessible by personal access token (HTTP 403)")
 
-    assert guards_status.status(store, "o/n", tmp_path, protection=reader).gate is None
+    assert guards_status.status(store, "o/n", tmp_path, protection=reader).required_holder is None
 
 
-def test_guards_status_says_github_holds_the_gate_only_when_it_requires_every_required_name(tmp_path):
+def test_guards_status_says_github_holds_the_required_checks_only_when_it_requires_every_required_name(tmp_path):
     store = Store.open(tmp_path / "store")
     held = {}
     for label, names in {"all": (LINUX_CHECK, WINDOWS_CHECK), "all_and_more": (LINUX_CHECK, WINDOWS_CHECK, SCAN_CHECK),
                          "subset": (LINUX_CHECK,), "none": ()}.items():
         report = guards_status.status(store, "o/n", tmp_path, protection=lambda repo, names=names: protection(names))
-        held[label] = report.gate
-        if report.gate == "line":
+        held[label] = report.required_holder
+        if report.required_holder == "line":
             assert "held by the merge line, not by GitHub" in detail_of(report, "required_checks")
     assert held == {"all": "github", "all_and_more": "github", "subset": "line", "none": "line"}
 
@@ -387,7 +388,7 @@ def test_guards_status_claims_no_holder_when_the_protection_cannot_be_read(tmp_p
     def reader(repo):
         raise github.GithubError("gh_timeout", "api")
 
-    assert guards_status.status(store, "o/n", tmp_path, protection=reader).gate is None
+    assert guards_status.status(store, "o/n", tmp_path, protection=reader).required_holder is None
 
 
 # --- a private repo: GitHub's minutes are a cost, the machine places go first (decision 7) -------------------

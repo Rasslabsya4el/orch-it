@@ -2,7 +2,7 @@
 
 Keys (each optional): `test_command` (argv list; `{python}`, `{report}`, `{ids_file}` and
 `{work_tree}` are filled per run; default pytest writing `--junitxml`), `test_run_bound_minutes`
-(default 15), `test_env` (name -> value), `github_tests` (default off), `test_machines` (one
+(default 15), `test_env` (name -> value), `github_tests` (default on: the github place is offered whenever Actions runs for the repo, read at run time; false is the opt-out), `test_machines` (one
 entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1), `python`,
 `on` (true), `origin` (default: the caller work tree's `origin`), `ssh_options` (list of extra
 `ssh` arguments such as `["-p", "2222"]`)), `own_capacity` (1) and `github_capacity` (20, GitHub's
@@ -137,7 +137,7 @@ class TestSettings:
     command: tuple[str, ...] = DEFAULT_COMMAND
     bound_minutes: float = 15.0
     test_env: dict[str, str] = field(default_factory=dict)
-    github_tests: bool = False
+    github_tests: bool = True  # the github place is offered whenever Actions runs for the repo; false never offers it
     machines: tuple[Machine, ...] = ()
     own_capacity: int = 1
     github_capacity: int = 20

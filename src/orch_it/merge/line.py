@@ -33,7 +33,7 @@ merged), which the base's own protection accepts or refuses and the line never p
 passed at another place, the line posts PASSED for each required name that run covered (the test jobs on its OS) and
 nobody posted on that sha; a name it did not cover (a scan, a test job of another OS) stays unposted and holds the
 batch, as does any name nobody posted with GitHub on. A repo whose base
-protects nothing is held by this same wait and refusal: the line alone holds the gate. A name still not green when the wait ends (note `required
+protects nothing is held by this same wait and refusal: the line alone holds the required checks. A name still not green when the wait ends (note `required
 checks not green on <sha>: <names>`) lands nothing and stops the run: every member not landed stays for the next run.
 A red test or a red required name splits the batch in halves, each half is combined again from the base as it then is
 and checked, down to the one red pull request, which goes back to its ticket by the follow's red rule while the others
@@ -273,9 +273,11 @@ class _Line:
                             if rebuilt > self.settings.max_updates:
                                 return self.postpone(group, "starved")
                             continue
+                    elif (result.outcome == batch.FAILED and result.failing and by_check
+                          and self.name_red_on_main(made, result.failing)):
+                        pass  # main's head is red on every one of these names: nothing to split, nothing to send back
                     elif result.outcome == batch.FAILED and result.failing and len(made.included) == 1:
                         self.red(made.included[0], list(result.failing), by_check)
-                    # a red check name skips the main comparison: that rule speaks of test ids only (brain answer 1)
                     elif (result.outcome == batch.FAILED and result.failing and not by_check
                           and self.red_on_main(made, result.failing)):
                         pass  # main itself is red on all of it: nothing to split, nothing to send back
@@ -309,9 +311,10 @@ class _Line:
     def post_missing(self, sha: str, covered: tuple[str, ...]) -> None:
         """GitHub's runs would not start (Actions off, minutes spent, a queue past its bound), so the suite that just
         passed ran at another place and no workflow will post the required names. The pass speaks for the names its run
-        covered (`covered`: the test jobs on the OS it ran on): the line posts PASSED for each of those nobody posted on
-        `sha` (a name some place posted, red or pending, is left as it is). Any other required name (a scan, a test job
-        of another OS) stays unposted and holds the batch (`checks_missing`). Only after a passed suite."""
+        covered (`covered`: the jobs on the OS it ran on, and the OS-free names, tied to no OS, which run where the suite
+        runs): the line posts PASSED for each of those nobody posted on `sha` (a name some place posted, red or pending,
+        is left as it is). A required name of another OS never gets a post no run covered: it stays unposted and holds
+        the batch (`checks_missing`). Only after a passed suite."""
 
         posted = {check.name for check in self.hub.checks(self.repo, sha, statuses=True)}
         for name in self.required:
@@ -383,6 +386,22 @@ class _Line:
             return False
         self.held = "main_red"
         self.notes.append(f"main is red on {', '.join(sorted(ids))}")
+        self.postpone(made.included, "bound", "main_red")
+        return True
+
+    def name_red_on_main(self, made: _Batch, red: tuple[str, ...]) -> bool:
+        """Whether every red required name of `made` is red on the head main had when the batch was made (a name main
+        has no result for, or green or pending there, is not red on main). Then the line holds as `red_on_main` does:
+        the members wait for main's next sha, none is sent back."""
+
+        on_main = {check.name: check.state for check in self.hub.checks(self.repo, made.base_sha, statuses=True)}
+        if not all(on_main.get(name) == CHECK_FAILED for name in red):
+            return False
+        if rival := self.wait_for_turn():
+            self.yield_to(made, rival)
+            return True
+        self.held = "main_red"
+        self.notes.append(f"main is red on {', '.join(sorted(red))}")
         self.postpone(made.included, "bound", "main_red")
         return True
 

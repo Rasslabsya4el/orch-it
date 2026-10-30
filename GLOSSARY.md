@@ -80,6 +80,19 @@ The time a GitHub job waits from its queued to its started, the wait for a machi
 from the run's status.
 _Avoid_: queue time, pending time, waiting time
 
+**Poll**:
+The layer's repeated read of GitHub or a machine until a result appears. The polls that go through the request budget (the
+merge line's waits for a head's required checks, for a turn behind a higher-priority repo and for a member's run, and a
+test run's read of its jobs on GitHub) wait longer while the budget is under its threshold; the line-lock wait waits the
+setting `poll_seconds` and the check that a landing is marked merged waits a fixed interval, and neither slows with the budget.
+_Avoid_: watch, wait loop, refresh
+
+**Request budget**:
+The account's GitHub API calls per hour, counted by the layer in the store (one `github.called` event a call); GitHub's
+own limit is read from `rate_limit`, and a poll waits longer while the remaining falls under the threshold, the setting
+`request_budget_threshold`, whose default is in the defaults file beside the budget code. The Actions token keeps a budget of its own per repo.
+_Avoid_: rate limit, quota, API budget
+
 **Placeholder file**:
 A stub a test place puts where a file of private data should be, because that place does not have the real one; a test that read one has not been run on the real file until it reruns at a place that has it.
 _Avoid_: mock file, fixture, dummy data
@@ -87,6 +100,14 @@ _Avoid_: mock file, fixture, dummy data
 **Clean environment**:
 What a test run's process sees of its environment: the OS's base variables and the repo's own test settings, nothing of whoever started it.
 _Avoid_: sandbox, isolated environment
+
+**Foreign run**:
+A run of orch-it's suite and its setup commands in a copy that is not the owner's setup: an invented account and repo, a
+folder with another name, no git identity, no GitHub variable, a fresh home. The foreign job of each OS (see
+`.github/workflows/tests.yml`; the script is `.github/scripts/foreign_run.py`) runs it: the Linux and Windows jobs per change
+and on the nightly, the macOS one on the nightly only. Per change the Linux job runs the not-slow, not-live tests and the
+Windows job only those of them marked as touching the OS; on the nightly every job runs everything but the live tests.
+_Avoid_: sandbox run, clean run, outside run
 
 **Bound**:
 The longest a test run or a research run may take; a run that reaches it is cut, which is never a failed run. A
@@ -359,13 +380,25 @@ _Avoid_: merge queue, merge train, merge window
 
 **Batch**:
 The members the merge line combines on one branch from `main` for one full pass: a batch lands, all of it, when the pass
-is green and every name of the required checks is green on its sha; a red test or a red name splits it in halves.
+is green and every name of the required checks is green on its sha; a red test or a red check name splits it in halves, unless every red id or name is also red on main's
+head when the batch was made: then the batch holds, its members wait for main's next sha, and none is sent back.
 _Avoid_: group, bundle, train, queue
 
 **Required checks**:
 The check names a repo's merge is held to, the setting `required_checks`; the merge line lands a batch only when each is
 green on its exact sha, whichever place posted it, and a base's branch protection accepts or refuses the update of `main`.
 _Avoid_: required jobs, check list, gate
+
+**OS-free check**:
+A required check name that no job of the workflow carries on an OS, such as a scan of the pull request or the commit e-mail
+check: the suite's place covers it wherever the suite runs. A name the workflow cannot place on an OS at all is neither
+(`classify_checks`, `testruns/github_place.py`).
+_Avoid_: platform-free check, OS-less job
+
+**OS-bound check**:
+A required check name that is a job of the workflow running on one OS; only a place of that OS covers it, and GitHub
+posts it when no place of the settings runs that OS (`classify_checks`, `testruns/github_place.py`).
+_Avoid_: per-OS check, OS job
 
 **Line lock**:
 The one hold on a repo's merge line: while one line runs, a second waits for it and names who holds it.
@@ -402,5 +435,11 @@ it, parks it or sends it to the brain.
 _Avoid_: sync, webhook handler, hand-back
 
 **Red-on-main ticket**:
-The ticket of tests that fail on the main line, opened by the layer; a pull request red only on them waits for it.
+The ticket of tests that fail on the main line, opened by the layer; a pull request red only on them waits for it. Not Red on main, which names a required check that is red on main's head.
 _Avoid_: red main list, skip list, known failures
+
+**Red on main**:
+A required check name that failed on the head main had when a batch was made (a name main has no result for, or that is
+green or pending there, is not red on main). When every red name of a batch is red on main, the batch holds and none of
+its members is sent back (`name_red_on_main`, `merge/line.py`). Not the Red-on-main ticket, which lists test ids, not check names.
+_Avoid_: known red, skipped name, main-red check
