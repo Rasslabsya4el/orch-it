@@ -54,6 +54,7 @@ ACCOUNT_REPO_NAME = ".account"  # the repo name of a reading that names no repo:
 _LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 _AT_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"  # the index's own `at` format: text order is time order
 _PATH_REPO = re.compile(r"repos/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:[/?]|$)")
+_QUALIFIER_REPO = re.compile(r"(?:^|[\s=])repo:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?=\s|$)")  # a search query's qualifier
 _OWNER_REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _REPO_FLAGS = ("--repo", "-R")
 dropped_calls = 0  # calls whose count the store refused (counting never fails a call); this process's count
@@ -99,8 +100,9 @@ def poll_interval(base_seconds: float, remaining: int | None, limit: int | None,
 
 def repo_of(args: list[str]) -> str | None:
     """The `owner/name` a `gh` call names: its `--repo X`, `--repo=X` or `-R X` flag (`pr create`, `pr merge`,
-    `run download`), else its `repos/<owner>/<name>` path, or the `owner=` and `name=` fields of a GraphQL call.
-    None when it names no repo."""
+    `run download`), else its `repos/<owner>/<name>` path, else the `repo:owner/name` qualifier of a search query
+    (the parked-issue search, #406), or the `owner=` and `name=` fields of a GraphQL call. None when it names no
+    repo."""
 
     for i, arg in enumerate(args):
         if arg in _REPO_FLAGS and i + 1 < len(args):
@@ -115,6 +117,10 @@ def repo_of(args: list[str]) -> str | None:
         found = _PATH_REPO.search(arg)
         if found:
             return f"{found.group(1)}/{found.group(2)}"
+    for arg in args:
+        found = _QUALIFIER_REPO.search(arg)
+        if found:
+            return found.group(1)
     owner = next((arg[len("owner="):] for arg in args if arg.startswith("owner=")), None)
     name = next((arg[len("name="):] for arg in args if arg.startswith("name=")), None)
     return f"{owner}/{name}" if owner and name else None
