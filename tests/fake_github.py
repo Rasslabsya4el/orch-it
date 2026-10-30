@@ -507,15 +507,16 @@ class FakeActions:
         self.jobs[run_id] = jobs
         return run_id
 
-    def hold_jobs(self, other_repo, labels, *, status="in_progress", queued_for=0):
-        """One run of `other_repo` with one `status` job per entry of `labels` (a runner label or a list of them)."""
+    def hold_jobs(self, other_repo, labels, *, status="in_progress", queued_for=0, event="pull_request"):
+        """One run of `other_repo` with one `status` job per entry of `labels` (a runner label or a list of them).
+        `event` is the run's trigger: `push`, `workflow_dispatch` (started by hand on github.com), `pull_request`."""
 
         if other_repo not in self.repos:
             self.repos.append(other_repo)
             self.runs[other_repo] = []
         run_id = self._next()
         created = self.now - timedelta(seconds=queued_for + 60)
-        self.runs[other_repo].append(self._run(run_id, status, None, "pull_request", "feat/x", "o1", created))
+        self.runs[other_repo].append(self._run(run_id, status, None, event, "feat/x", "o1", created))
         self.jobs[run_id] = [self._job(self._next(), f"job{n}", status, None, label, created, 5, None)
                              for n, label in enumerate(labels)]
         return run_id

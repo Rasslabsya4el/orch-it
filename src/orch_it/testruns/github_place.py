@@ -30,6 +30,8 @@ from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns import junit
 from orch_it.testruns.config import OSES, TestSettings
+from orch_it.testruns.github_busy import READ_ESTIMATE, AccountLoad, BusyReader, PER_PAGE, limit_of
+from orch_it.testruns.github_busy import rate_limit as read_rate_limit
 from orch_it.testruns.github import (WORKFLOW_FILE, Gh, GithubError, import_one_run, items_of, jobs_of,
                                      json_values, moment_of, os_of, run_gh)
 from orch_it.testruns.places import (ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUND, Availability, PlaceEnd,
@@ -37,9 +39,6 @@ from orch_it.testruns.places import (ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUN
 
 POLL_SECONDS = 20.0  # between two reads of a run's jobs
 CACHE_SECONDS = 60.0  # an availability reading stands this long
-QUEUE_GRACE_SECONDS = 120.0  # a job queued longer than this while others run shows the account's limit
-REQUEST_ESTIMATE = 40  # Actions requests one availability reading and one run may make, asked of the budget
-PER_PAGE = 100
 REF_PREFIX = "orch-it-run-"
 RED = ("failed", "error")
 GOOD_CONCLUSIONS = ("success", "skipped")
@@ -141,16 +140,6 @@ def workflow_text_of(work_tree: Path) -> str:
         return ""
 
 
-def _is_machine_of_the_limit(job: dict) -> bool:
-    """A job on a GitHub-hosted Linux or Windows runner: the machines the account's limit is about (a self-hosted
-    runner or a macOS one is not counted against it)."""
-
-    labels = [label for label in job.get("labels") or [] if isinstance(label, str)]
-    hosted = "self-hosted" not in (label.lower() for label in labels)
-    os_name = os_of({"labels": labels})
-    return hosted and os_name is not None and os_name != "macos"
-
-
 def budget_poll(base: float, left: tuple[int, int] | None) -> float:
     """A poller's wait before its next read (#414 decision 9, as the line's `poll_wait`): `base` while the account's
     request budget, as GitHub reports it (`left`: remaining, limit; None when unread), is at or above the threshold;
@@ -181,7 +170,7 @@ class GithubPlace:
         self.workflow_text = workflow_text
         self.sleep, self.clock = sleep, clock  # injectable: the run's bound is counted on `clock`
         self._cached: tuple[datetime, Availability] | None = None
-        self._loaded: tuple[datetime, tuple[int, int]] | None = None
+        self.busy = BusyReader(repo, store, settings, gh)  # the one paced reader of the account's busy machines
 
     @classmethod
     def for_work_tree(cls, work_tree: Path, *, repo: str, store: Store, settings: TestSettings, gh: Gh = run_gh,
@@ -221,21 +210,24 @@ class GithubPlace:
             permissions = self._object(self.gh(["api", f"repos/{self.repo}/actions/permissions"]))
             if permissions.get("enabled") is not True:
                 return Availability(False, 0, capacity, "Actions is off", ACTIONS_OFF)
-            if github_budget.would_cross(self.repo, REQUEST_ESTIMATE, store=self.store, now=now):
+            if github_budget.would_cross(self.repo, READ_ESTIMATE, store=self.store, now=now):
                 return Availability(False, 0, capacity, "Actions budget would cross its threshold")
             private = self._object(self.gh(["api", f"repos/{self.repo}"])).get("private") is True
             if private and self._minutes_spent():
                 return Availability(False, 0, capacity, "the account's Actions minutes are spent", MINUTES_SPENT)
-            busy, longest = self._account_load(now)
+            load = self._busy_load(now)
         except GithubError as e:
             return Availability(False, 0, capacity, f"GitHub could not be read ({e.code})")
-        limit = self._limit(busy, longest)
+        if load is None:  # only the Actions budget's real crossing holds the first read (the pace never does)
+            return Availability(False, 0, capacity, "held by the budget")
+        limit = limit_of(load, capacity)
         bound = self.settings.queue_bound_minutes
-        if longest > bound * 60:
-            note = f"a job has waited {longest / 60:.0f} min in the account's queue, past {bound:g} min"
-            return Availability(False, busy, limit, note, QUEUE_PAST_BOUND)
-        note = f"{busy} busy of {limit}" + (", minutes are paid for" if private else "")
-        return Availability(True, busy, limit, note, None, private)
+        if load.longest_wait_seconds > bound * 60:
+            wait = load.longest_wait_seconds
+            note = f"a job has waited {wait / 60:.0f} min in the account's queue, past {bound:g} min"
+            return Availability(False, load.running, limit, note, QUEUE_PAST_BOUND)
+        note = f"{load.running} busy of {limit}" + (", minutes are paid for" if private else "")
+        return Availability(True, load.running, limit, note, None, private)
 
     def _minutes_spent(self) -> bool:
         """Whether the account's included Actions minutes are used up with none paid for: GitHub's classic billing
@@ -256,54 +248,25 @@ class GithubPlace:
 
     def account_load(self, now: datetime) -> tuple[int, int] | None:
         """The account's jobs in progress and the limit they are counted against, read whatever this repo's own Actions
-        or request budget say (the priority between repos asks the account, not this repo); None when GitHub could not
-        be read. Stands `CACHE_SECONDS`, as the availability does."""
+        or request budget say (the priority between repos asks the account, not this repo: the budget gate is off). The
+        pace of `BusyReader` still applies (#406 decision 5): a pace hold gives the earlier reading of this instance.
+        None only when GitHub could not be read."""
 
-        cached = self._loaded
-        if cached is not None and timedelta(0) <= now - cached[0] < timedelta(seconds=CACHE_SECONDS):
-            return cached[1]
         try:
-            busy, longest = self._account_load(now)
+            load = self._busy_load(now, budget_gate=False)
         except GithubError:
             return None
-        load = (busy, self._limit(busy, longest))
-        self._loaded = (now, load)
-        return load
+        return None if load is None else (load.running, limit_of(load, self.settings.github_capacity))
 
-    def _limit(self, busy: int, longest: float) -> int:
-        """The account's limit: the jobs running when a queued one has waited past the grace while others run, else
-        the setting."""
+    def _busy_load(self, now: datetime, *, budget_gate: bool = True) -> AccountLoad | None:
+        """The account's busy machines now: the read the pace allows (`BusyReader.poll` writes its point), else the last
+        reading this place took; None only when no reading was taken and the budget gate holds the first read. Raises
+        `GithubError` when a read fails."""
 
-        return busy if longest >= QUEUE_GRACE_SECONDS and busy else self.settings.github_capacity
-
-    def _account_load(self, now: datetime) -> tuple[int, float]:
-        """The account's jobs in progress, and the longest wait in seconds of a queued job (0 with none queued)."""
-
-        owner = self._owner().lower()
-        listed = items_of(self.gh(["api", "--paginate", f"user/repos?per_page={PER_PAGE}"]), "repos")
-        busy, longest = 0, 0.0
-        for entry in listed:
-            full = entry.get("full_name")
-            if (not isinstance(full, str) or entry.get("archived")
-                    or str((entry.get("owner") or {}).get("login", "")).lower() != owner):
-                continue
-            for status in ("in_progress", "queued"):
-                runs = items_of(self.gh(["api", "--paginate",
-                                         f"repos/{full}/actions/runs?status={status}&per_page={PER_PAGE}"]),
-                                "workflow_runs")
-                for run in runs:
-                    jobs = items_of(self.gh(["api", "--paginate", f"repos/{full}/actions/runs/{run['id']}/jobs"
-                                                    f"?filter=latest&per_page={PER_PAGE}"]), "jobs")
-                    for job in jobs:
-                        if not _is_machine_of_the_limit(job):
-                            continue
-                        if job.get("status") == "in_progress":
-                            busy += 1
-                        elif job.get("status") == "queued":
-                            queued_at = moment_of(job.get("created_at"))
-                            if queued_at is not None:
-                                longest = max(longest, (now - queued_at).total_seconds())
-        return busy, longest
+        load = self.busy.poll(now, budget_gate=budget_gate)
+        if load is not None:
+            return load
+        return self.busy.last[1] if self.busy.last is not None else None
 
     @staticmethod
     def _object(text: str) -> dict:
@@ -379,20 +342,9 @@ class GithubPlace:
 
     def rate_limit(self) -> tuple[int, int] | None:
         """The core request budget of the token as GitHub reports it now: (remaining, limit); None when it cannot be
-        read. Not stored: its call names no repo."""
+        read. Not stored: its call names no repo (`github_busy.rate_limit`)."""
 
-        try:
-            found = self._object(self.gh(["api", "rate_limit"]))
-        except GithubError:
-            return None
-        resources = found.get("resources")
-        core = resources.get("core") if isinstance(resources, dict) else None
-        if not isinstance(core, dict):
-            return None
-        remaining, limit = core.get("remaining"), core.get("limit")
-        if type(remaining) is not int or type(limit) is not int or limit <= 0:
-            return None
-        return remaining, limit
+        return read_rate_limit(self.gh)
 
     def _ours(self, ref: str, sha: str) -> int | None:
         """The id of the run the dispatch made, the one on our own branch; None while none is listed."""
