@@ -22,9 +22,13 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from orch_it.tickets.hub import LAYER_MARK, Comment
 from orch_it.tickets.model import without_park_lines
+
+if TYPE_CHECKING:
+    from orch_it.merge.hub import Pull
 
 RESULTS = ("pass", "fail", "na", "after merge")
 _MARK = re.compile(r"<!-- orch-it (acceptance|ready|left|follow) ([^>]*?) ?-->")
@@ -193,6 +197,20 @@ def ready_since(comments: Iterable[Comment]) -> Ready | None:
             ticket = fields.get("ticket", "").removeprefix("#")
             held = Ready(int(ticket) if ticket.isdigit() else None, fields.get("head", ""), comment.at)
     return held
+
+
+def ready_pulls(hub, repo: str, base: str, owner: str) -> list[tuple[Pull, Ready]]:
+    """The members of `repo`'s merge line into `base` (the line's own definition): each open, non-draft pull request with
+    its head in `repo` (no fork) that holds a ready mark no left mark followed, with that mark; in the hub's order."""
+
+    found = []
+    for pull in hub.open_pulls(repo, base):
+        if pull.draft or (pull.head_repo or "").lower() != repo.lower():
+            continue
+        ready = ready_since(of_layer(hub.pull_comments(repo, pull.number), owner))
+        if ready is not None:
+            found.append((pull, ready))
+    return found
 
 
 def last_ready(comments: Iterable[Comment]) -> Ready | None:

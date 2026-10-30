@@ -80,13 +80,27 @@ def occupy_own(store):
     return writer, envelope
 
 
+class Ticks:
+    """A sleep and a clock for a wait: each sleep moves the clock on by its seconds, as a real sleep does."""
+
+    def __init__(self):
+        self.now, self.sleeps = 0.0, []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 def test_no_place_left_waits_on_test_place_and_gives_up_refused(tmp_path):
     store = Store.open(tmp_path / "store")
     occupy_own(store)
-    sleeps = []
+    ticks = Ticks()
     done = run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
-                     places={"own": OwnPlace()}, wait_minutes=1, sleep=sleeps.append)
-    assert len(sleeps) == 4  # one minute of 15-second polls, then it gives up
+                     places={"own": OwnPlace()}, wait_minutes=1, sleep=ticks.sleep, clock=ticks.clock)
+    assert len(ticks.sleeps) == 4  # one minute of 15-second polls on the clock, then it gives up
     assert (done.outcome, done.reason) == ("refused", "busy")
     [(reason,)] = store.query("SELECT reason FROM events WHERE kind = 'step.started' AND step = 'wait'").rows
     assert reason == "test_place"
@@ -129,14 +143,74 @@ def test_a_wait_stopped_by_a_person_is_ended_stopped(tmp_path):
     assert ends(store, "wait") == [("stopped", None)]
 
 
-def test_a_wait_ends_after_its_polls_even_if_the_clock_stands_still(tmp_path):
+class Budgeted:
+    """A github place for the wait only: it is not offered (github_tests is off), and it reads the request budget
+    GitHub has left, as the real place does."""
+
+    id, os = "github", "linux"
+
+    def __init__(self, remaining):
+        self.remaining = remaining
+
+    def rate_limit(self):
+        return None if self.remaining is None else (self.remaining, 5000)
+
+    def run(self, request, scratch):
+        raise PlaceRefused("busy")
+
+
+def test_the_wait_polls_at_its_base_while_the_github_budget_is_above_the_threshold(tmp_path):
     store = Store.open(tmp_path / "store")
     occupy_own(store)
-    frozen = datetime.now(UTC)  # the occupying run stays live while the clock stands still
-    sleeps = []
+    ticks = Ticks()
+    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
+              places={"own": OwnPlace(), "github": Budgeted(2500)}, wait_minutes=1, sleep=ticks.sleep,
+              clock=ticks.clock)
+    assert ticks.sleeps == [15.0] * 4  # half of the 5000 left is above the 20% threshold: the base, 15 s
+
+
+def test_a_wait_with_no_budget_reading_keeps_the_base_interval(tmp_path):
+    store = Store.open(tmp_path / "store")
+    occupy_own(store)
+    ticks = Ticks()
+    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
+              places={"own": OwnPlace(), "github": Budgeted(None)}, wait_minutes=1, sleep=ticks.sleep,
+              clock=ticks.clock)
+    assert ticks.sleeps == [15.0] * 4  # GitHub's budget is unread: the interval stays at its base
+
+
+def test_a_one_minute_wait_at_a_tenth_left_sleeps_at_most_a_minute(tmp_path):
+    store = Store.open(tmp_path / "store")
+    occupy_own(store)
+    ticks = Ticks()
+    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
+              places={"own": OwnPlace(), "github": Budgeted(500)}, wait_minutes=1, sleep=ticks.sleep,
+              clock=ticks.clock)
+    assert ticks.sleeps == [60.0]  # a tenth left: the grown 60 s is the whole minute, one poll
+    assert sum(ticks.sleeps) <= 60
+
+
+def test_the_wait_ends_on_the_clock_and_its_last_poll_is_clamped_to_the_time_left(tmp_path):
+    store = Store.open(tmp_path / "store")
+    occupy_own(store)
+    ticks = Ticks()
     done = run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
-                     places={"own": OwnPlace()}, wait_minutes=2, sleep=sleeps.append, now=lambda: frozen)
-    assert (done.outcome, len(sleeps)) == ("refused", 8)
+                     places={"own": OwnPlace(), "github": Budgeted(500)}, wait_minutes=1.5, sleep=ticks.sleep,
+                     clock=ticks.clock)
+    assert ticks.sleeps == [60.0, 30.0]  # 60 s at a tenth left, then the 30 s left of 90 s, not a whole 60
+    assert sum(ticks.sleeps) <= 1.5 * 60
+    assert (done.outcome, done.reason) == ("refused", "busy")
+
+
+def test_a_wait_ends_at_its_bound_on_the_clock_even_if_the_store_clock_stands_still(tmp_path):
+    store = Store.open(tmp_path / "store")
+    occupy_own(store)
+    frozen = datetime.now(UTC)  # the occupying run stays live while the store's clock stands still
+    ticks = Ticks()
+    done = run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
+                     places={"own": OwnPlace()}, wait_minutes=2, sleep=ticks.sleep, clock=ticks.clock,
+                     now=lambda: frozen)
+    assert (done.outcome, len(ticks.sleeps), sum(ticks.sleeps)) == ("refused", 8, 120)
 
 
 def test_an_os_outside_the_set_is_refused_before_anything_is_written(tmp_path):

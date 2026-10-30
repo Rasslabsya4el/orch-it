@@ -1,5 +1,7 @@
 # The merge line holds auto-merge off on its waiting members; tickets follow from GitHub alone
 
+Status: superseded by ADR 0009 (Rasslabsya4el/orchestration-layer#414); the decision text below is kept as it was.
+
 Green pull requests land on a repo's main line through the merge line, one run of `python -m orch_it merge line` at a
 time per repo under a line lock, on the machine and under the owner's `gh`, so its updates and merges start the
 required checks (Rasslabsya4el/orchestration-layer#400, decisions 2 and 3). The line serves its oldest ready member:

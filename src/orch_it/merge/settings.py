@@ -20,7 +20,10 @@ Keys, each optional:
   back to ready;
 - `red_main_park_days` (7): how long a ticket red only on tests red on main waits parked on the
   red-on-main ticket before it goes back to its queue late;
-- `merge_method` (`merge`): how the line merges: `merge`, `squash` or `rebase`.
+- `merge_method` (`merge`): how the line merges a pull request it serves alone (batch size 1): `merge`, `squash` or
+  `rebase`; a batch lands as a fast-forward of the base to the tested tree;
+- `batch_size` (4): how many ready members the line combines on one branch and checks in one pass (#414 item 5); 1
+  is the line serving one pull request at a time.
 
 A value of the wrong shape, or a key not named here, raises `SettingsError("bad_setting")` naming it.
 """
@@ -38,7 +41,7 @@ METHODS = ("merge", "squash", "rebase")
 WEEK_MINUTES = 7 * 24 * 60  # a longer bound is no bound
 # key -> (least, most) in the key's own unit; a poll under a second would hammer GitHub
 _RANGES = {"pr_max_hours": (0, WEEK_MINUTES / 60), "poll_seconds": (1, 3600)}
-COUNT_MOST = 1000  # `max_updates`, `red_in_a_row`, `red_main_park_days`: a count past this is no bound
+COUNT_MOST = 1000  # `max_updates`, `red_in_a_row`, `red_main_park_days`, `batch_size`: a count past this is no bound
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,7 @@ class MergeSettings:
     red_in_a_row: int = 3
     red_main_park_days: int = 7
     merge_method: str = "merge"
+    batch_size: int = 4
 
     @classmethod
     def from_settings(cls, raw: dict, repo: str) -> MergeSettings:
@@ -77,7 +81,7 @@ class MergeSettings:
             if key == "merge_method":
                 if value not in METHODS:
                     raise SettingsError("bad_setting", f"{SECTION}.{key}: one of {', '.join(METHODS)}")
-            elif key in ("max_updates", "red_in_a_row", "red_main_park_days"):
+            elif key in ("max_updates", "red_in_a_row", "red_main_park_days", "batch_size"):
                 if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= COUNT_MOST:
                     raise SettingsError("bad_setting", f"{SECTION}.{key}: a whole number from 1 to {COUNT_MOST}")
             else:
