@@ -22,7 +22,8 @@ from orch_it.events.store import Store
 from orch_it.testruns import github
 from orch_it.testruns.github import GithubError, import_github
 from orch_it.tickets import hook as ticket_hook
-from required_names import LINUX_CHECK, WINDOWS_CHECK
+from fake_github import DEFAULT_BRANCH
+from required_names import FOREIGN_LINUX, FOREIGN_MACOS, FOREIGN_WINDOWS, LINUX_CHECK, WINDOWS_CHECK
 
 REPO = "acme-x/widgets-y"
 BASE = datetime(2026, 10, 26, 10, 0, tzinfo=UTC)
@@ -782,8 +783,8 @@ WORKFLOW = (Path(__file__).parents[1] / ".github" / "workflows" / "tests.yml").r
 
 def test_the_workflow_bounds_are_read_per_job_with_the_nightly_value_beside_the_per_change_one():
     assert github.workflow_bounds(WORKFLOW) == {
-        LINUX_CHECK: (4, 16), WINDOWS_CHECK: (5, 40), "foreign-linux": (9, 11), "foreign-windows": (12, 40),
-        "foreign-macos": (30, 30)}
+        LINUX_CHECK: (4, 16), WINDOWS_CHECK: (5, 16), FOREIGN_LINUX: (9, 11), FOREIGN_WINDOWS: (12, 40),
+        FOREIGN_MACOS: (30, 30)}
 
 
 @pytest.mark.parametrize("job, minutes", [(LINUX_CHECK, 4), (WINDOWS_CHECK, 5)])
@@ -800,10 +801,18 @@ def test_a_job_cancelled_by_a_person_at_2_minutes_is_not_cut(store, gh):
 
 
 def test_a_nightly_run_reads_the_nightly_bound_of_its_job(store, gh):
-    gh.add_run(100, event="schedule", pr=None, branch="main",
+    gh.add_run(100, event="schedule", pr=None, branch=DEFAULT_BRANCH,
                linux={"conclusion": "cancelled", "cases": None, "completed": 60 + 5 * 60})
     run_import(store, gh, workflow_text=WORKFLOW)
     assert ended_of(store, LINUX_CHECK)["outcome"] == "stopped"
+
+
+def test_a_dispatch_run_without_the_slow_input_reads_the_per_change_bound_so_4_minutes_is_a_cut(store, gh):
+    # the run listing does not show the `slow_and_live` input: a dispatch reads the smaller of the job's two bounds
+    gh.add_run(100, event="workflow_dispatch", pr=None, branch=DEFAULT_BRANCH,
+               linux={"conclusion": "cancelled", "cases": None, "completed": 60 + 4 * 60})
+    run_import(store, gh, workflow_text=WORKFLOW)
+    assert (ended_of(store, LINUX_CHECK)["outcome"], ended_of(store, LINUX_CHECK)["reason"]) == ("no_result", "cut")
 
 
 def test_a_cancelled_job_that_never_started_is_never_cut(store, gh):

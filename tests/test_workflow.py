@@ -24,7 +24,7 @@ import pytest
 from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo, default_host
 
 from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
-from required_names import LINUX_CHECK, MACOS_OS, WINDOWS_CHECK
+from required_names import FOREIGN_LINUX, FOREIGN_MACOS, FOREIGN_WINDOWS, LINUX_CHECK, MACOS_OS, WINDOWS_CHECK
 from test_foreign_run import foreign_run  # the script's module, loaded once by its own test file
 
 ROOT = Path(__file__).parents[1]
@@ -33,8 +33,6 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
 # the jobs that run pytest themselves; the foreign jobs run `.github/scripts/foreign_run.py`
 PYTEST_JOBS = (LINUX_CHECK, WINDOWS_CHECK)
-FOREIGN_PREFIX = "foreign-"  # the job names are built from the required names and the OS words (no quoted job name in code)
-FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS = FOREIGN_PREFIX + LINUX_CHECK, FOREIGN_PREFIX + WINDOWS_CHECK, FOREIGN_PREFIX + MACOS_OS
 FOREIGN_JOBS = (FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS)
 
 
@@ -364,7 +362,7 @@ MEASURED_PER_CHANGE = (
     (FOREIGN_LINUX, 357, "5.95 minutes", 9),  # 5:57
     (FOREIGN_WINDOWS, 456, "7.6 minutes", 12),  # 7:36
 )
-NIGHTLY_BOUND = {LINUX_CHECK: 16, WINDOWS_CHECK: 40, FOREIGN_LINUX: 11, FOREIGN_WINDOWS: 40}
+NIGHTLY_BOUND = {LINUX_CHECK: 16, WINDOWS_CHECK: 16, FOREIGN_LINUX: 11, FOREIGN_WINDOWS: 40}
 MACOS_BOUND = 30
 UNMEASURED = "unmeasured: set to 1.5 x the first nightly's job"
 
@@ -626,6 +624,15 @@ def test_the_foreign_macos_bound_is_unmeasured_and_keeps_its_value():
     value, comment = timeout_of(WORKFLOW.read_text("utf-8"), FOREIGN_MACOS)
     assert value == str(MACOS_BOUND), value
     assert UNMEASURED in " ".join(comment), value
+
+
+@pytest.mark.parametrize("nightly, expected", [
+    (True, "not live"),  # the nightly foreign run on Windows: the full suite, the live tests left out (foreign_run.py)
+    (False, "os_touching and ({marks})"),  # a change run: the Windows-marked set among the marks left out of change runs
+])
+def test_the_foreign_windows_run_takes_the_full_suite_nightly_and_the_windows_marked_set_per_change(nightly, expected):
+    marks = workflow_env()["MARKS_LEFT_OUT_OF_CHANGE_RUNS"]
+    assert foreign_run.selection(nightly, marks, os_name="nt") == expected.format(marks=marks)
 
 
 @pytest.mark.parametrize("job, os_name", [(LINUX_CHECK, "posix"), (WINDOWS_CHECK, "nt")])
