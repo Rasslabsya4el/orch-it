@@ -148,7 +148,7 @@ class FakeGh:
             labels = ["ubuntu-latest"] if name == LINUX_CHECK else ["windows-latest"]
             ran = spec["conclusion"] != "skipped"
             self.jobs[run_id].append({
-                "id": job_id, "name": name, "status": "completed", "conclusion": spec["conclusion"],
+                "id": job_id, "name": name, "status": spec.get("status", "completed"), "conclusion": spec["conclusion"],
                 "run_attempt": spec["attempt"], "labels": labels,
                 "created_at": stamp(base, 0),
                 "started_at": None if spec["started"] is False else stamp(
@@ -493,10 +493,14 @@ def test_every_attempt_of_a_run_has_its_own_test_run(store, gh):
                         "github:100/1002/2": "passed"}
 
 
-def test_a_run_still_in_progress_is_left_for_the_next_import(store, gh):
-    gh.add_run(100, status="in_progress", conclusion=None)
+def test_a_run_still_in_progress_gives_each_started_job_its_start_and_wait_only(store, gh):
+    """#406 decision 1: a job that started is a `test_run` pair from its start; its end waits for its completion."""
+    running = {"status": "in_progress", "conclusion": None, "completed": None}
+    gh.add_run(100, status="in_progress", conclusion=None, **{LINUX_CHECK: running, WINDOWS_CHECK: running})
     report = run_import(store, gh)
-    assert report.written == 0 and store.query("SELECT count(*) FROM events").rows == [(0,)]
+    assert report.written == 6  # per job: the start, the wait's start and its end
+    assert store.query("SELECT count(*) FROM events WHERE kind = 'step.ended' AND step = 'test_run'").rows == [(0,)]
+    assert len(pairs(store)) == 2 and all(ended is None for _started, ended in pairs(store).values())
     assert gh.downloads() == []
 
 
@@ -1254,7 +1258,8 @@ def test_newest_counts_completed_runs_only(store, gh):
     gh.add_run(101, created=RUN_SPACING_S, status="in_progress", conclusion=None)
     gh.add_run(102, created=2 * RUN_SPACING_S)
     assert run_import(store, gh, newest=2).runs_read == 2
-    assert {run.split("/")[0] for run in pairs(store)} == {"github:100", "github:102"}
+    # the run still going (101) has its started job's start, but no end: the ended pairs are the completed runs
+    assert {run.split("/")[0] for run, (_started, ended) in pairs(store).items() if ended} == {"github:100", "github:102"}
 
 
 def test_newest_with_since_asks_only_for_the_runs_created_since_it(store, gh):
