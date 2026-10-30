@@ -61,6 +61,12 @@ _Avoid_: runner, host, target, executor
 The one rule that picks a test run's place from the runs live and the times measured in the store.
 _Avoid_: scheduler, routing, placement policy
 
+**Priority**:
+The per-repo whole number `github_priority` ranking the repos of one account for the account's GitHub machines: while the
+account's live jobs are at its concurrency, a repo's line starts no run while a repo of the same account with a higher
+one has a ready member; equal priorities hold nothing.
+_Avoid_: weight, rank, precedence
+
 **Availability**:
 The readiness verdict of the `github` test place: whether it may be offered (Actions on, its request budget with room,
 GitHub readable), its machines busy of their limit, and the note the decision carries (its busy-of-limit count, or why it is off).

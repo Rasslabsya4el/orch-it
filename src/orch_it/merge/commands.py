@@ -58,7 +58,9 @@ from orch_it.merge.main_check import check_main
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr, parse_part
 from orch_it.merge.settings import MergeSettings
+from orch_it.testruns import priority
 from orch_it.testruns.config import TestSettings, required_checks
+from orch_it.testruns.github_place import GithubPlace
 from orch_it.tickets.commands import OWNER_SETTING
 from orch_it.tickets.gh_check import read_event
 from orch_it.tickets.hook import repo_of as origin_repo
@@ -225,12 +227,16 @@ def _line(args, store_of, repo_of) -> str:
     raw = settings.load()
     merge_settings = MergeSettings.from_settings(raw, repo)
     store = store_of()
-    suite = None
+    suite, hold, hub = None, None, GhPullHub()
     if merge_settings.batch_size > 1:
         found = origin_repo(args.work_tree)
         if found is not None and found.lower() == repo.lower():
-            suite = batch.place_rule_suite(store, repo, TestSettings.from_settings(raw, repo),
-                                           batch.git_checkout(Path(args.work_tree)))
+            test_settings = TestSettings.from_settings(raw, repo)
+            suite = batch.place_rule_suite(store, repo, test_settings, batch.git_checkout(Path(args.work_tree)))
+            readings = priority.HubReadings(hub, (owner_login(raw) or repo.split("/")[0]).lower(),
+                                            GithubPlace(repo, store, test_settings).account_load,
+                                            lambda: datetime.now(UTC))
+            hold = priority.hold_of(raw, repo, readings)
         else:
             print(f"batch off: no work tree of {repo} at {args.work_tree} (its origin is "
                   f"{found or 'not a GitHub repo'}), one pull request at a time", flush=True)  # before the line waits
@@ -238,9 +244,9 @@ def _line(args, store_of, repo_of) -> str:
     def say(holder) -> None:
         print(f"waits: the line of {repo} is held by {holder.said()}", flush=True)
 
-    done = run_line(GhPullHub(), store, repo, args.base, settings=merge_settings,
+    done = run_line(hub, store, repo, args.base, settings=merge_settings,
                     holder=f"{holder_of(repo, args.base)} (pid {os.getpid()})", on_wait=say,
-                    required=required_checks(raw, repo), owner=owner_login(raw), suite=suite)
+                    required=required_checks(raw, repo), owner=owner_login(raw), suite=suite, priority_hold=hold)
     lines = [f"#{s.pr} {s.result} waited {s.waited_minutes:g} min updates {s.updates} {s.detail}".rstrip()
              for s in done.served]
     lines += done.notes
