@@ -790,7 +790,7 @@ WORKFLOW = (Path(__file__).parents[1] / ".github" / "workflows" / "tests.yml").r
 
 def test_the_workflow_bounds_are_read_per_job_with_the_nightly_value_beside_the_per_change_one():
     assert github.workflow_bounds(WORKFLOW) == {
-        LINUX_CHECK: (4, 16), WINDOWS_CHECK: (5, 16), FOREIGN_LINUX: (9, 11), FOREIGN_WINDOWS: (12, 40),
+        LINUX_CHECK: (4, 6), WINDOWS_CHECK: (5, 16), FOREIGN_LINUX: (9, 12), FOREIGN_WINDOWS: (12, 33),
         FOREIGN_MACOS: (30, 30)}
 
 
