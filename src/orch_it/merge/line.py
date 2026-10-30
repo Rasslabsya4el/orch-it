@@ -34,8 +34,11 @@ A suite that passed at a place other than GitHub (whatever the cause: Actions of
 bound, a private repo with nothing protected, or simply the place rule choosing a machine) speaks for the required names
 its run covered (the test jobs on its OS and the names tied to no OS): the line posts PASSED for each of those nobody
 posted on the sha. A name it did not cover (a test job of another OS, a name the workflow cannot place) stays unposted
-and holds the batch, as does any name nobody posted. A suite that passed at GitHub posts nothing (GitHub posts its own
-check runs), nor does a failed one, nor the rerun of placeholder tests (a subset of the suite).
+and holds the batch, as does any name nobody posted. A suite that passed at GitHub posts nothing of its own (GitHub posts
+its check runs), nor does a failed one, nor the rerun of placeholder tests (a subset of the suite). A base's protection
+counts a commit status of a required name on a ref update and does not count the check runs of a manual (dispatch) run on a
+batch branch: so right before the landing the line posts PASSED too for each required name it saw green only as a check run
+(`post_counted`); a post GitHub does not take holds the batch like a name not green (the note names the error code).
 A repo whose base protects nothing is held by this same wait and refusal: the line alone holds the required checks. A
 name still not green when the wait ends (note `required checks not green on <sha>: <names>`) lands nothing and stops
 the run: every member not landed stays for the next run.
@@ -76,14 +79,17 @@ from orch_it.merge import batch, lock, marks, record, red_main
 from orch_it.merge.follow import SHORT_SHA, FollowReport, follow, follow_conflict, follow_red
 from orch_it.merge.hub import FAILED as CHECK_FAILED
 from orch_it.merge.hub import PASSED as CHECK_PASSED
-from orch_it.merge.hub import LandingRefused, Pull, PullHub
+from orch_it.merge.hub import Check, LandingRefused, Pull, PullHub
 from orch_it.merge.pr_open import refers_to
 from orch_it.merge.settings import MergeSettings, required_checks_now
+from orch_it.testruns.github import GithubError
 from orch_it.testruns.github_place import budget_poll
 from orch_it.tickets.park import ROLE
 
 # the description of a required name the line posts after a suite that passed at a place other than GitHub's
 POSTED_NOTE = "the test suite passed on this commit at a place other than GitHub; posted by the merge line"
+# the description of a required name whose check run is green: posted as a status too, the kind a base's protection counts
+COUNTED_NOTE = "the check passed on this commit as a check run; posted by the merge line as a status the base counts"
 
 # what the follow says of a member that is still in the line: the line goes on serving it (a
 # `raced` follow wrote nothing: the member waits a poll and is followed again)
@@ -97,6 +103,14 @@ def poll_wait(hub: PullHub, settings: MergeSettings) -> float:
     request budget, as GitHub reports it now, is under the threshold (`budget_poll`). No reading keeps the interval."""
 
     return budget_poll(settings.poll_seconds, hub.rate_limit())
+
+
+class PostFailed(Exception):
+    """A status post of the line failed with the GitHub error `code`; `remaining` are the names not posted."""
+
+    def __init__(self, code: str, remaining: tuple[str, ...]):
+        self.code, self.remaining = code, remaining
+        super().__init__(f"{code}: {', '.join(remaining)}")
 
 
 class LineError(ValueError):
@@ -186,6 +200,7 @@ class _Line:
     # of higher priority to the run's bound (`priority_hold`)
     refused: str | None = None  # the base's own reason for refusing a batch landing: the rest goes one by one
     notes: list[str] = field(default_factory=list)
+    post_error: str | None = None  # the error code of a status post that failed: the batch is held for the next run
 
     def run(self) -> tuple[list[Served], str]:
         turns = self.turns
@@ -304,12 +319,26 @@ class _Line:
         result = self.suite(made.tip)
         if result.outcome != batch.PASSED:
             return result, False, ()
-        if result.covered:  # the pass ran at a place other than GitHub: no workflow will post the names it covered
-            self.post_missing(made.tip, result.covered)
-        red, unmet = self.wait_for_names(made.tip)
+        try:
+            if result.covered:  # the pass ran at a place other than GitHub: no workflow will post the names it covered
+                self.post_missing(made.tip, result.covered)
+            red, unmet = self.wait_for_names(made.tip)
+        except PostFailed as failed:  # a post GitHub did not take: nothing lands, the batch waits for the next run
+            self.post_error = failed.code
+            return result, False, failed.remaining
         if red:
             return batch.SuiteResult(batch.FAILED, red), True, ()
         return result, False, unmet
+
+    def post(self, sha: str, names: list[str], note: str) -> None:
+        """Post PASSED on `sha` for each of `names`, in order; a post that fails raises `PostFailed` naming the names
+        not posted (the failed one first)."""
+
+        for done, name in enumerate(names):
+            try:
+                self.hub.post_status(self.repo, sha, name, CHECK_PASSED, note)
+            except GithubError as e:
+                raise PostFailed(e.code, tuple(names[done:])) from e
 
     def post_missing(self, sha: str, covered: tuple[str, ...]) -> None:
         """The suite that just passed ran at a place other than GitHub (`covered` is empty after a pass at GitHub), so no
@@ -321,25 +350,38 @@ class _Line:
         the batch (`checks_missing`). Only after a passed suite."""
 
         posted = {check.name for check in self.hub.checks(self.repo, sha, statuses=True)}
-        for name in self.required:
-            if name in covered and name not in posted:
-                self.hub.post_status(self.repo, sha, name, CHECK_PASSED, POSTED_NOTE)
+        self.post(sha, [name for name in self.required if name in covered and name not in posted], POSTED_NOTE)
 
     def wait_for_names(self, sha: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Poll the checks of `sha` (`budget_poll` through `poll_wait`, never a bare sleep) until every name of
-        `required` is green: `((), ())`. A name red ends the wait at once: `(red names, ())`. At `check_minutes` (or
+        `required` is green: `((), ())`, the names first posted as statuses where only a check run was green
+        (`post_counted`). A name red ends the wait at once: `(red names, ())`. At `check_minutes` (or
         the run's bound) the names not green: `((), those)`."""
 
         ends = self.check_ends()
         while True:
-            states = {check.name: check.state for check in self.hub.checks(self.repo, sha, statuses=True)}
+            checks = self.hub.checks(self.repo, sha, statuses=True)
+            states = {check.name: check.state for check in checks}
             red = tuple(name for name in self.required if states.get(name) == CHECK_FAILED)
             unmet = tuple(name for name in self.required if states.get(name) != CHECK_PASSED)
             if red:
                 return red, ()
-            if not unmet or self.clock() >= ends:
+            if not unmet:
+                self.post_counted(sha, checks)
+                return (), ()
+            if self.clock() >= ends:
                 return (), unmet
             self.sleep(poll_wait(self.hub, self.settings))
+
+    def post_counted(self, sha: str, checks: list[Check]) -> None:
+        """Every required name is green on `sha`. A base's protection counts a commit status of a required name on a ref
+        update and does not count the check runs of a manual (dispatch) run on a batch branch: so right before the landing
+        the line posts PASSED for each name it saw green only as a check run. A name already a status is not posted
+        again."""
+
+        self.post(sha, [check.name for check in checks
+                        if check.name in self.required and check.state == CHECK_PASSED and not check.status],
+                  COUNTED_NOTE)
 
     def check_ends(self) -> datetime:
         """When a wait for checks that starts now ends: `check_minutes` from now, or the run's bound if sooner."""
@@ -369,7 +411,8 @@ class _Line:
         """A required name not green when the wait ended: nothing lands, the run stops, no member is sent back."""
 
         self.held = "checks_missing"
-        self.notes.append(f"required checks not green on {made.tip[:SHORT_SHA]}: {', '.join(unmet)}")
+        why = f" (posting a status failed: {self.post_error})" if self.post_error else ""
+        self.notes.append(f"required checks not green on {made.tip[:SHORT_SHA]}: {', '.join(unmet)}{why}")
         self.postpone(made.included, "bound", "checks_missing")
 
     def red_on_main(self, made: _Batch, failing: tuple[str, ...]) -> bool:

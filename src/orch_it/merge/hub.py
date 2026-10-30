@@ -54,13 +54,15 @@ class Pull:
 
 @dataclass(frozen=True)
 class Check:
-    """One check run on a head sha, the latest of its name."""
+    """One check run on a head sha, the latest of its name; or, when no check run has the name, its commit status
+    (`status`)."""
 
     name: str
     state: str  # PENDING, PASSED, FAILED or NO_RESULT (cancelled, timed out, skipped, stale, ...)
     run_id: str | None  # the GitHub Actions run it belongs to
     attempt: int  # the run's attempt, 1 for the first
     started_at: datetime | None
+    status: bool = False  # a commit status, not a check run: the kind a base's protection counts on a ref update
 
 
 @dataclass(frozen=True)
@@ -98,12 +100,14 @@ class PullHub(Hub, Protocol):
 
     def checks(self, repo: str, sha: str, *, statuses: bool = False) -> list[Check]:
         """The latest check run of each name on `sha`; with `statuses` also the commit statuses posted under a name
-        (a check run wins over a status of its name). The status read is one more request: only a caller that waits
+        (a check run wins over a status of its name, unless the run is green and the status is not: then the status). The status read is one more request: only a caller that waits
         for names a place posted as statuses (the merge line) asks for it."""
 
     def post_status(self, repo: str, sha: str, name: str, state: str, description: str) -> None:
         """Post a commit status named `name` on `sha`, `state` PASSED, FAILED or PENDING; `checks` reads it back. A
-        status and not a check run: a user token cannot create a check run (#414 decision 6)."""
+        status and not a check run: a user token cannot create a check run (#414 decision 6). The base's protection
+        counts a status of a required name on a ref update; it does not count the check runs of a manual (dispatch)
+        run on a batch branch."""
 
     def pull_comments(self, repo: str, number: int) -> list[Comment]:
         """What was said on a pull request, oldest first: its comments, its reviews with a body

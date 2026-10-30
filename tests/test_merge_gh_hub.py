@@ -296,6 +296,7 @@ def test_a_commit_status_is_a_check_under_its_context_and_a_check_run_wins_over_
     assert {n: c.state for n, c in found.items()} == {LINUX_CHECK: FAILED, WINDOWS_CHECK: expected}
     assert found[WINDOWS_CHECK].run_id is None and found[WINDOWS_CHECK].started_at == datetime(
         2026, 11, 2, 10, 30, tzinfo=UTC)
+    assert found[WINDOWS_CHECK].status and not found[LINUX_CHECK].status  # only a status is the kind a protection counts
 
 
 def test_the_status_read_is_asked_for_and_the_default_read_makes_the_calls_it_made_before():
@@ -930,3 +931,13 @@ def test_actions_enabled_reads_the_permission_and_a_repo_without_it_is_off():
         assert error.value.code == "gh_bad_output"
     with pytest.raises(GithubError):
         GhPullHub(Gh(([permissions], failed(500)))).actions_enabled(REPO)
+
+
+
+@pytest.mark.parametrize(("state", "expected"), [("failure", FAILED), ("pending", PENDING), ("odd", NO_RESULT),
+                                                 ("success", PASSED)])
+def test_a_green_check_run_never_reads_green_over_a_status_of_its_name_that_is_not(state, expected):
+    gh = Gh(([CHECKS], {"check_runs": [run_of(1, LINUX_CHECK, "completed", "success")]}),
+            ([STATUS], {"statuses": [status_of(LINUX_CHECK, state)]}))
+    [found] = GhPullHub(gh).checks(REPO, "c" * 7, statuses=True)
+    assert (found.state, found.status) == (expected, True)  # the status read, the kind a base counts
