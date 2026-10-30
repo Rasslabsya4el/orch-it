@@ -11,9 +11,9 @@ count is the account's, not this repo's). A job that has waited in the queue whi
 account really has; else the limit is the setting `github_capacity`. Any `gh` failure leaves the place off.
 
 The place is also left out, with a cause (`places.RUNS_NOT_STARTING`), when GitHub's runs would not start: Actions is
-off for the repo (`actions_off`), the repo is private and the account's included minutes are spent with none paid for
-(`minutes_spent`), or a job has waited in the account's queue past the setting `place_bounds.queue_minutes`
-(`queue_past_bound`: the longest live wait, read now, not a stored median). A private repo that is still on is
+off for the repo (`actions_off`), the repo is private and its month's minutes would pass the allowance
+(`minutes_spent`: the place rule's `out_of_minutes` drop, #406 decision 4), or a job has waited in the account's queue
+past the setting `place_bounds.queue_minutes` (`queue_past_bound`: the longest live wait, read now, not a stored median). A private repo that is still on is
 `metered`: the place rule ranks it after the free places.
 """
 
@@ -34,8 +34,10 @@ from orch_it.testruns.github_busy import READ_ESTIMATE, AccountLoad, BusyReader,
 from orch_it.testruns.github_busy import rate_limit as read_rate_limit
 from orch_it.testruns.github import (WORKFLOW_FILE, Gh, GithubError, import_one_run, items_of, jobs_of,
                                      json_values, moment_of, os_of, run_gh)
-from orch_it.testruns.places import (ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUND, Availability, PlaceEnd,
-                                     PlaceRefused, PlaceVanished, Request)
+from orch_it.testruns.github_minutes import MinutesReader, next_month_start
+from orch_it.testruns.place_rule import Budget
+from orch_it.testruns.places import (ACTIONS_OFF, QUEUE_PAST_BOUND, Availability, PlaceEnd, PlaceRefused,
+                                     PlaceVanished, Request)
 
 POLL_SECONDS = 20.0  # between two reads of a run's jobs
 CACHE_SECONDS = 60.0  # an availability reading stands this long
@@ -171,6 +173,7 @@ class GithubPlace:
         self.sleep, self.clock = sleep, clock  # injectable: the run's bound is counted on `clock`
         self._cached: tuple[datetime, Availability] | None = None
         self.busy = BusyReader(repo, store, settings, gh)  # the one paced reader of the account's busy machines
+        self.minutes = MinutesReader(repo, store, settings, gh)  # the one paced reader of the month's minutes
 
     @classmethod
     def for_work_tree(cls, work_tree: Path, *, repo: str, store: Store, settings: TestSettings, gh: Gh = run_gh,
@@ -213,8 +216,7 @@ class GithubPlace:
             if github_budget.would_cross(self.repo, READ_ESTIMATE, store=self.store, now=now):
                 return Availability(False, 0, capacity, "Actions budget would cross its threshold")
             private = self._object(self.gh(["api", f"repos/{self.repo}"])).get("private") is True
-            if private and self._minutes_spent():
-                return Availability(False, 0, capacity, "the account's Actions minutes are spent", MINUTES_SPENT)
+            budget = self._budget(now) if private else None
             load = self._busy_load(now)
         except GithubError as e:
             return Availability(False, 0, capacity, f"GitHub could not be read ({e.code})")
@@ -227,24 +229,14 @@ class GithubPlace:
             note = f"a job has waited {wait / 60:.0f} min in the account's queue, past {bound:g} min"
             return Availability(False, load.running, limit, note, QUEUE_PAST_BOUND)
         note = f"{load.running} busy of {limit}" + (", minutes are paid for" if private else "")
-        return Availability(True, load.running, limit, note, None, private)
+        return Availability(True, load.running, limit, note, None, private, budget)
 
-    def _minutes_spent(self) -> bool:
-        """Whether the account's included Actions minutes are used up with none paid for: GitHub's classic billing
-        reading of the account (`users/<owner>/settings/billing/actions`: `total_minutes_used`, `included_minutes`,
-        `total_paid_minutes_used`). UNMEASURED: this route is taken from GitHub's documentation, not from a live
-        call (it differs for an organization, and a token may lack the scope); a reading that is missing or has
-        no whole numbers counts as not spent, so a private repo's runs are never refused on a guess."""
+    def _budget(self, now: datetime) -> Budget:
+        """The month's minutes of a private repo as the place rule reads them (#406 decision 4): `used` of the allowance,
+        from the one reader `MinutesReader` (GitHub's billing, else the store), and the day they start again."""
 
-        try:
-            found = self._object(self.gh(["api", f"users/{self._owner()}/settings/billing/actions"]))
-        except GithubError:
-            return False
-        used, included, paid = (found.get(key) for key in
-                                ("total_minutes_used", "included_minutes", "total_paid_minutes_used"))
-        if any(type(value) is not int for value in (used, included, paid)):
-            return False
-        return used >= included and paid == 0
+        minutes = self.minutes.current(now)
+        return Budget(minutes.used, minutes.allowance, next_month_start(now))
 
     def account_load(self, now: datetime) -> tuple[int, int] | None:
         """The account's jobs in progress and the limit they are counted against, read whatever this repo's own Actions

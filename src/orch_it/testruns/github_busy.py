@@ -125,6 +125,23 @@ def reserve_wait(base: float, rate: RateLimit | None, reserve: int) -> float:
     return github_budget.poll_interval(base, rate.remaining, rate.limit, reserve / rate.limit)
 
 
+def pace_allows(last: datetime | None, now: datetime, settings: TestSettings, gh: Gh) -> bool:
+    """Whether a GitHub read of one kind may be made at `now` (#406 decision 5), `last` the time of that kind's last
+    read in this process. With no earlier read the pace never holds. Else it holds while the last read is younger than
+    `github_poll_seconds`, while the wait under `github_reads_reserve` has not passed, and while GitHub's remaining
+    hourly count is spent. The one pace of every kind: the busy machines and the minutes read through it."""
+
+    if last is None:
+        return True
+    base = settings.github_poll_seconds
+    if now - last < timedelta(seconds=base):
+        return False
+    rate = rate_limit(gh)
+    if now - last < timedelta(seconds=reserve_wait(base, rate, settings.github_reads_reserve)):
+        return False
+    return rate is None or rate.remaining > 0
+
+
 def write_point(store: Store, repo: str, load: AccountLoad, capacity: int, now: datetime) -> None:
     """Write the point `github.busy` of a read: the jobs running and queued, and the limit it was read against."""
 
@@ -152,15 +169,8 @@ class BusyReader:
         `budget_gate` (on by default) holds the read while the Actions budget of the repo would cross its threshold;
         the priority between repos reads with it off. A failed read raises `GithubError` and writes nothing."""
 
-        base = self.settings.github_poll_seconds
-        if self.last is not None:
-            if now - self.last[0] < timedelta(seconds=base):
-                return None
-            rate = rate_limit(self.gh)
-            if now - self.last[0] < timedelta(seconds=reserve_wait(base, rate, self.settings.github_reads_reserve)):
-                return None
-            if rate is not None and rate.remaining <= 0:
-                return None
+        if not pace_allows(self.last[0] if self.last else None, now, self.settings, self.gh):
+            return None
         if budget_gate and github_budget.would_cross(self.repo, READ_ESTIMATE, store=self.store, now=now):
             return None
         load = account_load(self.gh, self.repo, now)  # raises GithubError: no point is written

@@ -28,7 +28,7 @@ from orch_it.testruns.config import TestSettings
 from orch_it.testruns.github import run_gh
 from orch_it.testruns.github_place import GithubPlace, budget_poll
 from orch_it.testruns.machine import MachinePlace
-from orch_it.testruns.places import OwnPlace, PlaceEnd, PlaceRefused, PlaceVanished, Request
+from orch_it.testruns.places import MINUTES_SPENT, OwnPlace, PlaceEnd, PlaceRefused, PlaceVanished, Request
 
 GIT_TIMEOUT_SECONDS = 30
 WAIT_POLL_SECONDS = 15
@@ -290,9 +290,12 @@ class _Run:
                     room = github.availability(self.now())
                     live["github"], notes["github"] = room.busy, room.note
                     self.github_cause = room.cause
-                    offer = replace(offer, on=room.on, capacity=room.limit, metered=room.metered)
+                    offer = replace(offer, on=room.on, capacity=room.limit, metered=room.metered, budget=room.budget)
                 offers.append(offer)
-        return place_rule.choose(self.need_os, offers, live, measured, excluded, notes)
+        decision = place_rule.choose(self.need_os, offers, live, measured, excluded, notes)
+        if any(o.place == "github" and o.dropped == place_rule.OUT_OF_MINUTES for o in decision.offered):
+            self.github_cause = MINUTES_SPENT  # GitHub's runs would not start: the account's month is spent (#406 decision 4)
+        return decision
 
     def named(self, done: RunDone) -> RunDone:
         """`done` with `github_out`: the cause GitHub's runs would not start, when the run went to another place."""
@@ -355,7 +358,7 @@ class _Run:
         likely to clear (busy, then switched off, then the OS)."""
 
         drops = {o.dropped for o in decision.offered}
-        reason = next((code for code in (place_rule.BUSY, place_rule.PLACE_OFF, place_rule.OS_MISSING)
+        reason = next((code for code in (place_rule.BUSY, place_rule.PLACE_OFF, place_rule.OUT_OF_MINUTES, place_rule.OS_MISSING)
                        if code in drops), place_rule.PLACE_OFF)
         envelope = self.envelope("test_run")
         self._started(writer, envelope, decision, None)

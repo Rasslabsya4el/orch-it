@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orch_it.testruns import environment, process, workers
+from orch_it.testruns.place_rule import Budget
 from orch_it.testruns.pytest_plugin import FOLDER as PLUGIN_FOLDER
 
 LOG_TAIL_CHARS = 2000
@@ -78,7 +79,8 @@ class Availability:
     it has. `note`: the words the decision carries for it (`18 busy of 20`, or why it is off). `cause`: when its
     runs will not start, one of `RUNS_NOT_STARTING` (a place that is off for another reason, a budget or an unreadable
     GitHub, names none). `metered`: a run there costs money (a private repo), so the rule ranks it after the places
-    that are free."""
+    that are free. `budget`: the month's GitHub minutes a metered place's offer carries to the rule, which refuses the
+    place with `out_of_minutes` when they would pass the allowance (#406 decision 4); None: no budget (a public repo)."""
 
     on: bool
     busy: int
@@ -86,10 +88,11 @@ class Availability:
     note: str
     cause: str | None = None
     metered: bool = False
+    budget: Budget | None = None
 
 
-# why GitHub's runs do not start (#414 decision 6): Actions off for the repo, the account's minutes spent, a job
-# waiting in the account's queue past its bound
+# why GitHub's runs do not start (#414 decision 6): Actions off for the repo, the account's minutes spent (the place
+# rule's `out_of_minutes` drop; the run names this cause), a job waiting in the account's queue past its bound
 ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUND = "actions_off", "minutes_spent", "queue_past_bound"
 RUNS_NOT_STARTING = (ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUND)
 

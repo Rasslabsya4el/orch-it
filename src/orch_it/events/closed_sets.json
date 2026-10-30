@@ -227,6 +227,7 @@
     "view.read": {"view": {}, "item": {}},
     "github.called": {"budget": {"codes": "github_budget"}, "account": {}, "budget_remaining": {}, "budget_limit": {}, "budget_reset": {}},
     "github.busy": {"running": {}, "queued": {}, "capacity": {}},
+    "github.minutes": {"used": {}, "allowance": {}, "left": {}, "source": {}},
     "step.progressed": {"done": {}, "total": {}, "failed": {}},
     "machine.resumed": {"gap_minutes": {}, "cause": {"codes": "resume_cause"}}
   }
