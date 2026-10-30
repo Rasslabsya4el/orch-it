@@ -10,7 +10,8 @@ entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1)
 `workers.py`) and `github_capacity` (20, GitHub's
 concurrent job cap on a free account), `github_poll_seconds` (30.0, #406 decision 5: the most often one account read
 of GitHub's busy machines is made, a number of seconds over 0 up to an hour), `github_reads_reserve` (1000, the remaining
-hourly GitHub count under which the reads wait longer; 0 never waits), `github_priority` (a whole number, 0 for every repo: between repos of one
+hourly GitHub count under which the reads wait longer; 0 never waits), `test_progress_seconds` (10.0, #406 decision 2:
+the most often a running own or machine test_run writes its `step.progressed`, a number of seconds over 0 up to an hour),`github_priority` (a whole number, 0 for every repo: between repos of one
 account a higher one starts first while the account is at its concurrency, #414 item 4; default in `defaults.json`, read
 by `github_priority`), `required_checks` (the names of the checks a merge is held to; default
 in `defaults.json` beside this module, read by `required_checks`), and the thin Windows job's four keys
@@ -148,6 +149,7 @@ class TestSettings:
     github_capacity: int = 20
     github_poll_seconds: float = 30.0  # #406 decision 5: the most often an account read of GitHub's busy machines is made
     github_reads_reserve: int = 1000  # #406 decision 5: the remaining hourly GitHub count under which reads wait longer
+    test_progress_seconds: float = 10.0  # #406 decision 2: the most often a running test_run writes step.progressed
     required_checks: tuple[str, ...] = DEFAULT_REQUIRED_CHECKS
     queue_bound_minutes: float = DEFAULT_QUEUE_BOUND_MINUTES
     own_workers_max: int | None = None  # the most pytest workers at the own place; None: all the cores free
@@ -189,6 +191,8 @@ class TestSettings:
                 values[name] = _count(key, merged[key])
         if "github_poll_seconds" in merged:
             values["github_poll_seconds"] = _seconds("github_poll_seconds", merged["github_poll_seconds"])
+        if "test_progress_seconds" in merged:
+            values["test_progress_seconds"] = _seconds("test_progress_seconds", merged["test_progress_seconds"])
         if "own_workers_max" in merged:
             values["own_workers_max"] = _workers_max("own_workers_max", merged["own_workers_max"])
         if "test_machines" in merged:

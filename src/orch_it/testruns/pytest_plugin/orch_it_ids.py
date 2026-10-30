@@ -141,3 +141,41 @@ def pytest_runtest_makereport(item, call):
     if call.when == "teardown" and _PLACEHOLDERS_OPENED:
         item.user_properties.append((PLACEHOLDER_PROPERTY, "1"))
         _PLACEHOLDERS_OPENED.clear()
+
+
+# Progress (#406 decision 2): with `ORCH_IT_PROGRESS_FILE` set, the controller process appends one line `total done
+# failed` to that file when collection ends (done 0, failed 0) and after each finished test (its phases all reported);
+# a test failed when one of its phases failed. xdist workers write nothing: the controller's hooks see every test.
+ENV_PROGRESS = "ORCH_IT_PROGRESS_FILE"  # the same word as `places.PROGRESS_ENV`: this file imports nothing of orch_it
+_PROGRESS = {"on": False, "total": None, "done": 0, "failed": 0, "red": False}
+
+
+def pytest_configure(config):
+    _PROGRESS.update(on=bool(os.environ.get(ENV_PROGRESS)) and not hasattr(config, "workerinput"),
+                     total=None, done=0, failed=0, red=False)
+
+
+def _progress_line(*counts: int) -> None:
+    with open(os.environ[ENV_PROGRESS], "a", encoding="utf-8") as f:
+        f.write(" ".join(str(c) for c in counts) + "\n")
+
+
+def pytest_collection_finish(session):
+    if _PROGRESS["on"]:
+        _PROGRESS["total"] = len(session.items)
+        _progress_line(_PROGRESS["total"], 0, 0)
+
+
+def pytest_runtest_logreport(report):
+    if _PROGRESS["on"] and report.failed:
+        _PROGRESS["red"] = True
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    if not _PROGRESS["on"] or _PROGRESS["total"] is None:
+        return
+    _PROGRESS["done"] += 1
+    if _PROGRESS["red"]:
+        _PROGRESS["failed"] += 1
+        _PROGRESS["red"] = False
+    _progress_line(_PROGRESS["total"], _PROGRESS["done"], _PROGRESS["failed"])

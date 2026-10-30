@@ -42,9 +42,10 @@ class CommandMissing(Exception):
 
 def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str] | None, bound_seconds: float,
                 wall=time.time, poll_seconds: float = POLL_SECONDS,
-                abort: threading.Event | None = None) -> Finished:
+                abort: threading.Event | None = None, on_tick=None) -> Finished:
     """Run `argv` until it exits, its bound passes, or `abort` is set (then it is killed like a
-    cut run: a machine place sets it when its caller is gone)."""
+    cut run: a machine place sets it when its caller is gone). `on_tick`, when given, is called on this
+    thread at each poll while the process runs (the runner reads a run's progress there)."""
 
     try:
         tree = ProcessTree.start(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
@@ -63,6 +64,8 @@ def run_bounded(argv: list[str], *, cwd: Path, env: dict[str, str] | None, bound
                 break
             except subprocess.TimeoutExpired:
                 pass
+            if on_tick is not None:
+                on_tick()
             if abort is not None and abort.is_set():
                 cut = True
                 break
