@@ -1,14 +1,14 @@
 """The far side of a machine place (#394 decision 4): what runs on the test machine.
 
 The local side sends this module, `process` (and the `proctree` it starts commands through),
-`environment`, `places` and the `orch_it_ids` plugin as one bundle on the first line of stdin, so
+`environment`, `places`, `workers` and the `orch_it_ids` plugin as one bundle on the first line of stdin, so
 the far machine needs nothing but git, Python and the repo's test dependencies. The second line
 is the request (JSON). `main` then takes a free checkout slot, puts its folder at the commit,
 runs the command once under its bound in the clean environment of this OS, and prints protocol
 lines on stdout, each starting `ORCH-IT `:
 
     START <json>         the command is starting
-    END <json>           rc, cut, slept, seconds, log_tail
+    END <json>           rc, cut, slept, seconds, log_tail, workers, workers_note
     REPORT <base64>      the report's bytes, empty when the command wrote none
     SETUP-FAILED <json>  step and message; the command never started
 
@@ -236,10 +236,11 @@ def _run(request: dict, workdir: Path, checkout: str, gone: threading.Event) -> 
     asked = places.Request(Path(checkout), request["commit"], tuple(request["command"]),
                            request["test_env"], request["bound_seconds"], request.get("ids"))
     done = places.run_command(
-        asked, Path(checkout), workdir, abort=gone,
+        asked, Path(checkout), workdir, abort=gone, workers_max=request.get("workers_max"),
         on_start=lambda: say("START", json.dumps({"checkout": checkout, "python": sys.executable})))
     if gone.is_set():
         return
     say("END", json.dumps({"rc": done.rc, "cut": done.cut, "slept": done.slept,
-                           "seconds": done.run_seconds, "log_tail": done.log_tail}))
+                           "seconds": done.run_seconds, "log_tail": done.log_tail,
+                           "workers": done.workers, "workers_note": done.workers_note}))
     say("REPORT", base64.b64encode(done.report.read_bytes()).decode("ascii") if done.report else "")

@@ -5,7 +5,9 @@ Keys (each optional): `test_command` (argv list; `{python}`, `{report}`, `{ids_f
 (default 15), `test_env` (name -> value), `github_tests` (default on: the github place is offered whenever Actions runs for the repo, read at run time; false is the opt-out), `test_machines` (one
 entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1), `python`,
 `on` (true), `origin` (default: the caller work tree's `origin`), `ssh_options` (list of extra
-`ssh` arguments such as `["-p", "2222"]`)), `own_capacity` (1) and `github_capacity` (20, GitHub's
+`ssh` arguments such as `["-p", "2222"]`), `workers_max`), `own_capacity` (1), `own_workers_max` and a machine's `workers_max`
+(the most workers of a pytest run at a PC place, #414 item 11; default unset: all the cores free there, see
+`workers.py`) and `github_capacity` (20, GitHub's
 concurrent job cap on a free account), `github_priority` (a whole number, 0 for every repo: between repos of one
 account a higher one starts first while the account is at its concurrency, #414 item 4; default in `defaults.json`, read
 by `github_priority`), `required_checks` (the names of the checks a merge is held to; default
@@ -124,6 +126,7 @@ class Machine:
     on: bool = True
     origin: str | None = None  # the url the machine clones and fetches from; default: the caller's origin
     ssh_options: tuple[str, ...] = ()  # extra `ssh` arguments before the host (-p, -i, -o ...)
+    workers_max: int | None = None  # the most pytest workers on this machine; None: all its free cores
 
     @property
     def place(self) -> str:
@@ -143,6 +146,7 @@ class TestSettings:
     github_capacity: int = 20
     required_checks: tuple[str, ...] = DEFAULT_REQUIRED_CHECKS
     queue_bound_minutes: float = DEFAULT_QUEUE_BOUND_MINUTES
+    own_workers_max: int | None = None  # the most pytest workers at the own place; None: all the cores free
 
     @classmethod
     def from_settings(cls, raw: dict, repo: str) -> TestSettings:
@@ -178,6 +182,8 @@ class TestSettings:
         for key, name in (("own_capacity", "own_capacity"), ("github_capacity", "github_capacity")):
             if key in merged:
                 values[name] = _count(key, merged[key])
+        if "own_workers_max" in merged:
+            values["own_workers_max"] = _workers_max("own_workers_max", merged["own_workers_max"])
         if "test_machines" in merged:
             values["machines"] = _machines(merged["test_machines"])
         values["required_checks"] = required_checks(raw, repo)
@@ -206,6 +212,12 @@ def _positive(key: str, value: object) -> float:
 
 def _count(key: str, value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise SettingsError("bad_setting", key)
+    return value
+
+
+def _workers_max(key: str, value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise SettingsError("bad_setting", key)
     return value
 
@@ -240,8 +252,10 @@ def _machines(entries: object) -> tuple[Machine, ...]:
         on = entry.get("on", True)
         if not isinstance(on, bool):
             raise SettingsError("bad_setting", f"{where}.on")
+        cap = entry.get("workers_max")
+        cap = None if cap is None else _workers_max(f"{where}.workers_max", cap)
         seen.add(entry["id"])
         machines.append(Machine(entry["id"], entry["host"], entry["os"], entry["checkout"],
                                 _count(f"{where}.capacity", entry.get("capacity", 1)), python, on,
-                                origin, tuple(options)))
+                                origin, tuple(options), cap))
     return tuple(machines)

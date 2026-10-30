@@ -145,6 +145,20 @@ def test_the_run_measures_its_start_and_its_run_time(tmp_path):
     assert start > 0 and run > 0
 
 
+def test_the_machine_counts_its_own_free_cores_for_the_run_and_its_cap_holds(tmp_path):
+    """The far side chooses the workers (#414 item 11): the count in the record is the machine's own, at most
+    its `workers_max`, and 1 when it has a single free core or no xdist; the caller's cores are not asked."""
+    repos = Repos(tmp_path, GREEN)
+    box = box_machine(tmp_path, workers_max=2)
+    settings = TestSettings(machines=(box,))
+    places = {"own": OwnPlace(), BOX: MachinePlace(box, origin_url=str(repos.origin), ssh=FAKE_SSH)}
+    store = Store.open(tmp_path / "store")
+    done = run_at(store, repos, settings, places, place=BOX)
+    [ended_] = details(store, "step.ended")
+    assert done.outcome == "passed" and done.workers == ended_["workers"] and 1 <= ended_["workers"] <= 2
+    assert details(store, "step.started")[0]["workers"] is None  # a machine's count lands with the run's end
+
+
 def test_a_run_at_a_machine_records_no_dirty_flag_while_one_at_own_does(tmp_path):
     repos, box, settings, places, store = setup(tmp_path)
     (repos.caller / "scratch.txt").write_text("not committed", "utf-8")

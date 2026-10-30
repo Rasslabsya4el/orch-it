@@ -23,7 +23,7 @@ from pathlib import Path
 from orch_it.events.ids import live_id
 from orch_it.events import schema
 from orch_it.events.store import Store
-from orch_it.testruns import environment, outcome, place_rule
+from orch_it.testruns import environment, outcome, place_rule, workers
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.github import run_gh
 from orch_it.testruns.github_place import GithubPlace, budget_poll
@@ -61,6 +61,8 @@ class RunDone:
     placeholder_tests: tuple[str, ...] = ()  # the tests that ran on placeholder files at GitHub (see `run_tests`)
     github_out: str | None = None  # why GitHub's runs would not start (`places.RUNS_NOT_STARTING`) when the run went elsewhere
     run_os: str | None = None  # the OS the run went on (the place's, else the one asked for); None when unknown
+    workers: int | None = None  # the pytest workers a PC place ran it on; None: GitHub, or a command that is not pytest
+    workers_note: str | None = None  # why they are not the free cores (`workers.py`'s notes)
 
 
 def read_ids(path: Path) -> list[str]:
@@ -126,7 +128,7 @@ def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, .
     setting `github_tests` is on (it needs the `repo` and the `store`). A machine clones and
     fetches from its own `origin` setting, else from the work tree's `origin`."""
 
-    places = {"own": OwnPlace()}
+    places = {"own": OwnPlace(workers_max=settings.own_workers_max)}
     if settings.machines:
         origin = git_output(work_tree, "remote", "get-url", "origin")
         for machine in settings.machines:
@@ -293,14 +295,14 @@ class _Run:
         left = github.rate_limit() if hasattr(github, "rate_limit") else None
         return budget_poll(WAIT_POLL_SECONDS, left)
 
-    def _started(self, writer, envelope, decision, run_os) -> None:
+    def _started(self, writer, envelope, decision, run_os, plan=None) -> None:
         writer.write(envelope | {"kind": "step.started", "detail": {
             "place": decision.chosen, "chosen": decision.chosen, "reason": decision.reason,
             "places_offered": decision.detail(), "selection": self.selection,
             "commit": self.commit, "branch": self.branch, "pr": None,
             # only the own place runs the work tree as it is; the others run the clean commit
             "dirty": self.dirty if decision.chosen == "own" else None,
-            "workers": None, "part": None, "run_os": run_os,
+            "workers": plan.workers if plan else None, "part": None, "run_os": run_os,
             "settings_hash": environment.settings_hash(self.settings.command,
                                                        self.settings.bound_minutes,
                                                        self.settings.test_env),
@@ -320,9 +322,13 @@ class _Run:
     def attempt(self, writer, adapter, decision) -> RunDone:
         envelope = self.envelope("test_run")
         run_os = adapter.os or (self.need_os if self.need_os != "any" else None)
-        self._started(writer, envelope, decision, run_os)
+        # the own place's workers are chosen here, so the record that opens the run names them; a machine
+        # chooses on its own side from its own cores, and its count lands with the run's end
+        plan = workers.plan(self.settings.command, cap=getattr(adapter, "workers_max", None)) \
+            if decision.chosen == "own" else None
+        self._started(writer, envelope, decision, run_os, plan)
         request = Request(self.work_tree, self.commit, self.settings.command, self.settings.test_env,
-                          self.settings.bound_minutes * 60, self.ids)
+                          self.settings.bound_minutes * 60, self.ids, plan)
         with tempfile.TemporaryDirectory(prefix="orch-it-run-") as scratch:
             try:
                 place_end = adapter.run(request, Path(scratch))
@@ -339,6 +345,10 @@ class _Run:
                 writer.write(envelope | {"kind": "test.result", "detail": detail})
         red = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.outcome in outcome.RED_OUTCOMES))
         detail = run_end.ended_detail() | _timing(place_end, run_end)
+        if place_end.workers is not None:
+            detail["workers"] = place_end.workers
+        if place_end.workers_note:
+            detail["workers_note"] = place_end.workers_note
         if self.reran:  # the store says which tests were rerun for being on placeholders, and which failed
             detail["placeholder_tests"] = list(self.reran)
             if red:
@@ -350,7 +360,7 @@ class _Run:
             placeholder_tests = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.placeholder))
         return RunDone(envelope["run"], decision.chosen, run_end.outcome, run_end.reason,
                        run_end.collected, run_end.failed, run_end.missing_ids, red, placeholder_tests,
-                       run_os=run_os)
+                       run_os=run_os, workers=place_end.workers, workers_note=place_end.workers_note)
 
 
 def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str,
