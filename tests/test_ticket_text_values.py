@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from fake_hub import REPO, FakeHub
+from language_tree import git_tree, write_language
 from ticket_fixtures import fixture
 
 from orch_it.guards.values import read_values
@@ -69,6 +70,7 @@ LINES = {
 def repo(tmp_path):
     """A work tree whose workflows hold one job, named with an invented check name."""
 
+    write_language(git_tree(tmp_path), "ru")  # the hook reads the language of the payload folder's tree (#464)
     flows = tmp_path / ".github" / "workflows"
     flows.mkdir(parents=True)
     (flows / "ci.yml").write_text(f"name: ci\non: push\njobs:\n  {CHECK}:\n    name: {CHECK}\n"

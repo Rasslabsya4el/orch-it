@@ -93,7 +93,7 @@ def test_the_hook_and_the_github_check_give_the_same_violations(name, tmp_path):
     path = tmp_path / "body.md"
     path.write_text(body, "utf-8")
     command = f"gh issue create --repo {REPO} --title {shlex.quote(title)} --body-file {shlex.quote(str(path))}"
-    in_session = hook.judge({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path),
+    in_session = hook.judge({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(Path.cwd()),  # the ru tree of the fixture (#464)
                              "transcript_path": str(TRANSCRIPT)}, hub=FakeHub(), repo_of=lambda folder: REPO)
     # the literal codes (#413 unit 6) are compared too: the GitHub side has none of the hook-only codes, so the
     # in-session codes minus only those give the same list; the shape codes alone are checked against EXPECTED
