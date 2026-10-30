@@ -22,9 +22,15 @@ like any other report; the job's GitHub conclusion decides the outcome:
 
 A completed run with no job of a required name in any attempt up to its latest gets, for that
 name, a `job_missing` pair, or, when the run was cancelled, a `stopped` pair with the run's
-reason. A run still in progress is left for the next import. In the `newest` mode (one unpaginated
+reason. A run still in progress gets, for each required job that has started, its `test_run` start and its queue
+wait, written once when the job starts (#406 decision 1); the job's end is written by the import that finds the job
+completed, and a job that has not started yet is left for the next import. In the `newest` mode (one unpaginated
 list of the newest completed runs) only those listed runs can supersede a cancelled one, so a
 cancelled run whose superseder is still running gets reason None.
+
+A `test_run` start names its pull request (`pr`) only when the run is a `pull_request` run of exactly one PR, and then
+carries that PR's ticket in its envelope; its `part` is the job's name for every GitHub run. A failed read of that
+ticket writes the pair with no ticket and is counted in `ImportReport.ticket_reads_failed`; the run keeps its pair.
 
 Every event's id is a hash of (run id, job id or job name, attempt, kind), so a second import
 writes nothing. A run whose latest attempt already has an end stored for every required job is
@@ -99,7 +105,8 @@ class ImportReport:
     `already_stored`: events. `reports_missing`: jobs read that had no JUnit artifact to
     download (never uploaded, expired or listed under no name asked for). `runs_failed`: runs
     skipped because a `gh` call about them failed or answered badly, `failure_codes`: the
-    codes seen, in order."""
+    codes seen, in order. `ticket_reads_failed`: reads of a PR's ticket that failed (the run kept its pair, with no
+    ticket); their codes are in `failure_codes` too."""
 
     runs_read: int = 0
     jobs: int = 0
@@ -107,6 +114,7 @@ class ImportReport:
     already_stored: int = 0
     reports_missing: int = 0
     runs_failed: int = 0
+    ticket_reads_failed: int = 0
     failure_codes: list[str] = field(default_factory=list)
 
 
@@ -532,12 +540,22 @@ class _Target:
 
 
 def _tied_pr(run: dict) -> int | None:
-    """The one pull request whose head the run tests (#406 decision 1). A push, or a run of several pull requests,
-    is no PR's head: None."""
+    """The one pull request whose head the run tests (#406 decision 1): a `pull_request` run of exactly one PR. GitHub
+    lists the PR of a `workflow_dispatch` or a schedule run on a PR's branch too; those, a push, and a run of several
+    PRs are no PR's head: None."""
 
+    if run.get("event") != "pull_request":
+        return None
     numbers = [p.get("number") for p in _objects(run.get("pull_requests"), "pull_requests")
                if type(p.get("number")) is int]
     return numbers[0] if len(numbers) == 1 else None
+
+
+def _queue_wait(job_created: datetime | None, job_started: datetime | None) -> tuple[datetime, datetime] | None:
+    """A job's queue wait, from its creation to its start; None when either time is unknown. A clock that put the start
+    before the creation gives a wait of 0, never a negative one."""
+
+    return (job_created, max(job_started, job_created)) if job_created and job_started else None
 
 
 class _Importer:
@@ -653,16 +671,24 @@ class _Importer:
 
     def _ticket(self, pr: int) -> int | None:
         """The number of the ticket of pull request `pr` (`merge/follow.py ticket_of` over GitHub), read once per
-        import. The merge package imports this one, so its names are read here, not at import time."""
+        import. The reads go through the importer's own caller (`run_gh` in production, so each one is counted in the
+        request budget). A failed read gives None and is counted in `ImportReport.ticket_reads_failed`: the run that
+        asked keeps its pair. The merge package imports this one, so its names are read here, not at import time."""
 
         if pr not in self.tickets:
             from orch_it.merge.follow import ticket_of
             from orch_it.merge.gh import GhPullHub
 
-            hub = GhPullHub(gh=self.gh)
-            pull = hub.pull(self.repo, pr)
-            found = ticket_of(hub, self.repo, pull) if pull is not None else None
-            self.tickets[pr] = None if found is None else found.number
+            try:
+                hub = GhPullHub(gh=self.gh)
+                pull = hub.pull(self.repo, pr)
+                found = ticket_of(hub, self.repo, pull) if pull is not None else None
+                self.tickets[pr] = None if found is None else found.number
+            except GithubError as e:
+                self.report.ticket_reads_failed += 1
+                if e.code not in self.report.failure_codes:
+                    self.report.failure_codes.append(e.code)
+                self.tickets[pr] = None
         return self.tickets[pr]
 
     def _target_events(self, run: dict, target: _Target, listed: set, billed: dict) -> list[dict]:
@@ -700,11 +726,10 @@ class _Importer:
                        "run_minutes": _minutes(step_start, step_end)}
             if not self.timed:
                 minutes |= {"start_minutes": None, "run_minutes": None}
-            # a clock that put the start before the creation gives a wait of 0, never a negative one
-            wait = (job_created, max(job_started, job_created)) if job_created and job_started else None
+            wait = _queue_wait(job_created, job_started)
 
-        pr, envelope = self._envelope(run, target)
-        events = [self._start(run, target, started_at, run_os, pr, envelope)]
+        envelope = self._envelope(run, target)
+        events = [self._start(run, target, started_at, run_os, envelope)]
         if wait is not None:
             events += self._wait(target, wait, envelope)
         for number, detail in enumerate(end.result_details(), start=1):
@@ -719,23 +744,23 @@ class _Importer:
                                   envelope | {"step": "test_run"}, end.ended_detail() | minutes))
         return events
 
-    def _envelope(self, run: dict, target: _Target) -> tuple[int | None, dict]:
-        """The PR the run is tied to (None: not one PR's head) and the envelope of its events, with the PR's ticket."""
+    def _envelope(self, run: dict, target: _Target) -> dict:
+        """The envelope of one job's events: the run's PR's ticket when the run is one PR's head (`_tied_pr`)."""
 
         pr = _tied_pr(run)
         ticket = self._ticket(pr) if pr is not None else None
-        return pr, {"repo": self.repo, "ticket": ticket, "role": "github", "session": None,
-                    "parent_session": None, "run": target.run, "note": None}
+        return {"repo": self.repo, "ticket": ticket, "role": "github", "session": None,
+                "parent_session": None, "run": target.run, "note": None}
 
-    def _start(self, run: dict, target: _Target, at: datetime | None, run_os: str | None, pr: int | None,
-               envelope: dict) -> dict:
-        """The `test_run` start of one job: its place, its commit, and for a PR's head its `pr` and `part` (the job)."""
+    def _start(self, run: dict, target: _Target, at: datetime | None, run_os: str | None, envelope: dict) -> dict:
+        """The `test_run` start of one job: its place, its commit, its `pr` (None unless one PR's head) and its `part`,
+        the job's name for every GitHub run (#406 decision 1)."""
 
         event_name = run.get("event")
         return self._event("step.started", target.id("step.started"), at, envelope | {"step": "test_run"}, {
             "place": "github", "chosen": "github", "reason": None,
             "run_os": run_os, "commit": run.get("head_sha"), "branch": run.get("head_branch"),
-            "pr": pr, "part": target.name if pr is not None else None,
+            "pr": _tied_pr(run), "part": target.name,
             "selection": "nightly" if event_name in NIGHTLY_EVENTS else "full", "event": event_name})
 
     def _wait(self, target: _Target, wait: tuple, envelope: dict) -> list[dict]:
@@ -750,11 +775,11 @@ class _Importer:
                         job_started: datetime) -> list[dict]:
         """A job still running: its `test_run` start and its queue wait, nothing that needs its end (#406 decision 1)."""
 
-        pr, envelope = self._envelope(run, target)
-        events = [self._start(run, target, job_started, os_of(job), pr, envelope)]
-        if job_created is not None:
-            # a clock that put the start before the creation gives a wait of 0, never a negative one
-            events += self._wait(target, (job_created, max(job_started, job_created)), envelope)
+        envelope = self._envelope(run, target)
+        events = [self._start(run, target, job_started, os_of(job), envelope)]
+        wait = _queue_wait(job_created, job_started)
+        if wait is not None:
+            events += self._wait(target, wait, envelope)
         return events
 
     def _ran_to_the_bound(self, run: dict, name: str, job: dict, started: datetime | None,

@@ -205,6 +205,12 @@ def pairs(store, step="test_run"):
     return {run: (sides.get("step.started"), sides.get("step.ended")) for run, sides in found.items()}
 
 
+def ends_of_test_runs(store) -> int:
+    """How many `test_run` ends (`step.ended`) the store holds."""
+
+    return store.query("SELECT count(*) FROM events WHERE kind = 'step.ended' AND step = 'test_run'").rows[0][0]
+
+
 def ended_of(store, job_name):
     """The ended detail of the one test_run of the job named `job_name` (by its run_os)."""
 
@@ -238,7 +244,7 @@ def test_the_started_detail_holds_where_on_what_and_for_which_pull_request(store
     run_import(store, gh)
     started, _ = pairs(store)["github:100/1001/1"]
     assert started == {"place": "github", "chosen": "github", "reason": None, "run_os": "linux",
-                       "commit": "sha100", "branch": "feat/x", "pr": 7, "part": "linux", "selection": "full",
+                       "commit": "sha100", "branch": "feat/x", "pr": 7, "part": LINUX_CHECK, "selection": "full",
                        "event": "pull_request"}
 
 
@@ -499,7 +505,7 @@ def test_a_run_still_in_progress_gives_each_started_job_its_start_and_wait_only(
     gh.add_run(100, status="in_progress", conclusion=None, **{LINUX_CHECK: running, WINDOWS_CHECK: running})
     report = run_import(store, gh)
     assert report.written == 6  # per job: the start, the wait's start and its end
-    assert store.query("SELECT count(*) FROM events WHERE kind = 'step.ended' AND step = 'test_run'").rows == [(0,)]
+    assert ends_of_test_runs(store) == 0
     assert len(pairs(store)) == 2 and all(ended is None for _started, ended in pairs(store).values())
     assert gh.downloads() == []
 

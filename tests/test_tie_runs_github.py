@@ -1,7 +1,8 @@
 """The GitHub side of #406 decision 1 (acceptance row 1): a check run on one PR's head is a `test_run` pair tied to that
 PR (`pr`, `part` = the job's name, `commit` = the run's head, the PR's ticket in the envelope). The pair's start is
 written when the job starts, its end when the job completes, once each (idempotent on re-import). A run that is not
-of exactly one PR's head (a push) keeps `pr` None; that exemption is the scenario flag, not an empty field. One AST
+of exactly one PR's head keeps `pr` None: a push, a schedule, a hand-started (`workflow_dispatch`) run, or a run of
+several PRs (#406 decision 1, "a run that is not one PR's head"). `part` is the job's name for every GitHub run. One AST
 scan finds every function of src/orch_it that names the `test_run` step, and it must be a registered writer.
 
 Seams, fixed by the spec: `run_tests` (own place and a stub machine, as tests/test_tie_runs.py) and `import_github`
@@ -21,7 +22,7 @@ from orch_it.events.store import Store
 from orch_it.testruns import github
 from orch_it.testruns.config import required_checks
 from orch_it.testruns.runner import run_tests
-from test_github_import import NOW, REPO, FakeGh
+from test_github_import import NOW, REPO, FakeGh, ends_of_test_runs
 from test_tie_runs import BOX, fixture as tie_fixture, run_at, starts
 
 pytestmark = pytest.mark.os_touching  # processes and git checkouts, as the two modules it builds on (#414 unit 4)
@@ -152,7 +153,7 @@ def test_an_in_progress_check_run_gets_its_start_once_and_its_end_on_completion(
     import_all(store, gh)
     assert sorted(run.split("/")[-2] for run, _t, _d in start_rows(store)) == sorted(
         [str(100 * 10 + 1), str(100 * 10 + 2)])
-    assert store.query("SELECT count(*) FROM events WHERE kind = 'step.ended' AND step = 'test_run'").rows == [(0,)]
+    assert ends_of_test_runs(store) == 0
     before = store.query("SELECT count(*) FROM events").rows
     import_all(store, gh)  # a second import of the same in-progress run writes nothing
     assert store.query("SELECT count(*) FROM events").rows == before
@@ -160,7 +161,7 @@ def test_an_in_progress_check_run_gets_its_start_once_and_its_end_on_completion(
     gh.add_run(100, pr=PR)  # the run completes: the same two jobs, now with their ends
     import_all(store, gh)
     assert len(start_rows(store)) == 2  # one start per job, never a second one on completion
-    assert store.query("SELECT count(*) FROM events WHERE kind = 'step.ended' AND step = 'test_run'").rows == [(2,)]
+    assert ends_of_test_runs(store) == 2
     assert tie_gaps(store, pr_head=True) == []
 
 
@@ -172,7 +173,7 @@ def test_a_push_run_is_not_a_pr_head_and_its_starts_keep_pr_none(tmp_path, gh):
     import_all(store, gh)
     rows = start_rows(store)
     assert len(rows) == 2 and [detail.get("pr") for _run, _t, detail in rows] == [None, None]
-    assert [detail.get("part") for _run, _t, detail in rows] == [None, None]
+    assert sorted(detail.get("part") for _run, _t, detail in rows) == sorted([LINUX, WINDOWS])
     assert tie_gaps(store, pr_head=False) == []
 
 
@@ -212,3 +213,141 @@ def test_a_refused_start_of_a_pr_head_still_names_its_pr_part_commit_and_ticket(
     assert done.outcome == "refused"
     assert starts(store) == [(None, TICKET, PR, "full", repos.old)]
     assert tie_gaps(store, pr_head=True) == []
+
+
+# --- #406 decision 1: only a pull_request run of exactly one PR is tied to that PR -----------------
+
+def pr_numbers_called(gh):
+    """The calls that read a pull request of this repo (the ticket reader's pull read)."""
+    return [call for call in gh.calls if call[-1].endswith(f"/pulls/{PR}")]
+
+
+@pytest.mark.parametrize("event", ["workflow_dispatch", "schedule"])
+def test_a_hand_started_or_scheduled_run_is_not_tied_to_a_pr_it_names(tmp_path, gh, event):
+    """GitHub fills `pull_requests` for a dispatch on a PR's branch too: that run is no PR's head (pr None, no
+    ticket read), its part is still the job's name."""
+    store = Store.open(tmp_path / "store")
+    gh.add_run(200, event=event, pr=PR, branch="feat/x")
+    import_all(store, gh)
+    rows = start_rows(store)
+    assert len(rows) == 2
+    assert [detail["pr"] for _run, _ticket, detail in rows] == [None, None]
+    assert [ticket for _run, ticket, _detail in rows] == [None, None]
+    assert sorted(detail["part"] for _run, _ticket, detail in rows) == sorted([LINUX, WINDOWS])
+    assert pr_numbers_called(gh) == []
+    assert tie_gaps(store, pr_head=False) == []
+
+
+def test_a_pull_request_run_of_two_prs_is_tied_to_neither(tmp_path, gh):
+    store = Store.open(tmp_path / "store")
+    gh.add_run(201, pr=PR)
+    gh.runs[-1]["pull_requests"].append({"number": PR + 1})
+    import_all(store, gh)
+    assert [detail["pr"] for _run, _ticket, detail in start_rows(store)] == [None, None]
+    assert tie_gaps(store, pr_head=False) == []
+
+
+def test_a_pull_request_run_of_one_pr_is_tied_to_it(tmp_path, gh):
+    store = Store.open(tmp_path / "store")
+    gh.add_run(202, event="pull_request", pr=PR)
+    import_all(store, gh)
+    assert [detail["pr"] for _run, _ticket, detail in start_rows(store)] == [PR, PR]
+    assert tie_gaps(store, pr_head=True) == []
+
+
+# --- #406 decision 1: a failed read of the PR's ticket costs the run no pair ------------------------
+
+def test_a_failed_read_of_the_prs_ticket_still_writes_the_pair_with_no_ticket(tmp_path, gh):
+    store = Store.open(tmp_path / "store")
+    gh.add_run(100, pr=PR)
+    gh.fail_when = lambda args: any(arg.endswith(f"/pulls/{PR}") for arg in args)
+    report = import_all(store, gh)
+    assert report.runs_failed == 0  # the run itself was read and written
+    assert report.ticket_reads_failed == 1 and report.failure_codes == ["gh_failed"]
+    rows = start_rows(store)
+    assert sorted((detail["part"], ticket, detail["pr"]) for _run, ticket, detail in rows) == sorted(
+        [(LINUX, None, PR), (WINDOWS, None, PR)])
+    assert ends_of_test_runs(store) == 2
+
+
+# --- #406 decision 5: every gh call of the import, the ticket reads included, is counted -------------
+
+def test_every_gh_call_of_a_pr_run_import_is_counted_in_the_request_budget(tmp_path, gh, monkeypatch):
+    """`run_gh` is the importer's default caller: each call it makes is one `github.called` event. The ticket reader
+    of a PR with no `Refs` line reads the pull, the parked issues and the parked search; none may go uncounted."""
+    monkeypatch.setenv("ORCH_IT_STORE", str(tmp_path / "store"))
+    monkeypatch.setattr(github, "_call_gh", gh)  # the real `run_gh` (and its count) over the fake answers
+    gh.pull_bodies.pop(PR)  # no Refs line: the ticket reader searches the parked issues too
+    gh.add_run(100, pr=PR)
+    store = Store.open(tmp_path / "store")
+    report = github.import_github(store, REPO, now=NOW)
+    assert report.runs_failed == 0
+    assert any("search/issues" in call for call in gh.calls)  # the parked search was asked
+    assert store.query("SELECT count(*) FROM events WHERE kind = 'github.called'").rows == [(len(gh.calls),)]
+
+
+# --- #406 decision 1: every registered starter ties the start it writes for a PR head -----------
+
+def own_attempt(tmp_path, gh):
+    repos, store, places, settings = tie_fixture(tmp_path)
+    run_at(store, repos, settings, places, "own", pr=PR, ticket=TICKET)
+    return store
+
+
+def refused(tmp_path, gh):
+    repos, store, _places, settings = tie_fixture(tmp_path)
+    done = run_tests(store, work_tree=repos.caller, repo=REPO, settings=settings, places={}, pr=PR,
+                     ticket=TICKET, wait_minutes=0, sleep=lambda seconds: None)
+    assert done.outcome == "refused"
+    return store
+
+
+def completed_import(tmp_path, gh):
+    store = Store.open(tmp_path / "store")
+    gh.add_run(100, sha="sha-pr", pr=PR)
+    import_all(store, gh)
+    return store
+
+
+def in_progress_import(tmp_path, gh):
+    store = Store.open(tmp_path / "store")
+    gh.add_run(100, status="in_progress", conclusion=None, pr=PR, **{LINUX: IN_PROGRESS, WINDOWS: IN_PROGRESS})
+    import_all(store, gh)
+    return store
+
+
+#: one driver per registered starter: it writes a PR head's `test_run` start through that starter only.
+#: `_Importer._start` is reached through the in-progress path (`_started_events`), `_Importer._target_events` through
+#: a completed run; `_Run.attempt` through an own run, `_Run.refused` through a run no place takes.
+STARTERS = {
+    ("testruns/runner.py", "_Run.attempt"): own_attempt,
+    ("testruns/runner.py", "_Run.refused"): refused,
+    ("testruns/github.py", "_Importer._target_events"): completed_import,
+    ("testruns/github.py", "_Importer._start"): in_progress_import,
+}
+
+
+def test_the_drivers_cover_every_registered_starter():
+    assert set(STARTERS) == REGISTERED
+
+
+@pytest.mark.parametrize("starter", sorted(STARTERS))
+def test_a_registered_starter_ties_each_start_it_writes_for_a_pr_head(tmp_path, gh, starter):
+    store = STARTERS[starter](tmp_path, gh)
+    assert start_rows(store), f"{starter} wrote no test_run start"
+    assert tie_gaps(store, pr_head=True) == []
+
+
+def test_a_starter_that_leaves_part_empty_fails_the_tie_check(tmp_path, gh, monkeypatch):
+    """The planted starter: the importer's start written without `part` (the old `_start`, minus the job name). The
+    same driver that passes above reports the gap."""
+    original = github._Importer._start
+
+    def without_part(self, *args, **kwargs):
+        event = original(self, *args, **kwargs)
+        event["detail"] = {key: value for key, value in event["detail"].items() if key != "part"}
+        return event
+
+    monkeypatch.setattr(github._Importer, "_start", without_part)
+    store = STARTERS[("testruns/github.py", "_Importer._start")](tmp_path, gh)
+    assert [missing for _run, missing in tie_gaps(store, pr_head=True)] == [["part"], ["part"]]
