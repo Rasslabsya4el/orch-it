@@ -643,7 +643,9 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
     run = f"line:{repo}@{clock().isoformat()}"
     try:
         with lock.hold(repo, holder or holder_of(repo, base), settings=settings, root=root, clock=clock, sleep=sleep,
-                       on_wait=on_wait):
+                       on_wait=on_wait) as held:
+            if held.taken_from is not None:
+                _record_take_over(store, repo, role, run, held.taken_from, clock())
             line = _Line(hub, store, repo, base, settings, clock, sleep, role, required,
                          (owner or repo.split("/")[0]).lower(), clock() + timedelta(minutes=settings.line_minutes), run,
                          suite=suite, priority_hold=priority_hold)
@@ -666,6 +668,17 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
                  [("step.ended", {"outcome": "passed", "reason": reason, "merged": report.merged,
                                   "left": report.left})])
     return report
+
+
+def _record_take_over(store: Store, repo: str, role: str, run: str, dead: lock.Holder, now: datetime) -> None:
+    """The line took a dead holder's lock over: `lock.removed`, whose it was (holder, pid, machine), with
+    the minutes it had been held."""
+
+    held = dead.age_minutes(now)
+    record.write(store, repo, None, role, run, None,
+                 [("lock.removed", {"holder": dead.holder, "since": dead.since.isoformat(),
+                                    "held_minutes": round(held, 1) if held != float("inf") else None,
+                                    "pid": dead.pid, "holder_machine": dead.machine})])
 
 
 def holder_of(repo: str, base: str) -> str:

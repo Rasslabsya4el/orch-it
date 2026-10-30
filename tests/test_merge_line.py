@@ -4,6 +4,8 @@ bound, merged at its head sha by the line itself (nothing in GitHub merges: #414
 order and no green pull request starves."""
 
 import json
+import subprocess
+import sys
 from datetime import timedelta
 
 import pytest
@@ -12,6 +14,7 @@ from follow_world import NO_AFTER_MERGE, ROWS_NO_AFTER, TITLE, Git
 from line_world import line_world
 
 from orch_it import tickets
+from orch_it.events.store import machine_id
 from orch_it.merge import lock, marks
 from orch_it.merge.line import run_line
 from orch_it.merge.pr_open import open_pr
@@ -221,6 +224,21 @@ def test_a_stale_line_lock_is_reported_and_the_line_does_not_run(tmp_path):
     rows = store.query("SELECT outcome, json_extract(detail, '$.reason') FROM events "
                        "WHERE kind = 'step.ended' AND step = 'line'").rows
     assert rows == [("refused", "lock_stale")]
+
+
+def test_a_line_that_takes_over_a_dead_holders_lock_writes_lock_removed_naming_it(tmp_path):
+    hub, store, prs, ci = line_world(tmp_path)
+    ended = subprocess.Popen([sys.executable, "-c", "pass"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    ended.wait(timeout=60)  # the holder's process has ended; its lock was left behind
+    folder = lock.lock_folder(REPO, root=tmp_path / "locks")
+    folder.mkdir(parents=True)
+    (folder / "owner").write_text(json.dumps({"holder": "a line that died", "since": hub.now.isoformat(),
+                                              "pid": ended.pid, "machine": machine_id(), "token": "dead"}), "utf-8")
+    done = line(hub, store, ci, tmp_path)
+    assert ci.merged == [prs[n] for n in (10, 11, 12, 13)] and done.reason == "empty"
+    rows = store.query("SELECT json_extract(detail, '$.holder'), json_extract(detail, '$.pid'), "
+                       "json_extract(detail, '$.holder_machine') FROM events WHERE kind = 'lock.removed'").rows
+    assert rows == [("a line that died", ended.pid, machine_id())]
 
 
 def test_a_follow_that_raced_waits_a_poll_instead_of_spinning(tmp_path, monkeypatch):

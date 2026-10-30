@@ -5,7 +5,7 @@ on one repo do not see each other's lock).
 The lock is a folder `<data folder>/merge-lock/<owner>__<name>` (lower case: GitHub's names are the
 same whatever their case), outside every repo root. It is taken by creating that folder, which the
 OS does atomically for one caller only, and its file `owner` says who holds it (`holder`, `since`,
-`pid`, `machine`, a random `token`). `hold` releases it on exit, also when the body raises; a
+`pid`, `machine`, the holder process's `started` time, a random `token`). `hold` releases it on exit, also when the body raises; a
 release removes only a lock whose token is its own, so a line that ends late never removes the
 lock of the line after it, and it removes the owner file last, so a lock it cannot remove whole
 still names its holder.
@@ -16,6 +16,13 @@ holder died, or its machine slept holding it), or one whose `since` lies in the 
 reported at once with `LockError("lock_stale")` and never taken: only `unlock_stale`, run on
 purpose, removes it. A folder whose owner file is not written yet, or cannot be read, is held by
 `unknown` since the folder's own time.
+
+A lock whose holder ran on this machine is dead when its pid no longer exists, or when the process
+now holding that pid started at another time than the owner file's `started` (pid reuse); such a
+lock is taken at once, with no wait and no stale age: the `with` yields the new `Holder`, whose
+`taken_from` names the dead holder (pid, machine). A lock that names another machine is never
+judged by its pid, a live holder stays busy, and an owner file with no `started` (older files) is
+judged by its pid alone.
 """
 
 from __future__ import annotations
@@ -31,6 +38,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import psutil
+
 from orch_it import settings as installation
 from orch_it.events.store import machine_id
 from orch_it.merge.settings import MergeSettings
@@ -39,6 +48,7 @@ FOLDER = "merge-lock"
 OWNER_FILE = "owner"
 LOCK_ERROR_CODES = ("lock_busy", "lock_stale", "lock_not_stale", "lock_missing", "lock_unwritable", "bad_repo")
 CLOCK_SKEW = timedelta(minutes=5)  # a `since` further ahead than this is no time a holder took it
+START_TOLERANCE = 0.5  # seconds: a holder's start time read back from the owner file equals the live one to this
 UNKNOWN = "unknown"  # the holder of a lock whose owner file is not written yet, or unreadable
 WRITE_GRACE_MINUTES = 1  # so long a waiter gives a fresh lock to name its holder before it says `unknown`
 RELEASE_TRIES = 5  # a file held open for a moment by another program (Windows) is tried again
@@ -54,6 +64,8 @@ class Holder:
     pid: int | None = None
     machine: str | None = None
     token: str | None = None
+    started: float | None = None  # the holder process's start time (psutil create_time), None in older files
+    taken_from: Holder | None = None  # set only on the Holder `hold` yields: the dead holder this lock took over
 
     def age_minutes(self, now: datetime) -> float:
         """Minutes since it was taken; a `since` in the future is no age at all: infinite."""
@@ -103,13 +115,18 @@ def hold(repo: str, holder: str, *, settings: MergeSettings, root: Path | None =
     folder = lock_folder(repo, root=root)
     started, told = clock(), False
     bound = settings.lock_wait_minutes * 60
+    displaced: Holder | None = None
     while (tried := _take(folder)) != _TAKEN:
+        displaced = None  # a lock this loop does not clear is no dead holder's
         found = holder_of(repo, root=root)
         waited = (clock() - started).total_seconds()
         if found is None:  # released between the try and the read, or the folder cannot be made
             if waited >= bound:
                 raise LockError("lock_unwritable" if tried == _DENIED else "lock_busy", str(folder))
             sleep(min(1.0, settings.poll_seconds, bound - waited))
+            continue
+        if _dead_here(found) and _clear_dead(repo, folder, found, root=root, sleep=sleep):
+            displaced = found  # the dead holder's lock is gone: the take is tried again at once
             continue
         if found.age_minutes(clock()) > settings.lock_stale_minutes:
             raise LockError("lock_stale", f"{repo} held by {found.said()}", found)
@@ -121,7 +138,8 @@ def hold(repo: str, holder: str, *, settings: MergeSettings, root: Path | None =
         if waited >= bound:
             raise LockError("lock_busy", f"{repo} held by {found.said()}", found)
         sleep(min(settings.poll_seconds, bound - waited))
-    mine = Holder(holder, clock(), os.getpid(), machine_id(), uuid.uuid4().hex)
+    mine = Holder(holder, clock(), os.getpid(), machine_id(), uuid.uuid4().hex, started=_process_started(),
+                  taken_from=displaced)
     try:
         _write_owner(folder, mine)
     except OSError as e:
@@ -146,7 +164,7 @@ def holder_of(repo: str, *, root: Path | None = None) -> Holder | None:
         since = datetime.fromisoformat(owner["since"])
         return Holder(str(owner["holder"]), since if since.tzinfo else since.replace(tzinfo=UTC),
                       _of_type(owner.get("pid"), int), _of_type(owner.get("machine"), str),
-                      _of_type(owner.get("token"), str))
+                      _of_type(owner.get("token"), str), _of_type(owner.get("started"), float))
     except (OSError, ValueError, KeyError, TypeError):
         return Holder(UNKNOWN, taken)
 
@@ -171,6 +189,42 @@ def _of_type(value: object, kind: type) -> object:
     return value if isinstance(value, kind) and not isinstance(value, bool) else None
 
 
+def _process_started() -> float | None:
+    """This process's start time, the one the owner file records beside its pid."""
+
+    try:
+        return psutil.Process().create_time()
+    except psutil.Error:
+        return None
+
+
+def _dead_here(found: Holder) -> bool:
+    """True when the lock's holder ran on this machine and is dead: its pid does not exist, or the
+    process holding it started at another time than the owner file records (pid reuse). A lock naming
+    another machine is never judged by its pid; an owner file with no start time is judged by its pid
+    alone; a process that cannot be read is not proven dead."""
+
+    if found.pid is None or found.pid <= 0 or found.machine != machine_id():
+        return False
+    try:
+        process = psutil.Process(found.pid)
+        return found.started is not None and abs(process.create_time() - found.started) > START_TOLERANCE
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.Error:
+        return False
+
+
+def _clear_dead(repo: str, folder: Path, found: Holder, *, root: Path | None,
+                sleep: Callable[[float], None]) -> bool:
+    """Remove the lock `found` read from a dead holder, if it is still that lock: another line may
+    have taken the folder since. True when the folder is gone."""
+
+    if holder_of(repo, root=root) != found:
+        return False
+    return _remove(folder, tries=RELEASE_TRIES, sleep=sleep)
+
+
 def _take(folder: Path) -> str:
     try:
         folder.parent.mkdir(parents=True, exist_ok=True)
@@ -191,7 +245,7 @@ def _write_owner(folder: Path, mine: Holder) -> None:
     """The owner file written whole: a reader sees no file or the whole of it."""
 
     text = json.dumps({"holder": mine.holder, "since": mine.since.isoformat(), "pid": mine.pid,
-                       "machine": mine.machine, "token": mine.token})
+                       "machine": mine.machine, "token": mine.token, "started": mine.started})
     temporary = folder.parent / f".{folder.name}.{mine.token}.tmp"
     temporary.write_text(text, "utf-8")
     os.replace(temporary, folder / OWNER_FILE)

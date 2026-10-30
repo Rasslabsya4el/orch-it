@@ -4,14 +4,17 @@ holds it, and gives up at its bound; a lock older than its stale bound is report
 and only the explicit `unlock_stale` removes it."""
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import psutil
 import pytest
 
+from orch_it.events.store import machine_id
 from orch_it.merge import lock
 from orch_it.merge.lock import LockError
 from orch_it.merge.settings import MergeSettings
@@ -290,3 +293,87 @@ def test_a_repo_name_windows_would_read_as_another_is_refused(tmp_path, repo):
     with pytest.raises(LockError) as caught:
         lock.lock_folder(repo, root=tmp_path)
     assert caught.value.code == "bad_repo"
+
+
+def dead_pid():
+    """The pid of a process that has ended: no live process holds it now."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"], creationflags=NO_WINDOW)
+    proc.wait(timeout=60)
+    return proc.pid
+
+
+def owner_written(root, *, holder, since, pid, machine, token="dead-token", started=None):
+    """A lock folder with its owner file written as a line on `machine` would have written it; `started`
+    is the holder process's start time (omitted, as older files have none, when None)."""
+    folder = lock.lock_folder(REPO, root=root)
+    folder.mkdir(parents=True)
+    owner = {"holder": holder, "since": since.isoformat(), "pid": pid, "machine": machine, "token": token}
+    if started is not None:
+        owner["started"] = started
+    (folder / "owner").write_text(json.dumps(owner), "utf-8")
+    return folder
+
+
+def test_a_lock_whose_holder_on_this_machine_is_dead_is_taken_at_once(tmp_path):
+    clock = Clock()  # the lock was taken just now: it is not stale, its holder is dead
+    pid = dead_pid()
+    owner_written(tmp_path, holder="line A", since=START, pid=pid, machine=machine_id())
+    with hold(tmp_path, clock, holder="line B") as held:
+        assert held.holder == "line B"
+        assert held.taken_from.holder == "line A" and held.taken_from.pid == pid
+        assert held.taken_from.machine == machine_id()
+        assert lock.holder_of(REPO, root=tmp_path).holder == "line B"
+    assert clock.slept == []  # taken at once: no wait, no unlock by hand
+    assert lock.holder_of(REPO, root=tmp_path) is None
+
+
+def test_a_lock_naming_another_machine_is_never_judged_dead_by_its_pid(tmp_path):
+    clock = Clock()
+    owner_written(tmp_path, holder="line A", since=START - timedelta(minutes=121), pid=dead_pid(),
+                  machine="another-machine-name-hash")
+    with pytest.raises(LockError) as caught:
+        with hold(tmp_path, clock, holder="line B"):
+            pytest.fail("another machine's lock was taken on its pid")
+    assert caught.value.code == "lock_stale" and caught.value.holder.holder == "line A"
+    assert clock.slept == []
+    assert lock.holder_of(REPO, root=tmp_path).holder == "line A"
+
+
+def test_a_live_holder_on_this_machine_stays_busy(tmp_path):
+    clock, told = Clock(), []
+    owner_written(tmp_path, holder="line A", since=START, pid=os.getpid(), machine=machine_id())
+    with pytest.raises(LockError) as caught:
+        with hold(tmp_path, clock, holder="line B", told=told, lock_wait_minutes=1, poll_seconds=30):
+            pytest.fail("a live holder's lock was taken")
+    assert caught.value.code == "lock_busy" and caught.value.holder.pid == os.getpid()
+    assert [h.holder for h in told] == ["line A"] and sum(clock.slept) >= 60
+    assert lock.holder_of(REPO, root=tmp_path).holder == "line A"
+
+
+def this_process_started():
+    return psutil.Process().create_time()
+
+
+def test_a_reused_pid_with_another_start_time_is_taken_at_once(tmp_path):
+    clock = Clock()  # the pid is alive, but the process that holds it started at another time: not the holder
+    owner_written(tmp_path, holder="line A", since=START, pid=os.getpid(), machine=machine_id(),
+                  started=this_process_started() - 1000)
+    with hold(tmp_path, clock, holder="line B") as held:
+        assert held.holder == "line B" and held.taken_from.holder == "line A" and held.taken_from.pid == os.getpid()
+    assert clock.slept == []
+
+
+def test_the_same_start_time_on_a_live_pid_stays_busy(tmp_path):
+    clock = Clock()
+    owner_written(tmp_path, holder="line A", since=START, pid=os.getpid(), machine=machine_id(),
+                  started=this_process_started())
+    with pytest.raises(LockError) as caught:
+        with hold(tmp_path, clock, holder="line B", lock_wait_minutes=1, poll_seconds=30):
+            pytest.fail("a live holder with its own start time was taken")
+    assert caught.value.code == "lock_busy" and caught.value.holder.pid == os.getpid()
+
+
+def test_the_owner_file_records_the_start_time_of_the_holder(tmp_path):
+    with hold(tmp_path, Clock()) as held:
+        assert held.started == this_process_started()
+        assert lock.holder_of(REPO, root=tmp_path).started == held.started
