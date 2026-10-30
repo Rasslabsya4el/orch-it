@@ -36,7 +36,7 @@ FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS = FOREIGN_PREFIX + LINUX_CHECK, FO
 FOREIGN_JOBS = (FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS)
 
 
-pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks (#414 unit 4)
+pytestmark = pytest.mark.os_touching  # paths, processes, shells, locks or hooks
 
 
 def without_comments(text: str) -> list[str]:
@@ -137,7 +137,7 @@ def test_each_job_uploads_its_junit_report_even_when_red():
         upload = "\n".join(step_named(steps, "upload the JUnit report"))
         assert "uses: actions/upload-artifact@v4" in upload, name
         assert "if: always()" in upload, name
-        if name in PYTEST_JOBS:  # the report and the rate-limit file beside it, one artifact (#414 unit 10 fix)
+        if name in PYTEST_JOBS:  # the report and the rate-limit file beside it, one artifact
             assert re.search(r"^          path: \|\n            junit\.xml\n            actions-rate-limit\.json$", upload, re.M), name
             assert "if-no-files-found: ignore" in upload, name  # a missing file never fails the upload
         else:
@@ -218,7 +218,7 @@ def test_only_the_nightly_run_takes_the_slow_and_live_tests(tmp_path, nightly):
         if nightly == "true":
             expected += ["suite/test_marks.py::test_live", "suite/test_marks.py::test_slow",
                          "suite/test_marks.py::test_slow_serial"]
-        if job == WINDOWS_CHECK and nightly == "false":  # the Windows change run takes only the marked tests (#414 unit 4)
+        if job == WINDOWS_CHECK and nightly == "false":  # the Windows change run takes only the marked tests
             expected = ["suite/test_marks.py::test_touching"]
         assert sorted(ids) == sorted(expected), job
         assert len(ids) == len(set(ids)), job  # no test runs in both phases
