@@ -240,3 +240,31 @@ def test_the_repo_defaults_to_the_origin_of_the_work_tree(tmp_path, monkeypatch,
     monkeypatch.setattr(github, "run_gh", lambda args: seen.append(args) or json.dumps(protection()))
     main(["--store", str(tmp_path / "store"), "guards", "status", "--work-tree", str(repo.path)])
     assert seen == [["api", "repos/Own-er/na.me/branches/main/protection"]]
+
+
+def command_output(tmp_path, monkeypatch, capsys, work_tree, answer):
+    """The text `guards status` prints when GitHub answers `answer` (a protection, or the error it gives)."""
+
+    def read(args):
+        if isinstance(answer, Exception):
+            raise answer
+        return json.dumps(answer)
+
+    monkeypatch.setattr(github, "run_gh", read)
+    main(["--store", str(tmp_path / "store"), "guards", "status", "--repo", "o/n", "--work-tree", str(work_tree)])
+    return capsys.readouterr().out
+
+
+def test_no_line_of_guards_status_says_gate_and_names_the_required_checks_holder_on_a_protected_base(
+        installed, tmp_path, monkeypatch, capsys):
+    out = command_output(tmp_path, monkeypatch, capsys, installed, protection())
+    assert "required checks held by GitHub's branch protection" in out
+    assert not any("gate" in line.lower() for line in out.splitlines())
+
+
+def test_no_line_of_guards_status_says_gate_and_names_the_required_checks_holder_on_an_unprotected_base(
+        bare, tmp_path, monkeypatch, capsys):
+    out = command_output(tmp_path, monkeypatch, capsys, bare,
+                         github.GithubError("gh_failed", "api: Branch not protected (HTTP 404)"))
+    assert "required checks held by the merge line, not by GitHub" in out
+    assert not any("gate" in line.lower() for line in out.splitlines())
