@@ -10,11 +10,12 @@ commit is fetched from `origin` into the work tree and made a detached work tree
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 
 from orch_it.events.store import Store
 from orch_it.merge import git as merge_git
@@ -47,7 +48,12 @@ class SuiteResult:
     failing: tuple[str, ...] = ()  # the ids of the failing tests, when FAILED
 
 
-Suite = Callable[[str], SuiteResult]  # the commit's sha -> what the required suite said of its tree
+class Suite(Protocol):
+    """The commit's sha -> what the required suite said of its tree; `only`: run just those test ids."""
+
+    def __call__(self, sha: str, only: Sequence[str] | None = None) -> SuiteResult: ...
+
+
 Checkout = Callable[[str], AbstractContextManager[Path]]  # the commit's sha -> a folder holding its tree
 
 
@@ -56,12 +62,17 @@ def place_rule_suite(store: Store, repo: str, settings: TestSettings, checkout: 
     """The suite of a commit as one `run_tests` call: the full selection, any OS, at the place the rule picks
     (`places`: the adapters, default those of `settings`)."""
 
-    def suite(sha: str) -> SuiteResult:
-        with checkout(sha) as tree:
-            done = run_tests(store, work_tree=tree, repo=repo, settings=settings, role=role, places=places)
-        if done.outcome == "passed":
+    def suite(sha: str, only: Sequence[str] | None = None) -> SuiteResult:
+        with checkout(sha) as tree, tempfile.TemporaryDirectory(prefix="orch-it-ids-") as scratch:
+            ids_file = None
+            if only:
+                ids_file = Path(scratch) / "ids.txt"
+                ids_file.write_text(chr(10).join(only) + chr(10), "utf-8")
+            done = run_tests(store, work_tree=tree, repo=repo, settings=settings, role=role, places=places,
+                             ids_file=ids_file)
+        if done.outcome == PASSED:
             return SuiteResult(PASSED)
-        if done.outcome != "failed":
+        if done.outcome != FAILED:
             return SuiteResult(NO_RESULT)
         failing = store.query("SELECT test_id FROM events WHERE kind = 'test.result' AND run = ?"
                               " AND outcome IN ('failed', 'error') ORDER BY test_id", (done.run,)).rows

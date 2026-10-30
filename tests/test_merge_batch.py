@@ -27,26 +27,40 @@ def failing_id(pr):
     return f"tests.test_cart::test_quote_{pr}"
 
 
+MAIN_RED = "tests.test_cart::test_total_on_main"  # a test that fails on main itself
+
+
+def case(test_id, failed):
+    classname, name = test_id.split("::")
+    inside = "<failure message='x'/>" if failed else ""
+    return f"<testcase classname='{classname}' name='{name}'>{inside}</testcase>"
+
+
 class FixturePlace:
     """A place with no process: the tree it is given names the batch commit to test (`tip.txt`); the suite is red,
     naming `failing_id(pr)`, for each member of that commit in `red`. Each pass takes `PASS_MINUTES` of the hub's
-    clock."""
+    clock. Every tree also fails the ids of `main_red` (main itself is red on them). A run given ids runs only those."""
 
     id, os = "own", LINUX_OS
 
-    def __init__(self, hub, red):
-        self.hub, self.red = hub, red
+    def __init__(self, hub, red, main_red=()):
+        self.hub, self.red, self.main_red = hub, red, list(main_red)
         self.tested = []  # (tip, outcome) per pass, in order
+        self.id_runs = []  # (tip, the ids asked) per pass that was given ids
         self.during = []  # callables run while a pass runs (the world moves under it)
 
     def run(self, request, scratch):
         tip = (request.work_tree / "tip.txt").read_text("utf-8")
-        failing = [pr for pr in self.hub.members_of(tip) if pr in self.red]
-        cases = "".join(f"<testcase classname='tests.test_cart' name='test_quote_{pr}'><failure message='x'/></testcase>"
-                        for pr in failing)
+        red = [failing_id(pr) for pr in self.hub.members_of(tip) if pr in self.red] + self.main_red
+        if request.ids is None:
+            cases = case("tests.test_cart::test_ok", False) + "".join(case(i, True) for i in red)
+            failing = red
+        else:
+            self.id_runs.append((tip, list(request.ids)))
+            failing = [i for i in request.ids if i in red]
+            cases = "".join(case(i, i in failing) for i in request.ids)
         report = scratch / "junit.xml"
-        report.write_text(f"<testsuites><testsuite name='pytest'><testcase classname='tests.test_cart' name='test_ok'/>"
-                          f"{cases}</testsuite></testsuites>", "utf-8")
+        report.write_text(f"<testsuites><testsuite name='pytest'>{cases}</testsuite></testsuites>", "utf-8")
         self.tested.append((tip, "failed" if failing else "passed"))
         self.hub.later(minutes=PASS_MINUTES)
         for hook in self.during:
@@ -54,9 +68,9 @@ class FixturePlace:
         return PlaceEnd(report, False, False, 1 if failing else 0, 0.0, PASS_MINUTES * 60.0)
 
 
-def make_suite(world, tmp_path, red=()):
+def make_suite(world, tmp_path, red=(), main_red=()):
     hub, store, _, ci = world
-    place = FixturePlace(hub, set(red))
+    place = FixturePlace(hub, set(red), main_red)
 
     @contextlib.contextmanager
     def checkout(sha):
@@ -258,6 +272,51 @@ def test_stale_is_older_than_the_minutes_by_the_time_in_the_name_or_a_name_with_
     assert branch_name(made, 3) == f"orch-batch/{int(made.timestamp())}-3"
     assert stale(branch_name(made, 3), now, 60) and not stale(branch_name(made, 3), now, 180)
     assert stale("orch-batch/by-hand", now, 180) and stale("orch-batch/", now, 180)
+
+
+def open_red_on_main(hub, ids):
+    from orch_it.merge import red_main
+
+    title, body = red_main.build(list(ids), sha="m0", run_id="7", pr=None)
+    return hub.create_issue(REPO, title, body, list(red_main.LABELS))
+
+
+def test_a_batch_red_only_on_what_main_is_red_on_stops_with_one_pass_and_one_check_of_those_ids(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    open_red_on_main(hub, [MAIN_RED])
+    suite, place = make_suite(world, tmp_path, main_red=[MAIN_RED])
+    base = hub.branches["main"][-1]
+    said = {ticket: len(hub.comments(REPO, ticket)) for ticket in prs}
+    done = line(world, tmp_path, suite)
+    assert passes(store) == 2 and place.id_runs == [(base, [MAIN_RED])]  # the batch, then main's own result on its ids
+    assert done.merged == 0 and done.left == 0 and hub.advances == [] and done.reason == "next_run"
+    assert [(s.pr, s.result, s.detail) for s in done.served] == [(prs[n], "bound", "main_red") for n in (10, 11, 12, 13)]
+    assert done.notes == (f"main is red on {MAIN_RED}",)
+    for ticket in (10, 11, 12, 13):  # nothing is sent back: no comment on a ticket, no pull request left
+        assert len(hub.comments(REPO, ticket)) == said[ticket]
+        assert marks.ready_since(marks.of_layer(hub.pull_comments(REPO, prs[ticket]), REPO.split("/")[0])) is not None
+
+
+def test_a_batch_with_a_failing_id_main_is_not_red_on_splits_as_before_in_five_passes(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    open_red_on_main(hub, [MAIN_RED])  # a ticket for another test: it covers nothing of this batch
+    suite, place = make_suite(world, tmp_path, red={prs[11]})
+    done = line(world, tmp_path, suite)
+    assert passes(store) == 5 and place.id_runs == [] and done.notes == ()
+    assert ci.merged == [prs[10], prs[12], prs[13]] and done.left == 1
+
+
+def test_a_red_main_ticket_that_main_no_longer_fails_does_not_stop_the_split(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    open_red_on_main(hub, [failing_id(prs[11])])  # a stale ticket: it covers the batch's red id, main passes it
+    suite, place = make_suite(world, tmp_path, red={prs[11]})
+    done = line(world, tmp_path, suite)
+    assert [ids for _, ids in place.id_runs] == [[failing_id(prs[11])]] * 2  # the whole batch, then its half
+    assert ci.merged == [prs[10], prs[12], prs[13]] and done.left == 1 and passes(store) == 5 + 2
+    assert done.notes == ()
 
 
 def test_batch_size_one_is_the_line_as_it_was_and_runs_no_suite(tmp_path):

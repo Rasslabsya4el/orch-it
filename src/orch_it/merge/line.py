@@ -28,9 +28,15 @@ head merged in line order; a member that does not combine with the ones before i
 its own after), the required suite runs once on that tree through the place rule, and green lands them all by moving
 the base forward to the tested commit (the base's sha is the tested tree's, each pull request ends merged); red
 splits the batch in halves, each half is combined again from the base as it then is and checked, down to the one
-red pull request, which goes back to its ticket by the follow's red rule while the others land. A base that moved
-under a green pass rebuilds the batch on the new base, at most `max_updates` times. `batch_size` 1, or no suite, is
-the one-by-one line above.
+red pull request, which goes back to its ticket by the follow's red rule while the others land. A red whose every
+failing test also fails on main (an open red-on-main ticket covers them, and a run of those ids alone on the sha main had
+when the batch was made fails them all) is not a member's fault: the line stops there (note `main is red on <ids>`), the
+members stay for the next run, none is sent back. A base that moved under a green pass rebuilds the batch on the new
+base (without the members that left it), at most `max_updates` times. A landing counts as merged only when GitHub says
+the pull request is merged (polled up to a minute; else `bound`, detail `landed_pending`, for the next run). A base whose
+protection refuses the landing (note `batch landing refused: <why>`) sends the rest of the run one by one. A line that
+batches first deletes the `orch-batch/` branches older than `lock_stale_minutes`. `batch_size` 1, or no suite, is the
+one-by-one line above.
 
 Events: a `line` step, run `line:<repo>@<start>` (started `base`, `prs`; ended `merged`, `left`,
 reason `empty`, `next_run` or `bound`; `failed` with `error` when the run breaks; `refused` with
@@ -48,7 +54,7 @@ from pathlib import Path
 
 from orch_it.events import github_budget
 from orch_it.events.store import Store
-from orch_it.merge import batch, lock, marks, record
+from orch_it.merge import batch, lock, marks, record, red_main
 from orch_it.merge.follow import FollowReport, follow, follow_conflict, follow_red
 from orch_it.merge.hub import LandingRefused, Pull, PullHub
 from orch_it.merge.pr_open import refers_to
@@ -131,6 +137,7 @@ class _Batch:
     included: list[_Member]
     heads: dict[int, str]
     apart: list[_Member]
+    base_sha: str  # the sha the base had when the batch was made
     gone: set[int] = field(default_factory=set)  # members combine ended (closed, or in conflict with the base)
 
 
@@ -153,6 +160,7 @@ class _Line:
     ready_at: dict[int, datetime] = field(default_factory=dict)  # pr -> its ready time, as members() read it
     suite: batch.Suite | None = None  # the required suite on a commit; None: no batches
     batches_made: int = 0
+    held: bool = False  # main is red on every test a batch failed: the run stops, nothing is sent back
     refused: str | None = None  # the base's own reason for refusing a batch landing: the rest goes one by one
     notes: list[str] = field(default_factory=list)
 
@@ -170,6 +178,8 @@ class _Line:
                 return turns, "next_run" if self.for_next_run else "empty"
             if self.suite is not None and self.settings.batch_size > 1 and not self.refused:
                 self.serve_batch(members[:self.settings.batch_size])
+                if self.held:
+                    return turns, "next_run"
             else:
                 self.end_turn(turns, self.serve(members[0]))
         return turns, "bound"
@@ -228,7 +238,7 @@ class _Line:
         did not combine, as a group of their own."""
 
         rebuilt = 0
-        while group and not self.refused:
+        while group and not self.refused and not self.held:
             if self.clock() >= self.deadline:
                 return self.postpone(group, "bound")
             made = self.combine(group)
@@ -246,6 +256,8 @@ class _Line:
                             continue
                     elif result.outcome == batch.FAILED and result.failing and len(made.included) == 1:
                         self.red(made.included[0], list(result.failing))
+                    elif result.outcome == batch.FAILED and result.failing and self.red_on_main(made, result.failing):
+                        pass  # main itself is red on all of it: nothing to split, nothing to send back
                     elif result.outcome == batch.FAILED and result.failing:
                         half = len(made.included) // 2
                         self.settle(made.included[:half])
@@ -256,6 +268,24 @@ class _Line:
                 self.hub.end_batch(self.repo, made.branch)
             group = made.apart
 
+    def red_on_main(self, made: _Batch, failing: tuple[str, ...]) -> bool:
+        """Whether every failing id of `made` is red on main too: an open red-on-main ticket covers them all, and a
+        run of just those ids on the sha main had when the batch was made fails them all. Then the line holds: the
+        members wait for main's next sha, none is sent back."""
+
+        ids = {red_main.normal(test_id) for test_id in failing}
+        reds = red_main.open_reds(self.hub, self.repo)
+        known = set().union(*(red.ids for red in reds if red.ids is not None))
+        if not (any(red.covers(ids) for red in reds) or ids <= known):
+            return False
+        on_main = self.suite(made.base_sha, only=failing)
+        if on_main.outcome != batch.FAILED or not ids <= {red_main.normal(test_id) for test_id in on_main.failing}:
+            return False
+        self.held = True
+        self.notes.append(f"main is red on {', '.join(sorted(ids))}")
+        self.postpone(made.included, "bound", "main_red")
+        return True
+
     def combine(self, group: list[_Member]) -> _Batch:
         """A branch from the base holding the head of each member of `group` that combines, in order. A pull request
         gone or closed since it was read leaves the line; the first one that conflicts with the base itself takes the
@@ -263,7 +293,8 @@ class _Line:
 
         self.batches_made += 1
         branch = batch.branch_name(self.clock(), self.batches_made)
-        made = _Batch(branch, self.hub.start_batch(self.repo, self.base, branch), [], {}, [])
+        base_sha = self.hub.start_batch(self.repo, self.base, branch)
+        made = _Batch(branch, base_sha, [], {}, [], base_sha)
         for member in group:
             number = member.pull.number
             pull = self.hub.pull(self.repo, number)
