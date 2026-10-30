@@ -324,7 +324,9 @@ def test_the_test_process_sees_test_env_and_none_of_the_caller_s_variables(tmp_p
     allowed = set(environment.BASE_NAMES[environment.this_os()]) | {"SEEN_FILE", "FROM_TEST_ENV", "PYTHONPATH"}
     # what pytest sets for itself while it runs, and what Python sets in a C locale (PEP 538
     # coerces it to UTF-8 through LC_CTYPE): never the caller's
-    own = {"PYTEST_CURRENT_TEST", "PYTEST_VERSION", "LC_CTYPE"}
+    # (the xdist workers a PC place's run uses set three more of their own, #414 item 11)
+    own = {"PYTEST_CURRENT_TEST", "PYTEST_VERSION", "LC_CTYPE", "PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT",
+           "PYTEST_XDIST_TESTRUNUID"}
     assert set(env) - allowed - own == set()
 
 

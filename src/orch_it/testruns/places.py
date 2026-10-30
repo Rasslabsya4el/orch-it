@@ -14,7 +14,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orch_it.testruns import environment, process
+from orch_it.testruns import environment, process, workers
 from orch_it.testruns.pytest_plugin import FOLDER as PLUGIN_FOLDER
 
 LOG_TAIL_CHARS = 2000
@@ -29,6 +29,7 @@ class Request:
     test_env: dict[str, str]
     bound_seconds: float
     ids: list[str] | None = None
+    plan: workers.Plan | None = None  # the workers the runner already chose (the own place); None: the place chooses
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,8 @@ class PlaceEnd:
     start_seconds: float
     run_seconds: float
     log_tail: str = ""
+    workers: int | None = None  # the workers the command ran on (a pytest command at a PC place), else None
+    workers_note: str | None = None  # why they are not the free cores: one of `workers.py`'s notes
 
 
 @dataclass(frozen=True)
@@ -119,18 +122,20 @@ def test_process_env(test_env: dict[str, str], ids_file: str | None, plugin_fold
 
 
 def run_command(request: Request, work_tree: Path, scratch: Path, *,
-                abort: threading.Event | None = None, on_start=None) -> PlaceEnd:
+                abort: threading.Event | None = None, on_start=None, workers_max: int | None = None) -> PlaceEnd:
     """The command of `request` run once in `work_tree` with this interpreter: the ids file written
     to `scratch`, the placeholders filled (the report in `scratch`), the clean environment, the
     bound. Shared by the own place and the far side of a machine place. `on_start` is called just
-    before the command starts; `abort` kills the run when set."""
+    before the command starts; `abort` kills the run when set. A pytest command runs on the cores free on this
+    machine (`workers.plan`, capped by `workers_max`) unless `request.plan` already says how."""
 
     report = scratch / "junit.xml"
     ids_file = None
     if request.ids is not None:
         ids_file = scratch / "ids.txt"
         ids_file.write_text("".join(f"{i}\n" for i in request.ids), "utf-8")
-    argv = fill(request.command, {"python": sys.executable, "report": str(report),
+    plan = request.plan or workers.plan(request.command, cap=workers_max)
+    argv = fill(plan.command, {"python": sys.executable, "report": str(report),
                                   "ids_file": str(ids_file or ""), "work_tree": str(work_tree)})
     env = test_process_env(request.test_env, str(ids_file) if ids_file else None, str(PLUGIN_FOLDER))
     if on_start is not None:
@@ -139,15 +144,16 @@ def run_command(request: Request, work_tree: Path, scratch: Path, *,
         done = process.run_bounded(argv, cwd=work_tree, env=env, bound_seconds=request.bound_seconds,
                                    abort=abort)
     except process.CommandMissing as e:
-        return PlaceEnd(None, False, False, None, 0.0, 0.0, str(e)[-LOG_TAIL_CHARS:])
+        return PlaceEnd(None, False, False, None, 0.0, 0.0, str(e)[-LOG_TAIL_CHARS:], plan.workers, plan.note)
     return PlaceEnd(report if report.exists() else None, done.cut, done.slept, done.rc, 0.0,
-                    done.seconds, done.log_tail[-LOG_TAIL_CHARS:])
+                    done.seconds, done.log_tail[-LOG_TAIL_CHARS:], plan.workers, plan.note)
 
 
 @dataclass
 class OwnPlace:
     id: str = "own"
     os: str = field(default_factory=environment.this_os)
+    workers_max: int | None = None  # the setting `own_workers_max`
 
     def run(self, request: Request, scratch: Path) -> PlaceEnd:
-        return run_command(request, Path(request.work_tree).absolute(), scratch)
+        return run_command(request, Path(request.work_tree).absolute(), scratch, workers_max=self.workers_max)
