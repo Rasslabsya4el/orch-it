@@ -55,6 +55,7 @@ class FakeGh:
         self.zips = tmp_path / "zips"
         self.zips.mkdir()
         self.runs, self.jobs, self.artifacts, self.timing = [], {}, {}, {}
+        self.pull_bodies, self.issues = {}, {}  # what the ticket of a run's pull request reads (#406 decision 1)
         self.calls = []
         self.fail_when = None
 
@@ -64,7 +65,14 @@ class FakeGh:
             raise GithubError("gh_failed", "recorded failure")
         if args[0] == "run":
             return self.download(args)
+        if "search/issues" in args:  # the ticket reader's search for parked issues: none here
+            return json.dumps({"items": []})
         path = args[-1].partition("?")[0]
+        if path.endswith("/issues"):  # the ticket reader's list of parked issues: none here
+            return json.dumps([])
+        found = re.fullmatch(r"repos/[^/]+/[^/]+/(pulls|issues)/(\d+)", path)
+        if found:
+            return self.pull(int(found.group(2))) if found.group(1) == "pulls" else self.issue(int(found.group(2)))
         parts = path.split("/")
         if path.endswith(f"/workflows/{github.WORKFLOW_FILE}/runs"):
             if "--paginate" not in args:
@@ -89,6 +97,17 @@ class FakeGh:
         newest_first = sorted(matching, key=lambda r: (r["created_at"], r["id"]), reverse=True)
         return json.dumps({"total_count": len(matching),
                            "workflow_runs": newest_first[:int(asked.get("per_page", 30))]})
+
+    def pull(self, number):
+        """A closed pull request (no compare read) of this repo, its body from `pull_bodies`."""
+        return json.dumps({"number": number, "title": "a change", "body": self.pull_bodies.get(number, ""),
+                           "head": {"sha": f"pr-head-{number}", "ref": "feat/x"}, "base": {"ref": "main"},
+                           "created_at": stamp(BASE, 0), "state": "closed", "merged_at": None, "draft": False})
+
+    def issue(self, number):
+        if number not in self.issues:
+            raise GithubError("gh_failed", "HTTP 404: Not Found")
+        return json.dumps(self.issues[number])
 
     @staticmethod
     def pages(key, items):
