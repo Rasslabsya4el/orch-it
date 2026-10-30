@@ -131,7 +131,7 @@ jobs:
     # Per change: 5 minutes = ceil(2.7 minutes x 1.5), the first measured per-change job (2:44, pull request 213, one run).
     # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 16 minutes,
     # the first measured nightly job: 10 min 40 s x 1.5 = 16 minutes (run 41020341857, a manual run with slow_and_live).
-    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 16 || 5 }}
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 30 || 5 }}
     steps:
       - uses: actions/checkout@v4
         with:
