@@ -15,6 +15,8 @@ import secrets
 import shutil
 import subprocess
 import sys
+import sysconfig
+import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -33,6 +35,7 @@ ROOT = Path(__file__).parents[1]
 SRC = ROOT / "src"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 GIT_SECONDS = 60  # the bound of one git call in these tests
+PROBE_SECONDS = 120  # the bound of the interpreter probe of the planted-interruption test (#463)
 ON_WINDOWS = os.name == "nt"
 # stand-ins for the real account, repo and checkout folder of the layer, built at run time
 REAL_ACCOUNT = "real-owner-" + secrets.token_hex(4)
@@ -369,3 +372,161 @@ def test_the_planted_folder_check_fails_in_the_copy_and_passes_where_the_folder_
     plain_run = planted_run(checkout, env)
     assert plain_run.returncode == 0, plain_run.stdout + plain_run.stderr
     assert "1 passed" in plain_run.stdout, plain_run.stdout
+
+
+# --- the setup of a foreign run outside CI (#463) -----------------------------------------------------------------
+
+PYPROJECT = "[tool.orch_it.tests]\nper_change_timeout_seconds = 600\nnightly_timeout_seconds = 1800\n"
+MARKS = "not slow and not live"  # stands in for the workflow's MARKS_LEFT_OUT_OF_CHANGE_RUNS
+EDITABLE_PTH = "__editable__.orch_it-0.0.0.pth"  # what an editable install leaves in its interpreter's site-packages
+GITHUB_ENV = {"GITHUB_REPOSITORY": f"{REAL_ACCOUNT}/{REAL_REPO}", "MARKS_LEFT_OUT_OF_CHANGE_RUNS": MARKS}
+
+
+class Done:
+    returncode = 0
+
+
+def normal_path(tmp_path: Path) -> Path:
+    """A PATH folder holding python3: the one Python a POSIX child may run, and the one a CI job's run finds."""
+    source = tmp_path / "normal-path"
+    source.mkdir()
+    write_executable(source / "python3")
+    return source
+
+
+def stand_in_python(monkeypatch, tmp_path: Path) -> str:
+    """The caller's interpreter, as a path that is no Python: a call the run makes to it shows in the calls."""
+    stand_in = str(tmp_path / "stand-in" / "python")
+    monkeypatch.setattr(sys, "executable", stand_in)
+    return stand_in
+
+
+def fake_copy_and_steps(monkeypatch, calls: list) -> None:
+    """The copy without git (a folder with the bounds the run reads), and the setup steps and the suite recorded in
+    `calls` instead of run. Each call: (kind, what, argv, the real path of argv[0] when called, env)."""
+
+    def make_copy(checkout, base, names, env):
+        copy = base / names.folder
+        copy.mkdir()
+        (copy / "pyproject.toml").write_text(PYPROJECT, "utf-8")
+        return copy
+
+    def step(argv, cwd, env, what):
+        calls.append(("step", what, list(argv), os.path.realpath(argv[0]), dict(env)))
+
+    def suite(args, cwd, env):
+        calls.append(("suite", "pytest", list(args), os.path.realpath(args[0]), dict(env)))
+        return Done()
+
+    monkeypatch.setattr(foreign_run, "make_copy", make_copy)
+    monkeypatch.setattr(foreign_run, "_step", step)
+    monkeypatch.setattr(foreign_run.subprocess, "run", suite)
+
+
+@pytest.mark.parametrize("os_name, layout", [("nt", "Scripts/python.exe"), ("posix", "bin/python3")])
+def test_the_venv_interpreter_sits_in_scripts_on_windows_and_in_bin_elsewhere(os_name, layout):
+    assert foreign_run.venv_python(Path("venv"), os_name) == Path("venv") / layout
+
+
+def test_outside_ci_the_setup_goes_to_a_venv_and_the_caller_only_creates_it(tmp_path, monkeypatch):
+    stand_in = stand_in_python(monkeypatch, tmp_path)
+    source = normal_path(tmp_path)
+    calls: list = []
+    fake_copy_and_steps(monkeypatch, calls)
+    checkout = tmp_path / REAL_REPO
+    checkout.mkdir()
+
+    assert foreign_run.run(checkout, GITHUB_ENV | {"PATH": str(source)}) == 0
+
+    created, install, guards, suite = calls
+    assert created[2][:3] == [stand_in, "-m", "venv"], created
+    venv = Path(created[2][3])
+    python = str(foreign_run.venv_python(venv, foreign_run.this_os()))
+    assert install[2][0] == python and install[2][1:4] == ["-m", "pip", "install"], install
+    assert guards[2][0] == python and guards[2][1:4] == ["-m", "orch_it", "guards"], guards
+    assert suite[2][0] == python and suite[2][1:3] == ["-m", "pytest"], suite
+    assert suite[4]["ORCH_IT_PYTHON"] == python  # the git hook's shim finds this interpreter first
+    assert stand_in not in [call[2][0] for call in calls[1:]]
+    # the venv lives under the run's own temp root, and the temp root is gone after the run
+    assert Path(os.path.realpath(venv.parent.parent)) == Path(os.path.realpath(tempfile.gettempdir()))
+    assert venv.parent.name.startswith("foreign-run-") and not venv.parent.exists()
+
+
+def test_in_ci_the_setup_goes_to_the_jobs_interpreter_and_no_venv_is_made(tmp_path, monkeypatch):
+    stand_in = stand_in_python(monkeypatch, tmp_path)
+    source = normal_path(tmp_path)
+    calls: list = []
+    fake_copy_and_steps(monkeypatch, calls)
+    checkout = tmp_path / REAL_REPO
+    checkout.mkdir()
+
+    assert foreign_run.run(checkout, GITHUB_ENV | {"PATH": str(source), "GITHUB_ACTIONS": "true"}) == 0
+
+    assert not [call for call in calls if "venv" in call[2]], calls
+    install = calls[0]
+    # Windows: the job's interpreter is the script's own; POSIX: the python3 the job's PATH finds
+    expected = os.path.realpath(stand_in if ON_WINDOWS else source / "python3")
+    assert install[3] == expected, install
+    assert "ORCH_IT_PYTHON" not in calls[2][4]
+
+
+def test_a_failed_venv_creation_fails_the_run_with_its_own_step_name(tmp_path, monkeypatch):
+    real_step = foreign_run._step
+    source = normal_path(tmp_path)
+    checkout = tmp_path / REAL_REPO
+    checkout.mkdir()
+
+    def step(argv, cwd, env, what):
+        if "venv" in argv:  # the real step, with a creation that exits 3
+            return real_step([sys.executable, "-c", "raise SystemExit(3)"], cwd, env, what)
+        raise AssertionError("a setup step ran after a failed venv creation")
+
+    monkeypatch.setattr(foreign_run, "_step", step)
+    with pytest.raises(foreign_run.ForeignRunError, match=r"python -m venv` exited 3"):
+        foreign_run.run(checkout, GITHUB_ENV | {"PATH": str(source)})
+
+
+def test_a_run_interrupted_after_the_install_leaves_no_path_file_in_the_callers_interpreter(tmp_path, monkeypatch):
+    purelib = Path(sysconfig.get_paths()["purelib"])
+    before = sorted(path.name for path in purelib.glob("*.pth"))
+    real_step = foreign_run._step
+    seen: dict = {}
+
+    def make_copy(checkout, base, names, env):
+        copy = base / names.folder
+        copy.mkdir()
+        (copy / "pyproject.toml").write_text(PYPROJECT, "utf-8")
+        return copy
+
+    def step(argv, cwd, env, what):
+        if "venv" in argv:  # a real venv, so the layout the run uses is the one Python makes
+            real_step(argv, cwd, env, what)
+            seen["venv"] = Path(argv[-1])
+            return
+        if "pip" in argv:  # the install: an editable install leaves a path file in the interpreter it ran with
+            try:
+                probe = subprocess.run([argv[0], "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+                                       capture_output=True, text=True, check=True, env=env,
+                                       creationflags=NO_WINDOW, timeout=PROBE_SECONDS)
+            except subprocess.TimeoutExpired:
+                pytest.fail(f"the interpreter {argv[0]} did not print its site-packages within {PROBE_SECONDS} s")
+            seen["pth"] = Path(probe.stdout.strip()) / EDITABLE_PTH
+            seen["pth"].write_text(str(cwd), "utf-8")
+            return
+        seen["before_interrupt"] = seen["pth"].exists()
+        raise RuntimeError("planted interruption after the install step")
+
+    monkeypatch.setattr(foreign_run, "make_copy", make_copy)
+    monkeypatch.setattr(foreign_run, "_step", step)
+    checkout = tmp_path / REAL_REPO
+    checkout.mkdir()
+    environ = {key: value for key, value in os.environ.items() if key not in ("GITHUB_ACTIONS", "NIGHTLY")}
+
+    with pytest.raises(RuntimeError, match="planted interruption"):
+        foreign_run.run(checkout, environ | GITHUB_ENV)
+
+    venv = seen["venv"]
+    assert seen["before_interrupt"] is True  # the install did write into the venv
+    assert Path(os.path.realpath(venv.parent.parent)) == Path(os.path.realpath(tempfile.gettempdir()))
+    assert not venv.parent.exists()  # the temp root is removed in finally
+    assert sorted(path.name for path in purelib.glob("*.pth")) == before
