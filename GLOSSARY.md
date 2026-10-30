@@ -88,7 +88,7 @@ _Avoid_: GitHub load, runners busy, machines in use
 
 **GitHub minutes**:
 The account's GitHub Actions minutes of the current UTC month: those used (GitHub's own figure for the account, else the sum
-of the layer's own ended GitHub runs of the month, a Windows job counted twice), the allowance (the setting
+of the layer's own ended GitHub runs of the month, each job counted at its OS's multiplier, the setting `github_minute_multipliers`), the allowance (the setting
 `github_minutes_allowance`) and what is left, written as one `github.minutes` point. A run counts in the month it ended; a
 public repo's runs bill nothing. The place rule leaves `github` out of a private repo's run with `out_of_minutes` when the
 minutes used plus the median billed minutes of that part's ended GitHub runs pass the allowance.

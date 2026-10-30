@@ -8,8 +8,8 @@ time zone plays no part (`now` may carry any offset; it is read as the instant i
 
 The store sum counts a private repo's runs only (a public repo's bill nothing), every repo of the account, each run
 once at `charged` minutes: the stored `billed_minutes` is GitHub's billable duration of the job as the importer reads it
-from the run's timing (no multiplier), and GitHub's OS multiplier (a Windows job counts twice, a macOS job ten times) is
-applied here, once, at the read. GitHub's own `used` already has it.
+from the run's timing (no multiplier), and GitHub's OS multiplier (the setting `github_minute_multipliers`: a Windows
+job counts twice, a macOS job ten times, by default) is applied here, once, at the read. GitHub's own `used` already has it.
 
 `MinutesReader.poll` is the only writer of the point. It goes through the one pace of the busy reader
 (`github_busy.pace_allows`: `github_poll_seconds`, the `github_reads_reserve` back-off, nothing while the hourly count is
@@ -22,6 +22,7 @@ unreadable, and the store answers.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from time import monotonic
 from typing import NamedTuple
 
 from orch_it.events import index
@@ -32,7 +33,9 @@ from orch_it.testruns.github_busy import ROLE, pace_allows
 
 KIND = "github.minutes"
 SOURCE_GITHUB, SOURCE_STORE = "github", "store"
-OS_MULTIPLIER = {"windows": 2, "macos": 10}  # GitHub's per-minute multiplier of a hosted runner; Linux and any other: 1
+PRIVATE_TTL_SECONDS = 3600.0  # a repo's privacy is asked of GitHub again after this long; a flip shows within the hour
+# (caller, repo in lower case) -> (monotonic time of the read, whether private): one answer per caller per repo
+_PRIVATE: dict[tuple[Gh, str], tuple[float, bool]] = {}
 
 
 class Minutes(NamedTuple):
@@ -44,11 +47,12 @@ class Minutes(NamedTuple):
     source: str
 
 
-def charged(billed_minutes: float, run_os: str | None) -> float:
-    """The minutes a job counts against the account: its billed minutes times its OS's multiplier. Applied once, to a
-    stored `billed_minutes` (which has none)."""
+def charged(billed_minutes: float, run_os: str | None, multipliers: dict[str, int]) -> float:
+    """The minutes a job counts against the account: its billed minutes times its OS's factor in `multipliers` (the
+    setting `github_minute_multipliers`; an OS it does not name counts as it is). Applied once, to a stored
+    `billed_minutes` (which has none)."""
 
-    return billed_minutes * OS_MULTIPLIER.get(run_os or "", 1)
+    return billed_minutes * multipliers.get(run_os or "", 1)
 
 
 def utc(moment: datetime) -> datetime:
@@ -96,7 +100,6 @@ class MinutesReader:
     def __init__(self, repo: str, store: Store, settings: TestSettings, gh: Gh = run_gh):
         self.repo, self.store, self.settings, self.gh = repo, store, settings, gh
         self.last: tuple[datetime, Minutes] | None = None
-        self._private: dict[str, bool] = {}  # repo -> whether it is private, asked of GitHub once per reader
 
     def poll(self, now: datetime) -> Minutes | None:
         """The month's minutes read now and written as the point, or None when the pace holds a read (the last reading of
@@ -130,10 +133,9 @@ class MinutesReader:
         when it cannot be read as a whole non-negative number."""
 
         try:
-            values = json_values(self.gh(["api", f"users/{self._owner()}/settings/billing/actions"]))
+            found = _field(self.gh(["api", f"users/{self._owner()}/settings/billing/actions"]), "total_minutes_used")
         except GithubError:
             return None
-        found = values[0].get("total_minutes_used") if values and isinstance(values[0], dict) else None
         if isinstance(found, bool) or not isinstance(found, (int, float)) or found < 0:
             return None
         return found
@@ -155,18 +157,31 @@ class MinutesReader:
                 continue
             seen.add((repo, run))
             if isinstance(billed, (int, float)) and not isinstance(billed, bool) and self._is_private(repo):
-                total += charged(billed, run_os)
+                total += charged(billed, run_os, self.settings.github_minute_multipliers)
         return total
 
     def _is_private(self, repo: str) -> bool:
-        """Whether `repo` is private (the repo's `private` flag); a repo that cannot be read counts as private, so its
-        minutes are not left out on a guess."""
+        """Whether `repo` is private (the repo's `private` flag), asked of GitHub through this reader's caller (`gh`,
+        counted by `run_gh`) and kept for `PRIVATE_TTL_SECONDS` per caller, so every reader and place of the process
+        reads one repo once an hour. A repo that cannot be read counts as private, so its minutes are not left out on a
+        guess."""
 
-        if repo not in self._private:
-            try:
-                values = json_values(self.gh(["api", f"repos/{repo}"]))
-                found = values[0].get("private") if values and isinstance(values[0], dict) else None
-            except GithubError:
-                found = None
-            self._private[repo] = found is not False
-        return self._private[repo]
+        key = (self.gh, repo.lower())
+        known = _PRIVATE.get(key)
+        if known is not None and monotonic() - known[0] < PRIVATE_TTL_SECONDS:
+            return known[1]
+        try:
+            found = _field(self.gh(["api", f"repos/{repo}"]), "private")
+        except GithubError:
+            found = None
+        private = found is not False
+        _PRIVATE[key] = (monotonic(), private)
+        return private
+
+
+def _field(answer: str, key: str) -> object:
+    """The `key` field of the first JSON object `gh` printed, None when there is none or the first value is no object."""
+
+    values = json_values(answer)
+    first = values[0] if values else None
+    return first.get(key) if isinstance(first, dict) else None

@@ -115,3 +115,26 @@ def test_an_absurd_bound_or_a_nul_is_refused_as_a_bad_setting(raw, field):
 def test_a_repo_s_override_matches_its_name_whatever_the_case():
     raw = {"repos": {"acme-x/WIDGETS-Y": {"test_run_bound_minutes": 3}}}
     assert TestSettings.from_settings(raw, REPO).bound_minutes == 3
+
+
+def test_github_minute_multipliers_default_to_windows_2_and_macos_10():
+    assert TestSettings.from_settings({}, REPO).github_minute_multipliers == {"windows": 2, "macos": 10}
+
+
+def test_github_minute_multipliers_override_the_named_os_and_keep_the_default_of_the_others():
+    raw = {"github_minute_multipliers": {"windows": 3}}
+    assert TestSettings.from_settings(raw, REPO).github_minute_multipliers == {"windows": 3, "macos": 10}
+
+
+@pytest.mark.parametrize("raw", [
+    {"github_minute_multipliers": ["windows"]},
+    {"github_minute_multipliers": {"windows": 0}},
+    {"github_minute_multipliers": {"windows": 2.5}},
+    {"github_minute_multipliers": {"windows": True}},
+    {"github_minute_multipliers": {"windows": "2"}},
+    {"github_minute_multipliers": {"beos": 2}},
+])
+def test_a_bad_github_minute_multiplier_is_refused_naming_the_setting(raw):
+    with pytest.raises(SettingsError) as refused:
+        TestSettings.from_settings(raw, REPO)
+    assert refused.value.code == "bad_setting" and str(refused.value) == "bad_setting: github_minute_multipliers"

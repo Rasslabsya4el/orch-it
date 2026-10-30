@@ -12,7 +12,7 @@ import pytest
 from fake_github import FakeActions
 
 from orch_it.events.store import Store
-from orch_it.testruns import place_rule
+from orch_it.testruns import github_minutes, place_rule
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.github import GithubError
 from orch_it.testruns.github_minutes import MinutesReader, charged, next_month_start
@@ -22,7 +22,6 @@ from orch_it.testruns.place_rule import Budget, Measured, Offer, choose
 REPO = "acme-x/widgets-y"  # the repo under test: private
 PUBLIC = "acme-x/open-z"  # another repo of the account: public
 NOW = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
-GH = Offer("github", ("linux", "windows"), on=True, capacity=20, metered=True)
 OWN = Offer("own", ("linux",), on=True, capacity=1)
 
 
@@ -89,14 +88,14 @@ def test_the_only_place_left_over_budget_leaves_no_choice_and_the_drop_is_out_of
 # --- the store fixtures ------------------------------------------------------------------------------------------
 
 def seed(store, run, ended, billed, *, os_name="linux", repo=REPO, place="github", selection="full",
-         outcome="passed", started=None):
-    """One ended `test_run` of `place` that ended at `ended` (an ISO stamp, any offset)."""
+         outcome="passed", started=None, part=None):
+    """One ended `test_run` of `place` that ended at `ended` (an ISO stamp, any offset); `part` is its job's name."""
 
     envelope = {"repo": repo, "ticket": None, "role": "github", "session": None, "parent_session": None,
                 "turn": None, "step": "test_run", "run": run, "note": None}
     with store.writer() as writer:
         writer.write(envelope | {"kind": "step.started", "at": started or ended, "detail": {
-            "place": place, "selection": selection, "run_os": os_name, "bound_minutes": 15}})
+            "place": place, "selection": selection, "run_os": os_name, "bound_minutes": 15, "part": part}})
         writer.write(envelope | {"kind": "step.ended", "at": ended, "detail": {
             "outcome": outcome, "reason": None, "run_minutes": 4.0, "start_minutes": 0.5, "billed_minutes": billed}})
 
@@ -116,7 +115,7 @@ class Billing:
 
     def __init__(self, actions, *, readable=True, private=(REPO,)):
         self.actions, self.readable, self.private = actions, readable, set(private)
-        self.billing_calls = 0
+        self.billing_calls, self.repo_reads = 0, 0
 
     def __call__(self, args):
         text = " ".join(args)
@@ -127,6 +126,7 @@ class Billing:
             return self.actions(args)
         endpoint = next((a for a in args[1:] if a.startswith("repos/")), "")
         if endpoint.count("/") == 2:  # `repos/<owner>/<name>`: the repo itself
+            self.repo_reads += 1
             return json.dumps({"full_name": endpoint[6:], "private": endpoint[6:] in self.private})
         return self.actions(args)
 
@@ -167,8 +167,42 @@ def test_billing_unreadable_sums_the_stores_ended_runs_with_a_windows_job_counte
     assert points(store) == [(70, 2000, 1930, "store")]
 
 
-def test_the_multiplier_is_applied_once_to_a_stored_billed_minutes():
-    assert (charged(30, "windows"), charged(30, "linux"), charged(30, None), charged(3, "macos")) == (60, 30, 30, 30)
+def test_the_multiplier_is_applied_once_to_a_stored_billed_minutes_and_comes_from_the_setting():
+    multipliers = TestSettings.from_settings({}, REPO).github_minute_multipliers
+    assert (charged(30, "windows", multipliers), charged(30, "linux", multipliers),
+            charged(30, None, multipliers), charged(3, "macos", multipliers)) == (60, 30, 30, 30)
+    assert charged(30, "windows", {"windows": 3}) == 90  # the setting's factor, not the default's
+
+
+def test_the_store_sum_takes_the_windows_multiplier_from_the_setting(tmp_path):
+    store, _, gh = world(tmp_path, readable=False)
+    seed(store, "windows", "2026-11-03T11:00:00+00:00", 30, os_name="windows")
+    assert reader(store, gh, github_minute_multipliers={"windows": 3}).poll(NOW).used == 90
+
+
+def test_two_readers_ask_github_whether_a_repo_is_private_once(tmp_path):
+    store, _, gh = world(tmp_path, readable=False)
+    seed(store, "a", "2026-11-03T10:00:00+00:00", 10)
+    seed(store, "b", "2026-11-03T11:00:00+00:00", 20)
+
+    assert reader(store, gh).poll(NOW).used == 30
+    assert reader(store, gh).poll(NOW + timedelta(minutes=5)).used == 30
+    assert gh.repo_reads == 1  # one `repos/<repo>` read for the process, through the caller the readers were given
+
+
+def test_a_repos_privacy_is_asked_again_after_its_hour(tmp_path, monkeypatch):
+    store, _, gh = world(tmp_path, readable=False)
+    seed(store, "a", "2026-11-03T10:00:00+00:00", 10)
+    clock = [1000.0]
+    monkeypatch.setattr(github_minutes, "monotonic", lambda: clock[0])
+
+    reader(store, gh).poll(NOW)
+    clock[0] += github_minutes.PRIVATE_TTL_SECONDS - 1
+    reader(store, gh).poll(NOW)
+    assert gh.repo_reads == 1
+    clock[0] += 2
+    reader(store, gh).poll(NOW)
+    assert gh.repo_reads == 2
 
 
 def test_a_public_repos_runs_add_nothing_to_the_store_sum(tmp_path):
@@ -262,8 +296,8 @@ def test_the_allowance_is_the_setting_and_left_never_goes_below_0(tmp_path):
 
 # --- the store's facts for the rule -----------------------------------------------------------------------------------
 
-def facts(store, selection="full", need_os="any"):
-    return place_rule.read_facts(store, repo=REPO, selection=selection, need_os=need_os, now=NOW)[1]
+def facts(store, selection="full", need_os="any", part=None):
+    return place_rule.read_facts(store, repo=REPO, selection=selection, need_os=need_os, now=NOW, part=part)[1]
 
 
 def test_read_facts_gives_the_parts_billed_medians_with_the_windows_multiplier_and_every_github_runs_beside_them(tmp_path):
@@ -276,6 +310,20 @@ def test_read_facts_gives_the_parts_billed_medians_with_the_windows_multiplier_a
     assert sorted(github.billed) == [10, 60]
     assert sorted(github.billed_all) == [10, 60, 90]
     assert facts(store)["own"].billed == ()
+
+
+def test_two_jobs_of_one_selection_have_their_own_medians_and_their_own_budget_answer(tmp_path):
+    cheap_job, dear_job = TestSettings.from_settings({}, REPO).required_checks[:2]
+    store = Store.open(tmp_path / "store")
+    seed(store, "cheap", "2026-11-10T10:00:00+00:00", 10, part=cheap_job)
+    seed(store, "dear", "2026-11-10T11:00:00+00:00", 50, part=dear_job)
+
+    cheap = facts(store, part=cheap_job)["github"]
+    dear = facts(store, part=dear_job)["github"]
+    assert (cheap.billed, dear.billed) == ((10,), (50,))  # not one median of the two jobs of the selection
+    assert dropped(choose("any", [OWN, github_offer(1960)], {}, {"own": Measured((), (10.0,)), "github": cheap})) is None
+    assert dropped(choose("any", [OWN, github_offer(1960)], {}, {"own": Measured((), (10.0,)), "github": dear})) \
+        == "out_of_minutes"  # 1960 + 50 passes 2000 for the dear job, 1960 + 10 does not for the cheap one
 
 
 # --- a private repo's offer carries the budget --------------------------------------------------------------------------
@@ -291,8 +339,8 @@ def test_availability_of_a_private_repo_carries_the_budget_and_of_a_public_one_n
     assert room.budget == Budget(1940, 2000, date(2026, 12, 1))
 
     actions.private = False
-    gh.private.clear()
-    public = place_of(Store.open(tmp_path / "store2"), gh).availability(NOW)
+    public_gh = Billing(actions, private=())  # its own caller: a repo's answer is kept per caller for an hour
+    public = place_of(Store.open(tmp_path / "store2"), public_gh).availability(NOW)
     assert public.on is True and public.metered is False and public.budget is None
 
 

@@ -11,7 +11,7 @@ entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1)
 concurrent job cap on a free account), `github_poll_seconds` (30.0, #406 decision 5: the most often one account read
 of GitHub's busy machines is made, a number of seconds over 0 up to an hour), `github_reads_reserve` (1000, the remaining
 hourly GitHub count under which the reads wait longer; 0 never waits), `github_minutes_allowance` (2000, #406 decision 4: the
-GitHub Actions minutes a month the place rule lets a private repo's runs use; a whole number, 0 or more), `test_progress_seconds` (10.0, #406 decision 2:
+GitHub Actions minutes a month the place rule lets a private repo's runs use; a whole number, 0 or more), `github_minute_multipliers` (a mapping of an OS name, `linux`, `windows` or `macos`, to a whole number of 1 or more: GitHub's minute multiplier of that OS, default `windows` 2 and `macos` 10, an OS it does not name keeps its default), `test_progress_seconds` (10.0, #406 decision 2:
 the most often a running own or machine test_run writes its `step.progressed`, a number of seconds over 0 up to an hour), `github_priority` (a whole number, 0 for every repo: between repos of one
 account a higher one starts first while the account is at its concurrency, #414 item 4; default in `defaults.json`, read
 by `github_priority`), `required_checks` (the names of the checks a merge is held to; default
@@ -38,6 +38,8 @@ from orch_it.settings import SettingsError
 DEFAULT_COMMAND = ("{python}", "-m", "pytest", "-q", "-p", "orch_it_ids", "--junitxml={report}")
 OSES = ("linux", "windows", "macos")
 MAX_BOUND_MINUTES = 7 * 24 * 60  # a week: a longer bound is no bound
+#: GitHub's per-minute multiplier of a hosted runner by OS (#406 decision 4); an OS not named here counts 1
+DEFAULT_MINUTE_MULTIPLIERS = {"windows": 2, "macos": 10}
 REQUIRED_CHECKS_SETTING = "required_checks"
 PRIORITY_SETTING = "github_priority"
 REPLACED_SETTING = "github_required_jobs"  # the name `required_checks` replaced; a file that still has it is refused
@@ -151,6 +153,7 @@ class TestSettings:
     github_poll_seconds: float = 30.0  # #406 decision 5: the most often an account read of GitHub's busy machines is made
     github_reads_reserve: int = 1000  # #406 decision 5: the remaining hourly GitHub count under which reads wait longer
     github_minutes_allowance: int = 2000  # #406 decision 4: the month's GitHub minutes a private repo's runs may use
+    github_minute_multipliers: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_MINUTE_MULTIPLIERS))
     test_progress_seconds: float = 10.0  # #406 decision 2: the most often a running test_run writes step.progressed
     required_checks: tuple[str, ...] = DEFAULT_REQUIRED_CHECKS
     queue_bound_minutes: float = DEFAULT_QUEUE_BOUND_MINUTES
@@ -192,6 +195,8 @@ class TestSettings:
                           ("github_minutes_allowance", "github_minutes_allowance")):
             if key in merged:
                 values[name] = _count(key, merged[key])
+        if "github_minute_multipliers" in merged:
+            values["github_minute_multipliers"] = _multipliers(merged["github_minute_multipliers"])
         if "github_poll_seconds" in merged:
             values["github_poll_seconds"] = _seconds("github_poll_seconds", merged["github_poll_seconds"])
         if "test_progress_seconds" in merged:
@@ -236,6 +241,18 @@ def _seconds(key: str, value: object) -> float:
     if not (math.isfinite(seconds) and 0 < seconds <= 3600):
         raise SettingsError("bad_setting", key)
     return seconds
+
+
+def _multipliers(value: object) -> dict[str, int]:
+    """The minute multipliers: a mapping of an OS name in `OSES` to a whole number of 1 or more (not a bool). An OS it
+    does not name keeps its default, so a setting that names only Windows leaves macOS at 10."""
+
+    if not isinstance(value, dict) or not all(isinstance(os_name, str) and os_name in OSES for os_name in value):
+        raise SettingsError("bad_setting", "github_minute_multipliers")
+    for factor in value.values():
+        if isinstance(factor, bool) or not isinstance(factor, int) or factor < 1:
+            raise SettingsError("bad_setting", "github_minute_multipliers")
+    return DEFAULT_MINUTE_MULTIPLIERS | value
 
 
 def _count(key: str, value: object) -> int:

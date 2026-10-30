@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta
 
 from orch_it.events import index
 from orch_it.events.store import Store, machine_id
+from orch_it.testruns.config import DEFAULT_MINUTE_MULTIPLIERS
 from orch_it.testruns.github_minutes import charged
 
 TIE_DIGITS = 9  # finishes equal to this many decimals of a minute are a tie
@@ -161,7 +162,7 @@ def choose(need_os: str, places: list[Offer], live: dict[str, int],
 
 @dataclass(frozen=True)
 class _Started:
-    """A `test_run` start as the rule reads it."""
+    """A `test_run` start as the rule reads it; `part` is the job's name of a GitHub run (#406 decision 1), else None."""
 
     place: str
     repo: str
@@ -170,14 +171,30 @@ class _Started:
     at: str
     machine: str
     bound: float
+    part: str | None = None
+
+
+def _of_part(start: _Started, selection: str, part: str | None) -> bool:
+    """Whether a started run is the part measured: a GitHub run that names its job is the part of that name, when `part`
+    names one; any other run is of the selection (the same run's selection, the rule's own and machine runs alike)."""
+
+    if part is not None and start.place == "github" and start.part is not None:
+        return start.part == part
+    return start.selection == selection
 
 
 def read_facts(store: Store, *, repo: str, selection: str, need_os: str, now: datetime,
-               machine: str | None = None) -> tuple[dict[str, int], dict[str, Measured]]:
+               machine: str | None = None, part: str | None = None,
+               multipliers: dict[str, int] = DEFAULT_MINUTE_MULTIPLIERS,
+               ) -> tuple[dict[str, int], dict[str, Measured]]:
     """The rule's store inputs at `now`: live runs per place (of every repo: a machine's capacity
     is shared), and per place the measured run times (the last `MEASURED_RUNS` ended `passed` /
     `failed` runs of `repo` and `selection`, on `need_os` unless it is `any`) and start
     overheads (the last `MEASURED_RUNS` ended runs at the place with one measured, any repo).
+
+    `part`: the job whose GitHub runs are measured, by the job's name (a GitHub run started with its `part`
+    counts only for that name; without one, every GitHub run of the selection counts). `multipliers`: the
+    OS factors the billed minutes are charged at (the setting `github_minute_multipliers`).
 
     `own` is this machine (`machine`, default the store's machine id): another machine's own
     runs, in a store merged by copying, are neither live nor measured here. A start dated more
@@ -192,9 +209,11 @@ def read_facts(store: Store, *, repo: str, selection: str, need_os: str, now: da
             " WHERE kind = 'step.started' AND step = 'test_run' AND run IS NOT NULL").rows:
         if not isinstance(place, str) or (place == "own" and run_machine != machine):
             continue
-        bound = _minutes(json.loads(detail).get("bound_minutes")) or DEFAULT_BOUND_MINUTES
+        fields = json.loads(detail)
+        bound = _minutes(fields.get("bound_minutes")) or DEFAULT_BOUND_MINUTES
+        job = fields.get("part") if isinstance(fields.get("part"), str) else None
         started.setdefault(run, _Started(place, run_repo, run_selection, run_os, at, run_machine,
-                                         bound))
+                                         bound, job))
     ends = store.query(
         "SELECT run, outcome, run_minutes, start_minutes, billed_minutes FROM events"
         " WHERE kind = 'step.ended' AND step = 'test_run' AND run IS NOT NULL ORDER BY at DESC, id").rows
@@ -216,18 +235,18 @@ def read_facts(store: Store, *, repo: str, selection: str, need_os: str, now: da
         if start is None or (need_os != "any" and start.run_os != need_os):
             continue
         place = start.place
+        same_part = start.repo == repo and _of_part(start, selection, part)
         if _minutes(start_minutes) is not None and len(starts.setdefault(place, [])) < MEASURED_RUNS:
             starts[place].append(_minutes(start_minutes))
-        if (outcome in ("passed", "failed") and start.repo == repo and start.selection == selection
+        if (outcome in ("passed", "failed") and same_part
                 and _minutes(run_minutes) is not None
                 and len(runs.setdefault(place, [])) < MEASURED_RUNS):
             runs[place].append(_minutes(run_minutes))
         if place == "github" and outcome in ("passed", "failed") and _minutes(billed_minutes) is not None:
-            cost = charged(_minutes(billed_minutes), start.run_os)
+            cost = charged(_minutes(billed_minutes), start.run_os, multipliers)
             if len(billed_all.setdefault(place, [])) < MEASURED_RUNS:
                 billed_all[place].append(cost)
-            if (start.repo == repo and start.selection == selection
-                    and len(billed.setdefault(place, [])) < MEASURED_RUNS):
+            if same_part and len(billed.setdefault(place, [])) < MEASURED_RUNS:
                 billed[place].append(cost)
     measured = {place: Measured(tuple(starts.get(place, ())), tuple(runs.get(place, ())),
                                 tuple(billed.get(place, ())), tuple(billed_all.get(place, ())))
