@@ -328,7 +328,8 @@ def test_the_test_process_sees_test_env_and_none_of_the_caller_s_variables(tmp_p
     # (COLUMNS and LINES: a worker process's readline library exports its terminal size to its own environment;
     # `clean_environment` passes none of the caller's, see test_pc_workers.py)
     own = {"PYTEST_CURRENT_TEST", "PYTEST_VERSION", "LC_CTYPE", "PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT",
-           "PYTEST_XDIST_TESTRUNUID", "COLUMNS", "LINES"}
+           "PYTEST_XDIST_TESTRUNUID", "COLUMNS", "LINES",
+           "ORCH_IT_PROGRESS_FILE"}  # the layer's own: where its pytest plugin writes progress (#406 decision 2)
     assert set(env) - allowed - own == set()
 
 
