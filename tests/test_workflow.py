@@ -24,7 +24,7 @@ import pytest
 from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo, default_host
 
 from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
-from required_names import LINUX_CHECK, MACOS_OS, WINDOWS_CHECK
+from required_names import FOREIGN_LINUX, FOREIGN_MACOS, FOREIGN_WINDOWS, LINUX_CHECK, MACOS_OS, WINDOWS_CHECK
 from test_foreign_run import foreign_run  # the script's module, loaded once by its own test file
 
 ROOT = Path(__file__).parents[1]
@@ -33,8 +33,6 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
 # the jobs that run pytest themselves; the foreign jobs run `.github/scripts/foreign_run.py`
 PYTEST_JOBS = (LINUX_CHECK, WINDOWS_CHECK)
-FOREIGN_PREFIX = "foreign-"  # the job names are built from the required names and the OS words (no quoted job name in code)
-FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS = FOREIGN_PREFIX + LINUX_CHECK, FOREIGN_PREFIX + WINDOWS_CHECK, FOREIGN_PREFIX + MACOS_OS
 FOREIGN_JOBS = (FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS)
 
 
@@ -353,17 +351,25 @@ def test_the_stand_in_pytest_is_called_with_the_ids_plugin_in_both_phases(tmp_pa
         assert args[args.index("-p") + 1] == "orch_it_ids", (job, call)
 
 
-# --- the job bounds (#411 unit 4): 9 minutes per change and 16 for the night, each ceil(longest measured job x 1.5) (#421 rule 6) ---
+# --- the job bounds (#414 unit 18): each per-change bound is ceil(1.5 x the first measured job of its kind, in minutes) ---
 
-PER_CHANGE_BOUND = 9
-NIGHT_BOUND = {LINUX_CHECK: 16, WINDOWS_CHECK: 16}  # ceil(10.4 x 1.5): both jobs share it, the importer reads one setting
-MEASURED_MINUTES = {LINUX_CHECK: "10.4", WINDOWS_CHECK: "10.4"}  # the longest full job of either OS (622 s)
-MEASURED_RUNS = ("40946107649", "40932163943")  # the longest full run and the longest per-change run the minutes come from
-MEASURED_ON = "2026-10-29"
+# The first measured job of each kind (pull request 213, one run each): the job, its duration in seconds, the minutes its
+# comment must name, and the per-change bound that the rule gives. The nightly bounds have no measurement yet: they keep
+# today's values (NIGHTLY_BOUND) and say so in their comment (UNMEASURED).
+MEASURED_PER_CHANGE = (
+    (LINUX_CHECK, 156, "2.6 minutes", 4),  # 2:36
+    (WINDOWS_CHECK, 164, "2.7 minutes", 5),  # 2:44
+    (FOREIGN_LINUX, 357, "5.95 minutes", 9),  # 5:57
+    (FOREIGN_WINDOWS, 456, "7.6 minutes", 12),  # 7:36
+)
+NIGHTLY_BOUND = {LINUX_CHECK: 16, WINDOWS_CHECK: 16, FOREIGN_LINUX: 11, FOREIGN_WINDOWS: 40}
+MACOS_BOUND = 30
+UNMEASURED = "unmeasured: set to 1.5 x the first nightly's job"
 
 
 def timeout_of(text: str, job: str) -> tuple[str, list[str]]:
-    """The value of a job's `timeout-minutes`, and the comment lines right above it."""
+    """The value of a job's `timeout-minutes` (its inline comment cut off), and the comment lines: those right above
+    the line and the inline comment itself."""
 
     raw = text.splitlines()
     start = raw.index(f"  {job}:")
@@ -374,34 +380,40 @@ def timeout_of(text: str, job: str) -> tuple[str, list[str]]:
     while raw[i].strip().startswith("#"):
         comment.insert(0, raw[i].strip())
         i -= 1
-    return raw[at].removeprefix("    timeout-minutes: "), comment
+    value, _, inline = raw[at].removeprefix("    timeout-minutes: ").partition("  #")
+    if inline:
+        comment.append("# " + inline.strip())
+    return value.strip(), comment
 
 
-def test_each_job_keeps_the_measured_per_change_bound_outside_the_night():
-    text = WORKFLOW.read_text("utf-8")
-    for job in (LINUX_CHECK, WINDOWS_CHECK):
-        value, _ = timeout_of(text, job)
-        assert value.endswith(f"|| {PER_CHANGE_BOUND} }}}}"), (job, value)
+def test_the_per_change_rule_is_the_ceiling_of_1_5_times_the_measured_minutes_in_the_table():
+    for job, seconds, _, bound in MEASURED_PER_CHANGE:
+        assert math.ceil(round(1.5 * seconds / 60, 6)) == bound, job
 
 
-def test_each_job_gives_the_measured_night_bound_only_on_the_nightly_condition():
+@pytest.mark.parametrize("job, seconds, minutes_text, bound", MEASURED_PER_CHANGE)
+def test_each_job_gives_its_per_change_bound_outside_the_night_and_names_its_measured_minutes(
+        job, seconds, minutes_text, bound):
     text = WORKFLOW.read_text("utf-8")
     night = re.fullmatch(r"\$\{\{ (.*) \}\}", workflow_env()["NIGHTLY"]).group(1)
-    for job in (LINUX_CHECK, WINDOWS_CHECK):
-        value, _ = timeout_of(text, job)
-        assert value == f"${{{{ ({night}) && {NIGHT_BOUND[job]} || {PER_CHANGE_BOUND} }}}}", (job, value)
+    value, comment = timeout_of(text, job)
+    assert value == f"${{{{ ({night}) && {NIGHTLY_BOUND[job]} || {bound} }}}}", (job, value)
+    comment_text = " ".join(comment)
+    assert minutes_text in comment_text, job
+    assert "1.5" in comment_text, job
+    assert not re.search(r"\d+ seconds?|\b\d+ s\b", comment_text), job  # durations are written in minutes
 
 
-def test_each_night_bound_carries_its_measurement_and_margin_beside_it():
+@pytest.mark.parametrize("job", [LINUX_CHECK, WINDOWS_CHECK, FOREIGN_LINUX, FOREIGN_WINDOWS])
+def test_each_nightly_bound_is_unmeasured_and_says_so_beside_its_value(job):
+    _, comment = timeout_of(WORKFLOW.read_text("utf-8"), job)
+    assert UNMEASURED in " ".join(comment), job
+
+
+def test_the_derived_wording_is_gone_from_the_workflow():
     text = WORKFLOW.read_text("utf-8")
-    for job in (LINUX_CHECK, WINDOWS_CHECK):
-        _, comment = timeout_of(text, job)
-        comment_text = "\n".join(comment)
-        assert "margin 1.5" in comment_text, job
-        assert MEASURED_MINUTES[job] in comment_text, job
-        assert f"gets {NIGHT_BOUND[job]} minutes" in comment_text, job
-        assert all(run in comment_text for run in MEASURED_RUNS), job
-        assert MEASURED_ON in comment_text, job
+    assert "derived" not in text
+    assert "margin 1.5" not in text
 
 
 # --- the scan of a pull request's commits (#395 row 7) ---------------------------------------
@@ -608,36 +620,19 @@ def test_the_foreign_linux_job_passes_the_suite_switch_the_linux_pytest_step_set
         assert "GH_TOKEN" not in run, name  # the foreign setup holds no token
 
 
-# The numbers each foreign bound is derived from (#414), in minutes: (measured, ratio, margin). The linux job was
-# measured on GitHub (run 40989896505); the windows bounds are derived from the owner's machine and a lower-bound ratio of
-# GitHub's runner to it (20 minutes unfinished over 16 minutes), unmeasured on GitHub.
-LINUX_FOREIGN = {"change": (6.2, 1, 1.5), "nightly": (6.2, 1.17, 1.5)}
-WINDOWS_FOREIGN = {"change": (5.6, 1.25, 2), "nightly": (20, 1, 2)}
+def test_the_foreign_macos_bound_is_unmeasured_and_keeps_its_value():
+    value, comment = timeout_of(WORKFLOW.read_text("utf-8"), FOREIGN_MACOS)
+    assert value == str(MACOS_BOUND), value
+    assert UNMEASURED in " ".join(comment), value
 
 
-def derived_minutes(measured: float, ratio: float, margin: float) -> int:
-    return math.ceil(round(measured * ratio * margin, 6))
-
-
-@pytest.mark.parametrize("job, numbers", [(FOREIGN_LINUX, LINUX_FOREIGN), (FOREIGN_WINDOWS, WINDOWS_FOREIGN)])
-def test_each_foreign_bound_is_the_ceiling_of_the_numbers_its_comment_names(job, numbers):
-    text = WORKFLOW.read_text("utf-8")
-    night = re.fullmatch(r"\$\{\{ (.*) \}\}", workflow_env()["NIGHTLY"]).group(1)
-    change, nightly = (derived_minutes(*numbers[kind]) for kind in ("change", "nightly"))
-    value, comment = timeout_of(text, job)
-    assert value == f"${{{{ ({night}) && {nightly} || {change} }}}}", (job, value)
-    comment_text = " ".join(line.removeprefix("#").strip() for line in comment)
-    for number in {n for kind in numbers.values() for n in kind if n != 1}:
-        assert str(number) in comment_text, (job, number)
-    assert f"{change} minutes per change" in comment_text and f"{nightly} minutes" in comment_text, job
-    assert not re.search(r"\d+ s", comment_text), job  # durations are written in minutes
-    assert "unmeasured" not in comment_text.replace("unmeasured on GitHub", ""), job
-    assert ("unmeasured on GitHub" in comment_text) is (job == FOREIGN_WINDOWS), job
-
-
-def test_the_foreign_macos_bound_still_says_it_is_unmeasured_as_no_run_of_it_exists():
-    value, _ = timeout_of(WORKFLOW.read_text("utf-8"), FOREIGN_MACOS)
-    assert "# unmeasured" in value, value
+@pytest.mark.parametrize("nightly, expected", [
+    (True, "not live"),  # the nightly foreign run on Windows: the full suite, the live tests left out (foreign_run.py)
+    (False, "os_touching and ({marks})"),  # a change run: the Windows-marked set among the marks left out of change runs
+])
+def test_the_foreign_windows_run_takes_the_full_suite_nightly_and_the_windows_marked_set_per_change(nightly, expected):
+    marks = workflow_env()["MARKS_LEFT_OUT_OF_CHANGE_RUNS"]
+    assert foreign_run.selection(nightly, marks, os_name="nt") == expected.format(marks=marks)
 
 
 @pytest.mark.parametrize("job, os_name", [(LINUX_CHECK, "posix"), (WINDOWS_CHECK, "nt")])

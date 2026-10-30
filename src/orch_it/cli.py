@@ -42,6 +42,7 @@ from orch_it.skills.copies import SkillsError
 from orch_it.skills.forge import GithubForge
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings
+from orch_it.testruns.github_place import workflow_text_of
 from orch_it.testruns.runner import NEED_OSES, RunError, run_tests
 from orch_it.tickets import commands as ticket_commands
 from orch_it.tickets import hook as ticket_hook
@@ -387,13 +388,24 @@ def _guards_check_text(args) -> tuple[str, int]:
 
 
 def _guards_status(args) -> tuple[str, int]:
-    """`guards status`: the six facts as a table (fact, ok, detail); exit 0 when all are ok, 1 when
-    any is not (a protection that cannot be read is a failed fact, not an error)."""
+    """`guards status`: the six facts as a table (fact, ok, detail), then one line per required name only
+    GitHub runs (an OS no place of the settings has, or a name the workflow cannot place); exit 0 when all facts are ok, 1 when any is not (a protection that
+    cannot be read is a failed fact, not an error)."""
 
     work_tree = Path(args.work_tree)
     report = guards_status.status(_store(args), args.repo or _repo_of(str(work_tree)), work_tree)
     rows = [[fact.name, "yes" if fact.ok else "no", fact.detail] for fact in report.facts]
-    return render(QueryResult(["fact", "ok", "detail"], rows)), 0 if report.ok else 1
+    table = render(QueryResult(["fact", "ok", "detail"], rows))
+    return table + "".join(f"{_waiting_line(held)}\n" for held in report.waiting), 0 if report.ok else 1
+
+
+def _waiting_line(held) -> str:
+    """One line for a required name only GitHub runs: it holds a batch only while GitHub does not run it."""
+
+    if held.os is None:
+        return (f"{held.name}: the workflow ties it to no OS it can read, so no other place posts it;"
+                " it holds a batch while GitHub does not run it")
+    return f"{held.name}: only GitHub runs {held.os}; it holds a batch while GitHub does not run it"
 
 
 def _guards_install(args) -> tuple[str, int]:
@@ -601,7 +613,8 @@ def _run(args) -> str:
                 f" pending_lines={done.pending_lines} refused_events={done.refused_events}"
                 f" unreadable_files={done.unreadable_files}\n")
     if command == "import-github":
-        done = github.import_github(_store(args), args.repo or _repo_of("."), since=args.since)
+        done = github.import_github(_store(args), args.repo or _repo_of("."), since=args.since,
+                                    workflow_text=workflow_text_of(Path(".")))
         failed = f" failure_codes={','.join(done.failure_codes)}" if done.failure_codes else ""
         return (f"runs_read={done.runs_read} jobs={done.jobs} written={done.written}"
                 f" already_stored={done.already_stored} reports_missing={done.reports_missing}"

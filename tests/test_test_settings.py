@@ -12,8 +12,12 @@ REPO = "acme-x/widgets-y"
 def test_no_settings_give_the_defaults():
     settings = TestSettings.from_settings({}, REPO)
     assert settings.command == DEFAULT_COMMAND and "--junitxml={report}" in settings.command
-    assert (settings.bound_minutes, settings.test_env, settings.github_tests) == (15.0, {}, False)
+    assert (settings.bound_minutes, settings.test_env, settings.github_tests) == (15.0, {}, True)
     assert (settings.machines, settings.own_capacity, settings.github_capacity) == ((), 1, 20)
+
+
+def test_github_tests_set_false_is_the_opt_out():
+    assert TestSettings.from_settings({"github_tests": False}, REPO).github_tests is False
 
 
 def test_a_repo_s_own_value_wins_over_the_machine_s():

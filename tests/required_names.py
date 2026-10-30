@@ -7,3 +7,6 @@ from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS, OSES
 
 LINUX_CHECK, WINDOWS_CHECK = DEFAULT_REQUIRED_CHECKS
 LINUX_OS, WINDOWS_OS, MACOS_OS = OSES[0], OSES[1], OSES[2]  # the OS words of a test run's record, from `OSES`
+# the foreign jobs of the tests workflow: their names are built from the required names and the OS words
+FOREIGN_PREFIX = "foreign-"
+FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS = FOREIGN_PREFIX + LINUX_CHECK, FOREIGN_PREFIX + WINDOWS_CHECK, FOREIGN_PREFIX + MACOS_OS

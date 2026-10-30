@@ -144,8 +144,8 @@ def test_a_wait_stopped_by_a_person_is_ended_stopped(tmp_path):
 
 
 class Budgeted:
-    """A github place for the wait only: it is not offered (github_tests is off), and it reads the request budget
-    GitHub has left, as the real place does."""
+    """A github place for the wait only: its run passes github_tests=False, so the rule does not offer it (the setting's
+    default is on), and it reads the request budget GitHub has left, as the real place does."""
 
     id, os = "github", "linux"
 
@@ -163,7 +163,7 @@ def test_the_wait_polls_at_its_base_while_the_github_budget_is_above_the_thresho
     store = Store.open(tmp_path / "store")
     occupy_own(store)
     ticks = Ticks()
-    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(),
+    run_tests(store, work_tree=green(tmp_path), repo=REPO, settings=TestSettings(github_tests=False),
               places={"own": OwnPlace(), "github": Budgeted(2500)}, wait_minutes=1, sleep=ticks.sleep,
               clock=ticks.clock)
     assert ticks.sleeps == [15.0] * 4  # half of the 5000 left is above the 20% threshold: the base, 15 s
