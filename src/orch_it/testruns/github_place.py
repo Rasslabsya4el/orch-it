@@ -95,7 +95,7 @@ def classify_checks(text: str, required: tuple[str, ...]) -> CheckClasses:
     expression, a reusable workflow, an unknown runner: the name may be that job's, or live in another file) the name is
     `unclassified`: it fails closed, so no run is taken to have covered it."""
 
-    jobs = _jobs_of(text)
+    jobs = jobs_of(text)
     bound: dict[str, str] = {}
     for check in required:
         os_name = next((_job_os(job) for job in jobs if _job_label(job) == check and _job_os(job)), None)
