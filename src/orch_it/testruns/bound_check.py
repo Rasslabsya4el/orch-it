@@ -15,7 +15,7 @@ bound. When the largest share is past HEADROOM_SHARE, one ticket opens under its
 comment on each other's tickets; a later run still past the line comments once.
 
 Bounds are settings, read with `dict.get` from the `place_bounds` key: `run_minutes` maps an OS to its bound,
-`queue_minutes` is one bound for every GitHub place. A key the settings do not give takes DEFAULT_BOUNDS; an OS
+`queue_minutes` is one bound for every GitHub place. A key the settings do not give takes `default_bounds()`; an OS
 with no run bound is not checked. The tickets go through `merge.main_check`'s triage helpers, the same path as
 the no-result ticket to the brain.
 """
@@ -37,13 +37,12 @@ from orch_it.tickets.model import CODE_WRITTEN_MARK
 from orch_it.tickets.reader import TRIAGE_LABEL
 
 BOUNDS_KEY = "place_bounds"
-DEFAULTS_FILE = Path(__file__).with_name("bound_defaults.json")  # measured durations: linux 6, windows 8, queue 5 min
+DEFAULTS_FILE = Path(__file__).with_name("bound_defaults.json")
 
 LAST_RUNS = 10
 MEASURED = ("passed", "failed")
 NOT_MEASURED = "n/a"
 HEADROOM_SHARE = 0.8  # the largest share of its bound a job run may take before the headroom ticket opens
-JOB_ENDED_OUTCOMES = ("passed", "failed")
 CUT = "cut"
 NIGHTLY = "nightly"
 PER_CHANGE = "per_change"
@@ -85,6 +84,7 @@ class _Headroom:
     kind: str  # `nightly` or `per_change`
     runs: list[_JobRun]  # the newest ten ended runs, newest first
     worst: _JobRun  # the run with the largest share of its bound
+    newest_crossing: _JobRun  # the newest run of the window past the line: the one a comment tells of
 
 
 @dataclass(frozen=True)
@@ -227,7 +227,7 @@ def _job_runs(store: Store, repo: str) -> dict[tuple[str, str], list[_JobRun]]:
             continue
         seen.add(run)
         cut = outcome == "no_result" and reason == CUT
-        if outcome in JOB_ENDED_OUTCOMES or cut:
+        if outcome in MEASURED or cut:
             job, kind, began, bound = started[run]
             minutes = (_moment(at) - _moment(began)).total_seconds() / 60
             groups.setdefault((job, kind), []).append(_JobRun(run, at, minutes, bound, cut))
@@ -243,7 +243,7 @@ def _headrooms(groups: dict) -> list[_Headroom]:
             if candidate.share > worst.share:
                 worst = candidate
         if worst.share > HEADROOM_SHARE:
-            found.append(_Headroom(job, kind, window, worst))
+            found.append(_Headroom(job, kind, window, worst, next(r for r in window if r.share > HEADROOM_SHARE)))
     return found
 
 
@@ -252,7 +252,7 @@ def _headroom_key_mark(h: _Headroom) -> str:
 
 
 def _headroom_note_mark(h: _Headroom) -> str:
-    return f"<!-- orch-it bound-note job={h.job} kind={h.kind} run={h.runs[0].run} -->"
+    return f"<!-- orch-it bound-note job={h.job} kind={h.kind} run={h.newest_crossing.run} -->"
 
 
 def _headroom_facts(h: _Headroom) -> str:

@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fake_github import REPO, FakeGitHub
-from required_names import LINUX_OS, WINDOWS_OS
+from required_names import FOREIGN_LINUX, FOREIGN_WINDOWS, LINUX_CHECK, LINUX_OS, WINDOWS_CHECK, WINDOWS_OS
 
 from orch_it.events import schema
 from orch_it.events.store import Store
@@ -213,70 +213,74 @@ def job_world(tmp_path, monkeypatch):
     return FakeGitHub(NOW), Store.open(tmp_path / "events")
 
 
-def job_runs(job, walls, *, start=0, bound=HEADROOM_BOUND, selection="nightly", only_started=(), lost=()):
+# a job's step and OS, keyed by the names of the tests workflow's jobs
+JOBS = {WINDOWS_CHECK: ("test_run", WINDOWS_OS), LINUX_CHECK: ("test_run", LINUX_OS),
+        FOREIGN_WINDOWS: ("foreign_run", WINDOWS_OS), FOREIGN_LINUX: ("foreign_run", LINUX_OS)}
+
+
+def job_runs(job, walls, *, start=0, bound=HEADROOM_BOUND, selection="nightly", only_started=(), ended_as=None,
+             without=None):
     """One GitHub job run per wall time in minutes, run `start + i` starting `JOB_GAP_MINUTES` after the one before.
     A wall time at or past the bound is a run cut at it (`no_result`, reason `cut`); `only_started` lists the
-    positions that never end, `lost` the positions that end `lost`."""
+    positions that never end, `ended_as` maps a position to the (outcome, reason) it ends with instead, `without`
+    maps a position to the start detail field (`job` or `job_bound_minutes`) its start leaves out."""
 
     events = []
-    step = "foreign_run" if job.startswith("foreign") else "test_run"
-    run_os = WINDOWS_OS if "windows" in job else LINUX_OS
+    step, run_os = JOBS[job]
     for i, wall in enumerate(walls):
         number = start + i
         run = f"{job}-{selection}-{number}"
         began = JOB_GAP_MINUTES * number
-        events.append(envelope(kind="step.started", step=step, run=run, at=at_minute(began), detail={
-            "place": "github", "run_os": run_os, "job": job, "job_bound_minutes": bound, "selection": selection,
-            "event": "schedule" if selection == "nightly" else "pull_request"}))
+        started = {"place": "github", "run_os": run_os, "job": job, "job_bound_minutes": bound,
+                   "selection": selection, "event": "schedule" if selection == "nightly" else "pull_request"}
+        started.pop((without or {}).get(i), None)
+        events.append(envelope(kind="step.started", step=step, run=run, at=at_minute(began), detail=started))
         if i in only_started:
             continue
-        detail = {"outcome": "passed", "reason": None}
-        if i in lost:
-            detail = {"outcome": "lost", "reason": None}
-        elif wall >= bound:
-            detail = {"outcome": "no_result", "reason": "cut"}
-        events.append(envelope(kind="step.ended", step=step, run=run, at=at_minute(began + wall), detail=detail))
+        outcome, reason = (ended_as or {}).get(i, ("no_result", "cut") if wall >= bound else ("passed", None))
+        events.append(envelope(kind="step.ended", step=step, run=run, at=at_minute(began + wall),
+                               detail={"outcome": outcome, "reason": reason}))
     return events
 
 
 def test_a_longest_run_past_80_percent_opens_one_ticket_then_says_nothing_then_comments(job_world):
     hub, store = job_world
-    plant(store, job_runs("windows", [8.0] * 9 + [13.6]))  # the longest is 85% of a 16 min bound
+    plant(store, job_runs(WINDOWS_CHECK, [8.0] * 9 + [13.6]))  # the longest is 85% of a 16 min bound
     report = run_bound_check(store, hub, SETTINGS)
     [number] = report.headroom_opened
     assert report.opened == [] and report.commented == [] and report.headroom_commented == []
     assert triage(hub) == [number]
     issue = hub.issues[(REPO, number)]
     assert set(issue.labels) == {"needs-triage"}
-    assert "<!-- orch-it bound job=windows kind=nightly -->" in issue.body
+    assert f"<!-- orch-it bound job={WINDOWS_CHECK} kind=nightly -->" in issue.body
     assert "## Facts" in issue.body and CODE_WRITTEN_MARK in issue.body
-    assert "`windows`" in issue.body and "nightly" in issue.body
+    assert f"`{WINDOWS_CHECK}`" in issue.body and "nightly" in issue.body
     assert "13.6 min" in issue.body and "16 min" in issue.body  # the longest run and its bound
     assert "8.0 min" in issue.body  # the median
     for n in range(10):
-        assert f"windows-nightly-{n}" in issue.body
+        assert f"{WINDOWS_CHECK}-nightly-{n}" in issue.body
     again = run_bound_check(store, hub, SETTINGS)
     assert again.headroom_opened == [] and again.headroom_commented == []
     assert hub.comments(REPO, number) == []
-    plant(store, job_runs("windows", [14.0], start=10))
+    plant(store, job_runs(WINDOWS_CHECK, [14.0], start=10))
     later = run_bound_check(store, hub, SETTINGS)
     assert later.headroom_opened == [] and later.headroom_commented == [number]
     assert triage(hub) == [number]
     [note] = hub.comments(REPO, number)
-    assert "14.0 min" in note.body and "windows-nightly-10" in note.body
+    assert "14.0 min" in note.body and f"{WINDOWS_CHECK}-nightly-10" in note.body
 
 
 def test_a_cut_run_among_short_ones_opens_a_ticket_naming_the_cut_run(job_world):
     hub, store = job_world
-    plant(store, job_runs("windows", [8.0] * 9 + [HEADROOM_BOUND]))  # the other nine are 50% of the bound
+    plant(store, job_runs(WINDOWS_CHECK, [8.0] * 9 + [HEADROOM_BOUND]))  # the other nine are 50% of the bound
     [number] = run_bound_check(store, hub, SETTINGS).headroom_opened
-    assert "windows-nightly-9" in hub.issues[(REPO, number)].body
+    assert f"{WINDOWS_CHECK}-nightly-9" in hub.issues[(REPO, number)].body
     assert triage(hub) == [number]
 
 
 def test_a_longest_run_at_exactly_80_percent_gives_nothing(job_world):
     hub, store = job_world
-    plant(store, job_runs("windows", [8.0] * 9 + [12.8]))
+    plant(store, job_runs(WINDOWS_CHECK, [8.0] * 9 + [12.8]))
     report = run_bound_check(store, hub, SETTINGS)
     assert report.headroom_opened == [] and report.headroom_commented == []
     assert triage(hub) == []
@@ -285,56 +289,89 @@ def test_a_longest_run_at_exactly_80_percent_gives_nothing(job_world):
 def test_the_real_windows_case_a_cut_in_the_newest_ten_of_24_runs(job_world):
     hub, store = job_world
     assert len(REAL_WALLS) == 24
-    plant(store, job_runs("windows", REAL_WALLS))
+    plant(store, job_runs(WINDOWS_CHECK, REAL_WALLS))
     [number] = run_bound_check(store, hub, SETTINGS).headroom_opened
-    assert "windows-nightly-22" in hub.issues[(REPO, number)].body
+    assert f"{WINDOWS_CHECK}-nightly-22" in hub.issues[(REPO, number)].body
     assert triage(hub) == [number]
 
 
 def test_the_same_24_runs_under_a_22_minute_bound_give_nothing(job_world):
     hub, store = job_world
-    plant(store, job_runs("windows", REAL_WALLS, bound=22))  # 16.3 min is 74% of 22 and no run is cut
+    plant(store, job_runs(WINDOWS_CHECK, REAL_WALLS, bound=22))  # 16.3 min is 74% of 22 and no run is cut
     report = run_bound_check(store, hub, SETTINGS)
     assert report.headroom_opened == [] and triage(hub) == []
 
 
 def test_two_jobs_over_the_line_get_one_ticket_each(job_world):
     hub, store = job_world
-    plant(store, job_runs("windows", [8.0] * 9 + [15.0]))
-    plant(store, job_runs("foreign-windows", [8.0] * 9 + [15.0]))
-    plant(store, job_runs("linux", [3.0] * 10))
+    plant(store, job_runs(WINDOWS_CHECK, [8.0] * 9 + [15.0]))
+    plant(store, job_runs(FOREIGN_WINDOWS, [8.0] * 9 + [15.0]))
+    plant(store, job_runs(LINUX_CHECK, [3.0] * 10))
     opened = run_bound_check(store, hub, SETTINGS).headroom_opened
     assert len(opened) == 2 and sorted(triage(hub)) == sorted(opened)
     bodies = [hub.issues[(REPO, n)].body for n in opened]
-    assert sum("<!-- orch-it bound job=windows kind=nightly -->" in b for b in bodies) == 1
-    assert sum("<!-- orch-it bound job=foreign-windows kind=nightly -->" in b for b in bodies) == 1
+    assert sum(f"<!-- orch-it bound job={WINDOWS_CHECK} kind=nightly -->" in b for b in bodies) == 1
+    assert sum(f"<!-- orch-it bound job={FOREIGN_WINDOWS} kind=nightly -->" in b for b in bodies) == 1
 
 
 def test_a_run_with_no_end_or_a_lost_outcome_is_left_out(job_world):
     hub, store = job_world
-    plant(store, job_runs("windows", [8.0, 8.0, 8.0, 20.0, 20.0], only_started=(3,), lost=(4,)))
+    plant(store, job_runs(WINDOWS_CHECK, [8.0, 8.0, 8.0, 20.0, 20.0], only_started=(3,), ended_as={4: ("lost", None)}))
     report = run_bound_check(store, hub, SETTINGS)
     assert report.headroom_opened == [] and triage(hub) == []
 
 
+@pytest.mark.parametrize("ended", [("stopped", None), ("no_result", "red"), ("no_result", "busy")])
+def test_a_window_of_runs_not_ended_for_this_rule_opens_nothing(job_world, ended):
+    hub, store = job_world  # only passed, failed and a no_result cut count; 20 min is past the line if one did
+    plant(store, job_runs(WINDOWS_CHECK, [20.0] * 3, ended_as={i: ended for i in range(3)}))
+    assert run_bound_check(store, hub, SETTINGS).headroom_opened == [] and triage(hub) == []
+
+
+@pytest.mark.parametrize("missing", ["job", "job_bound_minutes"])
+def test_a_start_with_no_job_or_no_bound_is_left_out(job_world, missing):
+    hub, store = job_world
+    plant(store, job_runs(WINDOWS_CHECK, [20.0] * 3, without={i: missing for i in range(3)}))
+    assert run_bound_check(store, hub, SETTINGS).headroom_opened == [] and triage(hub) == []
+
+
+@pytest.mark.parametrize("opening_wall", [13.6, HEADROOM_BOUND])  # a run past the line, and a run cut at the bound
+def test_a_newer_run_under_the_line_says_nothing_and_a_newer_crossing_run_comments_once(job_world, opening_wall):
+    hub, store = job_world
+    plant(store, job_runs(WINDOWS_CHECK, [8.0] * 9 + [opening_wall]))
+    [number] = run_bound_check(store, hub, SETTINGS).headroom_opened
+    plant(store, job_runs(WINDOWS_CHECK, [8.0], start=10))  # 50% of the bound
+    quiet = run_bound_check(store, hub, SETTINGS)
+    assert quiet.headroom_opened == [] and quiet.headroom_commented == []
+    assert hub.comments(REPO, number) == []
+    plant(store, job_runs(WINDOWS_CHECK, [14.4], start=11))  # 90% of the bound
+    crossed = run_bound_check(store, hub, SETTINGS)
+    assert crossed.headroom_opened == [] and crossed.headroom_commented == [number]
+    [note] = hub.comments(REPO, number)
+    assert f"run={WINDOWS_CHECK}-nightly-11 " in note.body  # the note is keyed to the newest crossing run
+    again = run_bound_check(store, hub, SETTINGS)
+    assert again.headroom_commented == [] and len(hub.comments(REPO, number)) == 1
+    assert triage(hub) == [number]
+
+
 def test_a_nightly_and_a_per_change_run_of_one_job_are_two_kinds(job_world):
     hub, store = job_world
-    plant(store, job_runs("linux", [3.0] * 10, selection="nightly"))
-    plant(store, job_runs("linux", [3.0] * 9 + [15.0], selection="full"))
+    plant(store, job_runs(LINUX_CHECK, [3.0] * 10, selection="nightly"))
+    plant(store, job_runs(LINUX_CHECK, [3.0] * 9 + [15.0], selection="full"))
     [number] = run_bound_check(store, hub, SETTINGS).headroom_opened
-    assert "<!-- orch-it bound job=linux kind=per_change -->" in hub.issues[(REPO, number)].body
+    assert f"<!-- orch-it bound job={LINUX_CHECK} kind=per_change -->" in hub.issues[(REPO, number)].body
 
 
 def test_fewer_than_ten_runs_use_what_exists(job_world):
     hub, store = job_world
-    plant(store, job_runs("windows", [14.0]))
+    plant(store, job_runs(WINDOWS_CHECK, [14.0]))
     assert len(run_bound_check(store, hub, SETTINGS).headroom_opened) == 1
 
 
 def test_the_two_rules_never_comment_on_each_others_tickets(job_world):
     hub, store = job_world
     plant(store, runs(0, 10, "github", WINDOWS_OS, WINDOWS + 1))  # a median past its bound
-    plant(store, job_runs("windows", [8.0] * 9 + [15.0], start=100))
+    plant(store, job_runs(WINDOWS_CHECK, [8.0] * 9 + [15.0], start=100))
     report = run_bound_check(store, hub, SETTINGS)
     assert len(report.opened) == 1 and len(report.headroom_opened) == 1
     assert report.opened != report.headroom_opened
