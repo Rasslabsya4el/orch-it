@@ -32,7 +32,7 @@ import pytest
 
 ENV_IDS = "ORCH_IT_IDS_FILE"
 ENV_PLACEHOLDERS = "ORCH_IT_PLACEHOLDERS"
-PLACEHOLDER_PROPERTY = "reads_placeholder"
+PLACEHOLDER_PROPERTY = "reads_placeholder"  # the same word as `junit.PLACEHOLDER_PROPERTY`: this file imports nothing of orch_it; a test holds the two equal
 
 
 def _ids() -> list[str] | None:
@@ -104,7 +104,7 @@ def _placeholders() -> set[str]:
     return {os.path.normcase(os.path.realpath(p.strip())) for p in listed.split(os.pathsep) if p.strip()}
 
 
-_READS: list[str] = []  # the placeholder files the running test has opened so far
+_PLACEHOLDERS_OPENED: list[str] = []  # the placeholder files the running test has opened so far
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -113,15 +113,15 @@ def pytest_runtest_protocol(item, nextitem):
     if not stubs:
         yield
         return
-    _READS.clear()
+    _PLACEHOLDERS_OPENED.clear()
     real_builtin, real_io = builtins.open, io.open
 
     def watching(real):
         def opened(file, *args, **kwargs):
             if isinstance(file, (str, bytes, os.PathLike)):
                 name = os.path.normcase(os.path.realpath(os.fsdecode(file)))
-                if name in stubs and name not in _READS:
-                    _READS.append(name)
+                if name in stubs and name not in _PLACEHOLDERS_OPENED:
+                    _PLACEHOLDERS_OPENED.append(name)
             return real(file, *args, **kwargs)
 
         return opened
@@ -138,6 +138,6 @@ def pytest_runtest_makereport(item, call):
     """The property goes on before the teardown report is made: that report carries the test's properties to the
     JUnit file."""
 
-    if call.when == "teardown" and _READS:
+    if call.when == "teardown" and _PLACEHOLDERS_OPENED:
         item.user_properties.append((PLACEHOLDER_PROPERTY, "1"))
-        _READS.clear()
+        _PLACEHOLDERS_OPENED.clear()

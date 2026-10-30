@@ -107,12 +107,47 @@ def test_p2_red_on_the_real_file_does_not_land_and_names_the_one_test(tmp_path):
 
 def test_a_test_added_by_the_pull_request_reruns_with_no_earlier_record_of_what_it_reads(tmp_path):
     store = Store.open(tmp_path / "store")
-    # the store knows an earlier green github run of the two old tests only; the added one has no record
-    earlier = FakeGithub(reads=READS[:2], plain=PLAIN)
-    go(tmp_path, earlier, store=store)
+    # the store knows an earlier green github run of the two old tests only
+    go(tmp_path, FakeGithub(reads=READS[:2], plain=PLAIN), store=store)
+    assert store.query("SELECT count(*) FROM events WHERE test_id = ?", (ADDED,)).rows == [(0,)]
     done, _, pc = go(tmp_path, FakeGithub(), RealFiles(red=(ADDED,)), store=store)
     assert ADDED in pc.asked[0]
     assert done.failed_tests == (ADDED,)
+
+
+def ended_details(store, place):
+    rows = store.query("SELECT e.detail FROM events e JOIN events s ON s.run = e.run AND s.kind = 'step.started'"
+                       " WHERE e.kind = 'step.ended' AND e.step = 'test_run' AND s.detail LIKE ?"
+                       " ORDER BY e.at, e.id", (f'{{"place":"{place}"%',)).rows
+    return [json.loads(d) for (d,) in rows]
+
+
+def test_the_rerun_s_end_carries_the_tests_it_reran_and_the_ones_that_failed(tmp_path):
+    _, store, _ = go(tmp_path, FakeGithub(), RealFiles(red=(READS[1],)))
+    [github] = ended_details(store, "github")
+    [rerun] = ended_details(store, "machine:pc")
+    assert "placeholder_tests" not in github
+    assert sorted(rerun["placeholder_tests"]) == sorted(READS)
+    assert rerun["failed_tests"] == [READS[1]]
+
+
+def test_a_green_rerun_names_the_tests_it_reran_and_no_failed_ones(tmp_path):
+    _, store, _ = go(tmp_path, FakeGithub())
+    [rerun] = ended_details(store, "machine:pc")
+    assert sorted(rerun["placeholder_tests"]) == sorted(READS)
+    assert "failed_tests" not in rerun
+
+
+def test_a_run_that_is_no_rerun_carries_neither_field(tmp_path):
+    _, store, _ = go(tmp_path, FakeGithub(reads=(), plain=(*READS, *PLAIN)))
+    [github] = ended_details(store, "github")
+    assert "placeholder_tests" not in github and "failed_tests" not in github
+
+
+def test_the_property_name_is_the_same_in_the_reader_and_the_standalone_plugin():
+    from orch_it.testruns.pytest_plugin import orch_it_ids
+
+    assert orch_it_ids.PLACEHOLDER_PROPERTY == junit.PLACEHOLDER_PROPERTY
 
 
 def test_a_run_with_no_placeholder_reads_is_unchanged(tmp_path):

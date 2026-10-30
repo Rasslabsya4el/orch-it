@@ -219,12 +219,13 @@ class _Run:
         status = git_output(work_tree, "status", "--porcelain")
         self.dirty = None if status is None else bool(status)
         self.branch = _branch(work_tree)
+        self.reran: tuple[str, ...] = ()  # the placeholder tests this run reruns; empty: it is no rerun
 
     def with_ids(self, ids: list[str]) -> _Run:
         """This run's facts for a run of just `ids` (its own selection)."""
 
         other = copy.copy(self)
-        other.ids, other.selection = ids, selection_of(ids)
+        other.ids, other.selection, other.reran = ids, selection_of(ids), tuple(ids)
         return other
 
     def envelope(self, step: str) -> dict:
@@ -326,13 +327,19 @@ class _Run:
                                     slept=place_end.slept)
             for detail in run_end.result_details():
                 writer.write(envelope | {"kind": "test.result", "detail": detail})
-        writer.write(envelope | {"kind": "step.ended",
-                                 "detail": run_end.ended_detail() | _timing(place_end, run_end)})
         red = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.outcome in outcome.RED_OUTCOMES))
+        detail = run_end.ended_detail() | _timing(place_end, run_end)
+        if self.reran:  # the store says which tests were rerun for being on placeholders, and which failed
+            detail["placeholder_tests"] = list(self.reran)
+            if red:
+                detail["failed_tests"] = list(red)
+        writer.write(envelope | {"kind": "step.ended", "detail": detail})
         # only GitHub has stubs in place of real files: a marked case at a place that has them is no placeholder
-        on_stubs = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.placeholder))             if decision.chosen == "github" else ()
+        placeholder_tests = ()
+        if decision.chosen == "github":
+            placeholder_tests = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.placeholder))
         return RunDone(envelope["run"], decision.chosen, run_end.outcome, run_end.reason,
-                       run_end.collected, run_end.failed, run_end.missing_ids, red, on_stubs)
+                       run_end.collected, run_end.failed, run_end.missing_ids, red, placeholder_tests)
 
 
 def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str,
