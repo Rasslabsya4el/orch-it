@@ -9,9 +9,9 @@ like any other report; the job's GitHub conclusion decides the outcome:
 - `success`: passed, always (the report only gives the rows and the counts);
 - `failure`: failed `red` when the report holds a red case, else no_result `summary_missing`;
 - `cancelled`: no_result `cut` when the job ran for at least its bound: the job's own `timeout-minutes` in the workflow
-  text (the nightly value for a nightly event, else the per-change one; see `workflow_bounds`), or the setting
-  `github_job_timeout_minutes` (default 9) when the workflow gives the job none. GitHub may call a job that hit its
-  `timeout-minutes` cancelled; else stopped `superseded` when a newer run superseded its run,
+  text (the nightly value for a `schedule` run, the smaller of the two for a `workflow_dispatch` run, else the
+  per-change one; see `job_bound_of`), or the setting `github_job_timeout_minutes` when the workflow gives the job none.
+  GitHub may call a job that hit its `timeout-minutes` cancelled; else stopped `superseded` when a newer run superseded its run,
   else stopped with no reason. A newer run supersedes a run when it was created after it (and
   before `now`), has the same event and another head commit, and, for pull request runs, the
   same pull request number (else the same head branch);
@@ -49,6 +49,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from orch_it import settings
 from orch_it.events import schema
@@ -300,19 +301,25 @@ def _job_timeout_minutes(config: dict) -> float:
 _BOUND_EXPRESSION = re.compile(r"\$\{\{.*&&\s*(\d+)\s*\|\|\s*(\d+)\s*\}\}")
 
 
-def _bound_pair(value: str) -> tuple[int, int] | None:
-    """(per change, nightly) minutes of a job's `timeout-minutes` value: one whole number for both, or the expression
+class JobBound(NamedTuple):
+    """A job's bound in minutes: the per-change one and the nightly one, by name (the regex groups come nightly first)."""
+    per_change: int
+    nightly: int
+
+
+def _bound_pair(value: str) -> JobBound | None:
+    """A job's `timeout-minutes` value: one whole number for both bounds, or the expression
     `${{ (<the nightly condition>) && <nightly minutes> || <per change minutes> }}`; None for any other form."""
 
     if value.isdigit():
-        return int(value), int(value)
+        return JobBound(int(value), int(value))
     found = _BOUND_EXPRESSION.fullmatch(value)
-    return (int(found.group(2)), int(found.group(1))) if found else None
+    return JobBound(per_change=int(found.group(2)), nightly=int(found.group(1))) if found else None
 
 
-def workflow_bounds(text: str) -> dict[str, tuple[int, int]]:
-    """Each job's bound in the workflow `text`, by the job's check name (its `name`, else its key): (per change,
-    nightly) minutes. A job whose `timeout-minutes` is none of the two forms, or has none, is left out."""
+def workflow_bounds(text: str) -> dict[str, JobBound]:
+    """Each job's bound in the workflow `text`, by the job's check name (its `name`, else its key). A job whose
+    `timeout-minutes` is none of the two forms, or has none, is left out."""
 
     bounds = {}
     for job in jobs_of(text):
@@ -322,15 +329,22 @@ def workflow_bounds(text: str) -> dict[str, tuple[int, int]]:
     return bounds
 
 
-def job_bound_of(bounds: dict[str, tuple[int, int]], name: str, event: str | None, fallback: float) -> float:
-    """The minutes a job named `name` may run in a run of `event`: the workflow's nightly bound for a nightly event
-    (`NIGHTLY_EVENTS`), else its per-change one; `fallback` (the setting) when the workflow gives the job none."""
+def job_bound_of(bounds: dict[str, JobBound], name: str, event: str | None, fallback: float) -> float:
+    """The minutes a job named `name` may run in a run of `event`: a `schedule` run gets the job's nightly bound, a
+    `workflow_dispatch` run the smaller of its two bounds, any other event its per-change one; `fallback` (the setting)
+    when the workflow gives the job none.
 
-    pair = bounds.get(name)
-    if pair is None:
+    A dispatch run's listing does not show the `slow_and_live` input, so a person's cancel after the smaller bound
+    cannot be told from a timeout: every such cancel is read as a cut, and the smaller bound makes every timeout a cut."""
+
+    bound = bounds.get(name)
+    if bound is None:
         return fallback
-    per_change, nightly = pair
-    return nightly if event in NIGHTLY_EVENTS else per_change
+    if event == "schedule":
+        return bound.nightly
+    if event == "workflow_dispatch":
+        return min(bound)
+    return bound.per_change
 
 
 def _unquote(text: str) -> str:
