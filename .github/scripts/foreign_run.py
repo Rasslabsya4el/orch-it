@@ -12,6 +12,11 @@ executable file of the normal PATH, except the names `excluded_from_bin` exclude
 hooks through sh; the shell tests look for bash) and every other tool stay reachable.
 
 Pure standard library: it runs before any install, with the interpreter the job set up.
+
+Venv rule (#463, outside CI only): the setup commands and the suite run with a virtual environment made under the
+run's own temp root, not with the interpreter that started the run. That interpreter only creates the venv, so an
+editable install never leaves a path file in it; the venv goes away with the temp root. In CI (`GITHUB_ACTIONS` set
+to `true`) the job's interpreter is used, as before.
 """
 
 from __future__ import annotations
@@ -249,6 +254,18 @@ def _make_writable(func, path, _exc_info) -> None:
     func(path)
 
 
+def venv_python(venv: Path, os_name: str) -> Path:
+    """The interpreter of a virtual environment: `Scripts/python.exe` on Windows, `bin/python3` elsewhere (#463)."""
+
+    return venv / "Scripts" / "python.exe" if os_name == "nt" else venv / "bin" / "python3"
+
+
+def in_ci(environ: Mapping[str, str]) -> bool:
+    """GitHub Actions sets `GITHUB_ACTIONS=true` in every job; the foreign jobs run in that mode (#463)."""
+
+    return environ.get("GITHUB_ACTIONS") == "true"
+
+
 def run(checkout: Path, environ: Mapping[str, str]) -> int:
     """The whole foreign run of `checkout`: the copy, its origin, the setup commands, the suite. Returns the suite's
     exit code; the suite's JUnit report is written to the checkout's `junit.xml`."""
@@ -276,6 +293,13 @@ def run(checkout: Path, environ: Mapping[str, str]) -> int:
             make_bin(bin_dir, source_path)
             path, python = str(bin_dir), str(bin_dir / "python3")
         env = suite_switches(child_env(environ, home=home, empty_config=empty, path=path, os_name=this_os()), environ)
+        if not in_ci(environ):
+            # #463: outside CI the caller's interpreter only creates the venv; every setup command and the suite run
+            # with the venv's interpreter, so no package install reaches the caller's own interpreter
+            venv = base / "venv"
+            _step([sys.executable, "-m", "venv", str(venv)], base, env, "the setup command `python -m venv`")
+            python = str(venv_python(venv, this_os()))
+            env["ORCH_IT_PYTHON"] = python  # the git hook's shim (hooks/orch-it) tries this interpreter first
         copy = make_copy(checkout, base, names, env)
         print(f"foreign run: the copy is in a folder of its own; its origin is {names.account}/{names.repo}, invented")
         _step([python, "-m", "pip", "install", "--disable-pip-version-check", "-e", ".[test]"], copy, env,
