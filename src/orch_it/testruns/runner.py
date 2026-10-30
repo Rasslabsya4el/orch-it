@@ -140,9 +140,11 @@ def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, .
 
 def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSettings,
               ids_file: Path | None = None, place: str | None = None, need_os: str = "any",
-              role: str = "script", ticket: int | None = None, places: dict | None = None,
-              wait_minutes: float | None = None, sleep=time.sleep, now=None, clock=time.monotonic) -> RunDone:
-    """One run of the repo's test command at the place the rule picks (or `place`, forced).
+              role: str = "script", ticket: int | None = None, pr: int | None = None,
+              places: dict | None = None, wait_minutes: float | None = None, sleep=time.sleep, now=None,
+              clock=time.monotonic) -> RunDone:
+    """One run of the repo's test command at the place the rule picks (or `place`, forced). `pr`: the PR whose head
+    this run tests (#406): its start then names the PR and the part it covers (the run's selection); None: no PR.
     `places` maps a place id to its adapter (default: `default_places`). A place lost or refusing
     mid-run is left out and the rule picks again, until a place finishes the run or none is
     left. No place left writes a `wait` on `test_place`: while a place it can free is busy it
@@ -166,7 +168,7 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     if place is not None and place not in places:
         raise RunError("unknown_place", place)
     run = _Run(store, work_tree, repo, settings, ids, role, ticket, offers_of(settings, places),
-               need_os, now or (lambda: datetime.now(UTC)), places)
+               need_os, now or (lambda: datetime.now(UTC)), places, pr)
     with store.writer() as writer:
         if place is not None:  # a human's choice: taken as it is, the rule's view kept beside it
             decision = place_rule.Decision(place, "forced", run.decide({}).offered)
@@ -213,10 +215,12 @@ def _wait_seconds(settings: TestSettings, wait_minutes: float | None) -> float:
 class _Run:
     """The facts every attempt of one run shares, and the events of one attempt."""
 
-    def __init__(self, store, work_tree, repo, settings, ids, role, ticket, offers, need_os, now, places=None):
+    def __init__(self, store, work_tree, repo, settings, ids, role, ticket, offers, need_os, now, places=None,
+                 pr=None):
         self.store, self.work_tree, self.repo, self.settings = store, work_tree, repo, settings
         self.ids, self.selection = ids, selection_of(ids)
         self.offers, self.need_os, self.now, self.places = offers, need_os, now, places or {}
+        self.pr = pr  # the PR whose head this run tests (#406 decision 1); None: a run with no PR
         self.base = {"repo": repo, "ticket": ticket, "role": role, "session": None,
                      "parent_session": None, "turn": None, "note": None}
         self.commit = git_output(work_tree, "rev-parse", "HEAD")
@@ -299,10 +303,11 @@ class _Run:
         writer.write(envelope | {"kind": "step.started", "detail": {
             "place": decision.chosen, "chosen": decision.chosen, "reason": decision.reason,
             "places_offered": decision.detail(), "selection": self.selection,
-            "commit": self.commit, "branch": self.branch, "pr": None,
+            "commit": self.commit, "branch": self.branch, "pr": self.pr,
             # only the own place runs the work tree as it is; the others run the clean commit
             "dirty": self.dirty if decision.chosen == "own" else None,
-            "workers": plan.workers if plan else None, "part": None, "run_os": run_os,
+            "workers": plan.workers if plan else None,
+            "part": self.selection if self.pr is not None else None, "run_os": run_os,
             "settings_hash": environment.settings_hash(self.settings.command,
                                                        self.settings.bound_minutes,
                                                        self.settings.test_env),
