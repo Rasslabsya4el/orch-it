@@ -34,13 +34,10 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-latest
-    # Bound: 9 minutes per change = ceil(5.8 x 1.5): the longest of 27 green per-change windows jobs on GitHub runners
-    # (345 s in run 40932163943, linux 151 s in run 40933627794; 2026-10-29). The nightly run (the `env.NIGHTLY` condition,
-    # written out here because `env` is not readable in a job-level timeout) gets 16 minutes = ceil(10.4 x 1.5): the
-    # longest of 10 green full jobs (windows 622 s in run 40946107649, linux 176 s in run 40924942198), the live test bound
-    # to the newest 20 runs. Both jobs share the two bounds: the importer reads one `github_job_timeout_minutes` (9).
-    # margin 1.5 on the longest job.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 16 || 9 }}
+    # Per change: 4 minutes = ceil(2.6 minutes x 1.5), the first measured per-change job (2:36, pull request 213, one run).
+    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 16 minutes,
+    # unmeasured: set to 1.5 x the first nightly's job.
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 16 || 4 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,13 +123,10 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    # Bound: 9 minutes per change = ceil(5.8 x 1.5): the longest of 27 green per-change windows jobs on GitHub runners
-    # (345 s in run 40932163943, linux 151 s in run 40933627794; 2026-10-29). The nightly run (the `env.NIGHTLY` condition,
-    # written out here because `env` is not readable in a job-level timeout) gets 16 minutes = ceil(10.4 x 1.5): the
-    # longest of 10 green full jobs (windows 622 s in run 40946107649, linux 176 s in run 40924942198), the live test bound
-    # to the newest 20 runs. Both jobs share the two bounds: the importer reads one `github_job_timeout_minutes` (9).
-    # margin 1.5 on the longest job.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 16 || 9 }}
+    # Per change: 5 minutes = ceil(2.7 minutes x 1.5), the first measured per-change job (2:44, pull request 213, one run).
+    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 40 minutes,
+    # unmeasured: set to 1.5 x the first nightly's job.
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 40 || 5 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -192,16 +186,13 @@ jobs:
   # slow, not live), and on Windows only the `os_touching` tests among them; the nightly run everything but the live
   # tests (the script's NIGHTLY_SELECTION). The tests that skip or are left out here are the ones that need gh or
   # GitHub's network: the live ones, which both selections leave out, since the foreign setup holds no token.
-  # Its job bounds are derived the way the pytest jobs' are (bound = measured duration x margin) and are read from the
-  # runs named beside each job: `timeout-minutes` is read by nothing but GitHub, so the number is written once, on its line.
+  # Each job's bound is on its own `timeout-minutes` line, with the minutes it was measured in written beside it.
   foreign-linux:
     runs-on: ubuntu-latest
-    # Bound: 10 minutes per change = ceil(6.2 x 1.5): the foreign linux job ran 6.2 minutes on a pull request (run
-    # 40989896505, 2026-10-30; the full not-slow, not-live suite in one process). The nightly run (the `env.NIGHTLY`
-    # condition, written out here because `env` is not readable in a job-level timeout) adds the slow tests and gets 11
-    # minutes = ceil(6.2 x 1.17 x 1.5): the ordinary linux job took 1.17 times as long on the nightly as per change
-    # (2.9 minutes in run 40924942198 over 2.5 minutes in run 40933627794). margin 1.5 on the measured job.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 11 || 10 }}
+    # Per change: 9 minutes = ceil(5.95 minutes x 1.5), the first measured per-change job (5:57, pull request 213, one run).
+    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 11 minutes,
+    # unmeasured: set to 1.5 x the first nightly's job.
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 11 || 9 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -224,15 +215,10 @@ jobs:
 
   foreign-windows:
     runs-on: windows-latest
-    # Derived, unmeasured on GitHub: replace both bounds by 1.5 x the first measured job. Bound: 14 minutes per change =
-    # ceil(5.6 x 1.25 x 2): the thin `os_touching` selection ran 5.6 minutes on a Windows machine of the owner's (the whole
-    # script 5.6 minutes, 1562 passed in 5.3 minutes; 2026-10-30), where the whole suite of 4175 tests took 16 minutes; the
-    # whole suite did not finish in 20 minutes on GitHub's runner (run 40989896505, cancelled at the old bound), so that
-    # runner is at least 20 / 16 = 1.25 times slower than the machine. No GitHub run of the thin set exists yet, so the
-    # margin is 2, not 1.5. The nightly run (the `env.NIGHTLY` condition, written out here because `env` is not readable
-    # in a job-level timeout) takes the whole suite in one process and gets 40 minutes = 2 x 20: the 20 minutes it did
-    # not finish in on GitHub (a lower bound), same margin 2.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 40 || 14 }}
+    # Per change: 12 minutes = ceil(7.6 minutes x 1.5), the first measured per-change job (7:36, pull request 213, one run).
+    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 40 minutes,
+    # unmeasured: set to 1.5 x the first nightly's job.
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 40 || 12 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -257,7 +243,7 @@ jobs:
   foreign-macos:
     if: github.event_name == 'schedule'
     runs-on: macos-latest
-    timeout-minutes: 30  # unmeasured: a guess until the first nightly run measures it
+    timeout-minutes: 30  # unmeasured: set to 1.5 x the first nightly's job
     steps:
       - uses: actions/checkout@v4
         with:
