@@ -12,7 +12,7 @@ ENVELOPE = [
 
 STEP_IDS = [
     # section 3
-    "session", "subagent", "wait", "test_run", "review", "unit", "pr", "core_update",
+    "session", "subagent", "wait", "test_run", "foreign_run", "review", "unit", "pr", "core_update",
     "install", "research_run", "process", "external_call", "check", "sweep", "test_map",
     "keepalive_install", "acceptance",
     # section 8
@@ -148,7 +148,7 @@ def test_envelope_is_the_list_s_fifteen_fields():
 
 def test_every_step_id_of_the_list_and_no_other():
     assert sorted(schema.step_ids()) == sorted(STEP_IDS)
-    assert len(STEP_IDS) == 24  # + line (#400)
+    assert len(STEP_IDS) == 25  # + line (#400), + foreign_run (#468)
 
 
 def test_every_point_kind_of_the_list_and_no_other():

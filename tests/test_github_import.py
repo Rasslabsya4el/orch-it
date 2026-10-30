@@ -126,7 +126,7 @@ class FakeGh:
             spec = {"conclusion": "success", "cases": GREEN, "expired": False, "started": True,
                     "attempt": attempt, "billed_ms": 300_000, "completed": 360} | per_job.get(name, {})
             job_id = run_id * 10 + index + 1
-            labels = ["ubuntu-latest"] if name == LINUX_CHECK else ["windows-latest"]
+            labels = ["ubuntu-latest"] if name in (LINUX_CHECK, FOREIGN_LINUX) else ["windows-latest"]
             ran = spec["conclusion"] != "skipped"
             self.jobs[run_id].append({
                 "id": job_id, "name": name, "status": "completed", "conclusion": spec["conclusion"],
@@ -137,7 +137,7 @@ class FakeGh:
                 "completed_at": stamp(base, spec["completed"]),
                 "steps": [{"name": "Set up job", "started_at": stamp(base, 60), "completed_at": stamp(base, 62)}]
                 + ([{"name": "pytest", "started_at": stamp(base, 90), "completed_at": stamp(base, 330)}]
-                   if ran else [])})
+                   if ran and name not in (FOREIGN_LINUX, FOREIGN_WINDOWS) else [])})  # a foreign job has no pytest step
             if spec["conclusion"] == "skipped":
                 continue
             billable.append({"job_id": job_id, "duration_ms": spec["billed_ms"]})
@@ -220,7 +220,8 @@ def test_the_started_detail_holds_where_on_what_and_for_which_pull_request(store
     started, _ = pairs(store)["github:100/1001/1"]
     assert started == {"place": "github", "chosen": "github", "reason": None, "run_os": "linux",
                        "commit": "sha100", "branch": "feat/x", "pr": 7, "selection": "full",
-                       "event": "pull_request"}
+                       "event": "pull_request", "job": LINUX_CHECK,
+                       "job_bound_minutes": 9}  # no workflow text here: the setting's default bound
 
 
 def test_a_run_without_a_pull_request_has_a_null_pr(store, gh):
@@ -1377,3 +1378,69 @@ def test_the_reading_is_what_would_cross_asks_and_the_spend_follows_the_readings
     now = BASE + timedelta(minutes=20)
     assert github_budget.would_cross(REPO, 10, store=store, now=now, raw={}) is True  # 150 - 10 < 200 (20% of 1000)
     assert github_budget.actions_spend(REPO, store=store) == 850  # 1000 - 150 at the last reading (GitHub's used)
+
+
+# --- the job name and the bound of each job, and the foreign jobs (#468) -----------------------
+
+FOREIGN_JOBS = (LINUX_CHECK, WINDOWS_CHECK, FOREIGN_LINUX, FOREIGN_WINDOWS)
+
+
+def started_by_job(store, step):
+    """job name -> started detail of the step's pairs (one run per call)."""
+
+    return {started["job"]: started for started, _ in pairs(store, step).values()}
+
+
+@pytest.mark.parametrize("event, pr, bounds", [
+    ("schedule", None, {LINUX_CHECK: 6, WINDOWS_CHECK: 16, FOREIGN_LINUX: 12, FOREIGN_WINDOWS: 33}),
+    ("pull_request", 7, {LINUX_CHECK: 4, WINDOWS_CHECK: 5, FOREIGN_LINUX: 9, FOREIGN_WINDOWS: 12}),
+])
+def test_each_job_of_a_run_names_its_job_and_the_bound_its_run_had(store, gh, event, pr, bounds):
+    gh.add_run(100, jobs=FOREIGN_JOBS, event=event, pr=pr, branch=DEFAULT_BRANCH if pr is None else "feat/x")
+    report = run_import(store, gh, workflow_text=WORKFLOW)
+    tests_of = started_by_job(store, "test_run")
+    foreign_of = started_by_job(store, "foreign_run")
+    assert set(tests_of) == {LINUX_CHECK, WINDOWS_CHECK} and set(foreign_of) == {FOREIGN_LINUX, FOREIGN_WINDOWS}
+    assert {job: tests_of[job]["job_bound_minutes"] for job in tests_of} == {
+        LINUX_CHECK: bounds[LINUX_CHECK], WINDOWS_CHECK: bounds[WINDOWS_CHECK]}
+    assert {job: foreign_of[job]["job_bound_minutes"] for job in foreign_of} == {
+        FOREIGN_LINUX: bounds[FOREIGN_LINUX], FOREIGN_WINDOWS: bounds[FOREIGN_WINDOWS]}
+    assert all(type(s["job_bound_minutes"]) is int for s in [*tests_of.values(), *foreign_of.values()])
+    assert report.jobs == 2  # the required jobs only: a foreign job is not a test run of the place rule
+
+
+def test_a_foreign_job_is_written_as_a_foreign_run_pair_with_its_run_os_and_no_pytest_minutes(store, gh):
+    gh.add_run(100, jobs=FOREIGN_JOBS, event="pull_request", pr=7, branch="feat/x")
+    run_import(store, gh, workflow_text=WORKFLOW)
+    found = pairs(store, "foreign_run")
+    assert set(found) == {"github:100/1003/1", "github:100/1004/1"}
+    started, ended = found["github:100/1003/1"]
+    assert started["run_os"] == "linux" and started["job"] == FOREIGN_LINUX
+    assert found["github:100/1004/1"][0]["run_os"] == "windows"
+    assert ended["outcome"] == "passed" and ended["reason"] is None and ended["run_minutes"] is None
+
+
+def test_a_foreign_job_cancelled_at_its_bound_is_a_cut_no_result_in_its_foreign_run(store, gh):
+    gh.add_run(100, jobs=FOREIGN_JOBS, event="pull_request", pr=7, branch="feat/x",
+               **{FOREIGN_LINUX: {"conclusion": "cancelled", "cases": None, "completed": 60 + 9 * 60}})
+    run_import(store, gh, workflow_text=WORKFLOW)
+    _, ended = pairs(store, "foreign_run")["github:100/1003/1"]
+    assert (ended["outcome"], ended["reason"]) == ("no_result", "cut")
+
+
+def test_no_test_run_event_exists_for_a_foreign_job(store, gh):
+    gh.add_run(100, jobs=FOREIGN_JOBS, event="pull_request", pr=7, branch="feat/x")
+    run_import(store, gh, workflow_text=WORKFLOW)
+    assert set(pairs(store, "test_run")) == {"github:100/1001/1", "github:100/1002/1"}
+    foreign_ids = ("github:100/1003/%", "github:100/1004/%")
+    count = store.query("SELECT COUNT(*) FROM events WHERE step = 'test_run' AND (run LIKE ? OR run LIKE ?)",
+                        foreign_ids).rows
+    assert count == [(0,)]
+
+
+def test_a_run_with_only_linux_still_gets_job_missing_for_windows_and_no_foreign_run(store, gh):
+    gh.add_run(100, jobs=(LINUX_CHECK,))
+    report = run_import(store, gh)
+    _, ended = pairs(store)["github:100/" + WINDOWS_CHECK + "/1"]
+    assert (ended["outcome"], ended["reason"]) == ("no_result", "job_missing")
+    assert report.jobs == 2 and pairs(store, "foreign_run") == {}

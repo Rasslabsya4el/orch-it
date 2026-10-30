@@ -20,6 +20,11 @@ like any other report; the job's GitHub conclusion decides the outcome:
 - anything else (`neutral`, `stale`, `startup_failure`, `action_required`): no_result
   `summary_missing`.
 
+The foreign jobs of each OS (`FOREIGN_CHECKS`: `foreign-linux`, `foreign-windows`) are read the same way and written as a
+`foreign_run` pair (the step id `foreign_run`, so no reader of `test_run` takes them), with no queue wait and no
+`test.result` rows, and no `job_missing` pair: they are not required. The started detail of every pair names its job
+(`job`) and the whole-minute bound the run had (`job_bound_minutes`).
+
 A completed run with no job of a required name in any attempt up to its latest gets, for that
 name, a `job_missing` pair, or, when the run was cancelled, a `stopped` pair with the run's
 reason. A run still in progress is left for the next import. In the `newest` mode (one unpaginated
@@ -57,7 +62,7 @@ from orch_it.events.ids import import_id
 from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns import outcome
-from orch_it.testruns.config import required_checks
+from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS, required_checks
 
 SOURCE = "github"
 WORKFLOW_FILE = "tests.yml"
@@ -67,6 +72,10 @@ NEWEST_RUNS_SETTING = "github_live_newest_runs"  # how many of the newest runs t
 DEFAULT_NEWEST_RUNS = 20
 MAX_PER_PAGE = 100  # GitHub's largest page: an unpaginated list of more runs would silently return 100
 TEST_STEP = "pytest"  # the step of a job that runs the tests
+TEST_RUN_STEP = "test_run"  # the step id of a required job's run: the place rule reads it
+FOREIGN_STEP = "foreign_run"  # the step id of a foreign job's run: no reader of `test_run` sees it
+FOREIGN_PREFIX = "foreign-"  # a foreign job is named by this and the required check it runs beside
+FOREIGN_CHECKS = tuple(FOREIGN_PREFIX + name for name in DEFAULT_REQUIRED_CHECKS)  # foreign-linux, foreign-windows
 REPORT_FILE = "junit.xml"
 NIGHTLY_EVENTS = ("schedule", "workflow_dispatch")
 API_TIMEOUT_S = 120
@@ -512,12 +521,14 @@ def _facts(run: dict) -> _RunFacts:
 
 @dataclass
 class _Target:
-    """One test run to write: a real job (`job` set) or a required job the run lacks."""
+    """One test run to write: a real job (`job` set) or a required job the run lacks. `step`: `test_run` for a
+    required job, `foreign_run` for a foreign one."""
 
     key: str  # `<run id>/<job id or job name>/<attempt>`
     name: str
     attempt: int
     job: dict | None
+    step: str = TEST_RUN_STEP
 
     @property
     def run(self) -> str:
@@ -535,6 +546,7 @@ class _Importer:
                  workflow_text=""):
         self.store, self.repo, self.gh, self.keep, self.timed = store, repo, gh, keep, timed
         self.required, self.job_bound, self.now, self.report = required, job_bound, now, report
+        self.foreign = FOREIGN_CHECKS  # the foreign jobs, imported beside the required ones, never counted as them
         self.bounds = workflow_bounds(workflow_text)  # each job's own bound; `job_bound` only where it has none
         self.budgeted: set[int] = set()  # runs whose Actions budget reading is among the events built
         self.facts_of_run = {run["id"]: _facts(run) for run in every_run}
@@ -547,22 +559,30 @@ class _Importer:
         targets, present = [], set()
         for job in jobs:
             name = job.get("name")
-            if not isinstance(name, str) or name.strip() not in self.required:
+            if not isinstance(name, str):
                 continue
-            name, job_attempt = name.strip(), _attempt(job)
+            name = name.strip()
+            if name in self.required:
+                step = TEST_RUN_STEP
+            elif name in self.foreign:
+                step = FOREIGN_STEP
+            else:
+                continue
+            job_attempt = _attempt(job)
             job_id = _need_id(job, "job")
             _objects(job.get("steps"), "steps")
-            if job_attempt <= attempt:
+            if step == TEST_RUN_STEP and job_attempt <= attempt:
                 present.add(name)
             if job.get("conclusion") != "skipped":
-                targets.append(_Target(f"{run_id}/{job_id}/{job_attempt}", name, job_attempt, job))
+                targets.append(_Target(f"{run_id}/{job_id}/{job_attempt}", name, job_attempt, job, step))
         targets += [_Target(f"{run_id}/{name}/{attempt}", name, attempt, None)
                     for name in self.required if name not in present]
 
         stored = self.store.existing_ids([i for t in targets for i in t.known_ids()])
         pending = []
         for target in targets:
-            self.report.jobs += 1
+            if target.step == TEST_RUN_STEP:  # the report's jobs are the required ones, as before
+                self.report.jobs += 1
             if target.id("step.ended") in stored:
                 self.report.already_stored += sum(i in stored for i in target.known_ids())
             else:
@@ -639,6 +659,7 @@ class _Importer:
     def _target_events(self, run: dict, target: _Target, listed: set, billed: dict) -> list[dict]:
         job = target.job
         created = _moment(run.get("created_at"))
+        bound = math.ceil(job_bound_of(self.bounds, target.name, run.get("event"), self.job_bound))  # whole minutes
         if job is None:  # a required job the run never had
             if run.get("conclusion") == "cancelled":
                 end = outcome.RunEnd("stopped", self._superseded_reason(run), (), False)
@@ -675,29 +696,32 @@ class _Importer:
         envelope = {"repo": self.repo, "ticket": None, "role": "github", "session": None,
                     "parent_session": None, "run": target.run, "note": None}
         events = [self._event("step.started", target.id("step.started"), started_at,
-                              envelope | {"step": "test_run"}, {
+                              envelope | {"step": target.step}, {
                                   "place": "github", "chosen": "github", "reason": None,
                                   "run_os": run_os, "commit": run.get("head_sha"),
                                   "branch": run.get("head_branch"), "pr": pr,
                                   "selection": "nightly" if event_name in NIGHTLY_EVENTS else "full",
-                                  "event": event_name})]
-        if wait is not None:
+                                  "event": event_name, "job": target.name, "job_bound_minutes": bound})]
+        # a foreign job's queue wait and cases stay out of the `wait` and `test.result` events: their readers take
+        # the GitHub queue and the per-case times of every run, with or without a step filter
+        if wait is not None and target.step == TEST_RUN_STEP:
             events += [
                 self._event("step.started", target.id("wait.started"), wait[0],
                             envelope | {"step": "wait"},
                             {"reason": "github_queue", "on": target.run}),
                 self._event("step.ended", target.id("wait.ended"), wait[1],
                             envelope | {"step": "wait"}, {"outcome": "passed", "reason": None})]
-        for number, detail in enumerate(end.result_details(), start=1):
+        results = end.result_details() if target.step == TEST_RUN_STEP else []
+        for number, detail in enumerate(results, start=1):
             events.append(self._event("test.result", target.id(f"test.result/{number}"), ended_at,
-                                      envelope | {"step": "test_run"}, detail))
+                                      envelope | {"step": target.step}, detail))
         if reading is not None and run["id"] not in self.budgeted:  # one reading per run, whatever its jobs carry
             self.budgeted.add(run["id"])
             events.append(github_budget.reading_event(
                 self.repo, budget="actions", remaining=reading[0], limit=reading[1], reset=reading[2], at=ended_at,
                 event_id=import_id(SOURCE, str(run["id"]), "actions_budget")))
         events.append(self._event("step.ended", target.id("step.ended"), ended_at,
-                                  envelope | {"step": "test_run"}, end.ended_detail() | minutes))
+                                  envelope | {"step": target.step}, end.ended_detail() | minutes))
         return events
 
     def _ran_to_the_bound(self, run: dict, name: str, job: dict, started: datetime | None,
