@@ -191,3 +191,53 @@ def test_a_stop_that_matches_no_live_process_is_allowed():
     stop = Stop((), (Matcher("name_glob", "ruby"),), False, False, "killall", "seg")
     assert judge(stop, tree) is None
     assert judge(stop_pids(999), tree) is None  # a pid that is not live: nothing to stop
+
+
+# --- #419 unit 3: a parent that died, a worker that ended, a process with neither fact ---------
+
+def test_a_process_whose_git_bash_parent_died_stays_own_by_its_session_id():
+    # Git Bash (pid 40) was killed; its child is re-parented to pid 1, so the parent chain no
+    # longer reaches the agent. The session id still in its environment proves it own.
+    facts = FakeFacts([proc(50, ppid=1, start=30.0, env_session=SESSION)])
+    assert own(50, facts) is True
+
+
+def test_a_process_whose_parent_is_no_longer_in_the_tree_stays_own_by_its_session_id():
+    facts = FakeFacts([proc(50, ppid=40, start=30.0, env_session=SESSION)])  # pid 40 not live
+    assert own(50, facts) is True
+
+
+def test_a_session_stop_ends_a_git_bash_child_whose_bash_parent_died():
+    tree = Tree([own_row(50, name="python.exe", cmd="python script.py", ppid=40)])
+    assert judge(stop_pids(50, tree=True), tree) is None
+
+
+def test_a_process_started_by_a_worker_is_the_orch_sessions_own_after_the_worker_ended():
+    # the worker subagent (pid 45, not live any more) started pid 50 with the ORCH session's id
+    # in its environment; the ORCH agent (AGENT) is alive but not in pid 50's chain
+    facts = FakeFacts([proc(AGENT, start=10.0), proc(50, ppid=45, start=30.0, env_session=SESSION)])
+    assert own(50, facts) is True
+
+
+def test_orch_stops_a_pytest_its_finished_worker_left_running():
+    tree = Tree([own_row(50, name="python.exe", cmd="python -m pytest tests", ppid=45)])
+    stop = Stop((), (Matcher("cmdline_regex", "pytest"),), False, False, "taskkill", "seg")
+    assert judge(stop, tree) is None
+
+
+def test_a_process_with_no_session_id_whose_parent_died_is_foreign():
+    facts = FakeFacts([proc(50, ppid=40, start=30.0, env_session=None)])
+    assert own(50, facts) is False
+
+
+def test_another_sessions_process_whose_parent_died_is_refused_as_foreign_on_stop():
+    tree = Tree([foreign_row(50, name="python.exe", cmd="python -m pytest", ppid=40)])
+    refusal = judge(stop_pids(50), tree)
+    assert refusal is not None and refusal.reason == "foreign_process" and refusal.pid == 50
+
+
+def test_another_sessions_pytest_left_by_its_worker_is_refused_as_foreign_on_stop():
+    tree = Tree([foreign_row(50, name="python.exe", cmd="python -m pytest tests", ppid=45)])
+    stop = Stop((), (Matcher("cmdline_regex", "pytest"),), False, False, "taskkill", "seg")
+    refusal = judge(stop, tree)
+    assert refusal is not None and refusal.reason == "foreign_process" and refusal.pid == 50
