@@ -89,6 +89,7 @@ def test_one_free_core_runs_the_old_command():
 @pytest.mark.parametrize("carried, count", [
     (("-n", "2"), 2), (("-n4",), 4), (("--numprocesses=3",), 3), (("--numprocesses", "5"), 5),
     (("-n", "auto"), None), (("-nauto",), None), (("-n=6",), 6), (("-nlogical",), None),
+    (("-n", "0"), 1), (("--numprocesses=0",), 1), (("-n=0",), 1),  # `-n 0`: xdist's switch-off, one process
 ])
 def test_a_command_that_carries_its_workers_is_left_alone(carried, count):
     command = (*PYTEST, *carried)
@@ -218,6 +219,14 @@ def test_the_workers_line_carries_the_note_when_xdist_is_missing(tmp_path, capsy
     monkeypatch.setattr(workers, "xdist_importable", lambda: False)
     code, lines = run_cli(tmp_path, capsys)
     assert code == 0 and lines[0] == "workers: 1 note=workers_unavailable"
+
+
+@NEEDS_XDIST
+def test_a_command_that_spells_its_own_workers_heads_the_output_without_a_count(tmp_path, capsys, eight_cores,
+                                                                              settings_file):
+    settings_file.write_text(json.dumps({"test_command": [*PYTEST, "-n", "auto"]}), "utf-8")
+    code, lines = run_cli(tmp_path, capsys)
+    assert lines[0] == "workers: set by the command note=workers_in_command" and lines[1].startswith("run=")
 
 
 def test_a_run_with_no_workers_has_no_workers_line(tmp_path, capsys, settings_file):

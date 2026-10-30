@@ -117,7 +117,9 @@ def _carried(command: tuple[str, ...]) -> tuple[bool, int | None]:
             value = arg[2:].lstrip("=")
         else:
             continue
-        return True, int(value) if value.isdigit() else None
+        if not value.isdigit():
+            return True, None
+        return True, int(value) or 1  # `-n 0` is xdist's switch-off: one process, like `-p no:xdist`
     return False, None
 
 
