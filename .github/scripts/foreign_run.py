@@ -166,6 +166,26 @@ def excluded_from_bin(name: str) -> bool:
     return name.startswith("python") and name != "python3"
 
 
+def _is_linkable(entry: Path) -> bool:
+    """#414: an executable file of a PATH folder. An entry the scan cannot stat or access (permission denied, a link
+    that vanished) is not one: it is skipped, and the scan goes on."""
+
+    try:
+        return entry.is_file() and os.access(entry, os.X_OK)
+    except OSError:
+        return False
+
+
+def _entries(folder: Path) -> list[Path]:
+    """#414: the entries of a PATH folder, sorted. A folder the scan cannot stat or list (permission denied) has none,
+    as a missing folder has none: it is skipped, and the scan goes on."""
+
+    try:
+        return sorted(folder.iterdir()) if folder.is_dir() else []
+    except OSError:
+        return []
+
+
 def make_bin(bin_dir: Path, source_path: str) -> None:
     """POSIX, the bin rule (`excluded_from_bin`): `bin_dir` holds a link to every executable file of the folders of
     `source_path`, in PATH order, so the first file of a name wins as it does on the PATH; the excluded names are not
@@ -173,10 +193,10 @@ def make_bin(bin_dir: Path, source_path: str) -> None:
 
     bin_dir.mkdir(exist_ok=True)
     for folder in source_path.split(os.pathsep):
-        if not folder or not Path(folder).is_dir():
+        if not folder:
             continue
-        for entry in sorted(Path(folder).iterdir()):
-            if excluded_from_bin(entry.name) or not entry.is_file() or not os.access(entry, os.X_OK):
+        for entry in _entries(Path(folder)):
+            if excluded_from_bin(entry.name) or not _is_linkable(entry):
                 continue
             _link(bin_dir / entry.name, entry)
 
