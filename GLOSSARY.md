@@ -81,15 +81,16 @@ from the run's status.
 _Avoid_: queue time, pending time, waiting time
 
 **Poll**:
-The layer's repeated read of GitHub or a machine until a result appears: the merge line's read of a head's required checks
-every `poll_seconds`, its wait for a line lock, a run's read of its jobs, its check that GitHub marks a landed pull request
-merged. A poll waits longer while the request budget is under its threshold.
+The layer's repeated read of GitHub or a machine until a result appears. The polls that go through the request budget (the
+merge line's waits for a head's required checks, for a turn behind a higher-priority repo and for a member's run, and a
+test run's read of its jobs on GitHub) wait longer while the budget is under its threshold; the line-lock wait waits the
+setting `poll_seconds` and the check that a landing is marked merged waits a fixed interval, and neither slows with the budget.
 _Avoid_: watch, wait loop, refresh
 
 **Request budget**:
 The account's GitHub API calls per hour, counted by the layer in the store (one `github.called` event a call); GitHub's
 own limit is read from `rate_limit`, and a poll waits longer while the remaining falls under the threshold, the setting
-`request_budget_threshold` (20% of the limit by default). The Actions token keeps a budget of its own per repo.
+`request_budget_threshold`, whose default is in the defaults file beside the budget code. The Actions token keeps a budget of its own per repo.
 _Avoid_: rate limit, quota, API budget
 
 **Placeholder file**:
@@ -101,9 +102,11 @@ What a test run's process sees of its environment: the OS's base variables and t
 _Avoid_: sandbox, isolated environment
 
 **Foreign run**:
-A run of orch-it's whole suite and its setup commands in a copy that is not the owner's setup: an invented account and
-repo, a folder with another name, no git identity, no GitHub variable, a fresh home. The jobs `foreign-linux` and
-`foreign-windows` run it per change, `foreign-macos` on the nightly schedule (`.github/scripts/foreign_run.py`, `.github/workflows/tests.yml`).
+A run of orch-it's suite and its setup commands in a copy that is not the owner's setup: an invented account and repo, a
+folder with another name, no git identity, no GitHub variable, a fresh home. The foreign job of each OS (see
+`.github/workflows/tests.yml`; the script is `.github/scripts/foreign_run.py`) runs it: the Linux and Windows jobs per change
+and on the nightly, the macOS one on the nightly only. Per change the Linux job runs the not-slow, not-live tests and the
+Windows job only those of them marked as touching the OS; on the nightly every job runs everything but the live tests.
 _Avoid_: sandbox run, clean run, outside run
 
 **Bound**:
@@ -432,11 +435,11 @@ it, parks it or sends it to the brain.
 _Avoid_: sync, webhook handler, hand-back
 
 **Red-on-main ticket**:
-The ticket of tests that fail on the main line, opened by the layer; a pull request red only on them waits for it.
+The ticket of tests that fail on the main line, opened by the layer; a pull request red only on them waits for it. Not Red on main, which names a required check that is red on main's head.
 _Avoid_: red main list, skip list, known failures
 
 **Red on main**:
 A required check name that failed on the head main had when a batch was made (a name main has no result for, or that is
 green or pending there, is not red on main). When every red name of a batch is red on main, the batch holds and none of
-its members is sent back (`name_red_on_main`, `merge/line.py`).
+its members is sent back (`name_red_on_main`, `merge/line.py`). Not the Red-on-main ticket, which lists test ids, not check names.
 _Avoid_: known red, skipped name, main-red check
