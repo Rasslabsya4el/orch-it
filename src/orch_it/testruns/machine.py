@@ -42,8 +42,8 @@ from orch_it.testruns.remote import PREFIX as PROTOCOL_PREFIX
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PREFIX = PROTOCOL_PREFIX.encode("ascii")
 FOLDER = Path(__file__).parent
-BUNDLE = ("environment.py", "places.py", "process.py", "remote.py", "pytest_plugin/__init__.py",
-          "pytest_plugin/orch_it_ids.py")
+BUNDLE = ("environment.py", "places.py", "process.py", "remote.py", "workers.py",
+          "pytest_plugin/__init__.py", "pytest_plugin/orch_it_ids.py")
 SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=15",
                "-o", "ServerAliveCountMax=4")
 REMOTE_PROGRAM = "import sys;exec(sys.stdin.readline())"
@@ -151,7 +151,8 @@ class MachinePlace:
             "commit": request.commit, "command": list(request.command), "test_env": request.test_env,
             "bound_seconds": request.bound_seconds,
             "stale_seconds": request.bound_seconds + self.setup_seconds,
-            "ids": request.ids, "identity": _identity_of(origin)}) + "\n").encode("utf-8")
+            "ids": request.ids, "identity": _identity_of(origin),
+            "workers_max": self.machine.workers_max}) + "\n").encode("utf-8")
 
     def _read(self, lines, stderr, ssh, scratch, started, bound_seconds) -> PlaceEnd:
         host = self.machine.host
@@ -204,7 +205,8 @@ class MachinePlace:
             report = scratch / "junit.xml"
             report.write_bytes(packed)
         return PlaceEnd(report, bool(end.get("cut")), bool(end.get("slept")), end.get("rc"), start,
-                        float(end.get("seconds") or 0.0), str(end.get("log_tail") or "")[-LOG_TAIL_CHARS:])
+                        float(end.get("seconds") or 0.0), str(end.get("log_tail") or "")[-LOG_TAIL_CHARS:],
+                        end.get("workers"), end.get("workers_note"))
 
     @staticmethod
     def _close(ssh: subprocess.Popen, sent: threading.Event) -> None:

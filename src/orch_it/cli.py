@@ -329,7 +329,11 @@ def _tests_run(args) -> tuple[str, int]:
     done = run_tests(_store(args), work_tree=Path(args.work_tree), repo=repo, settings=test_settings,
                      ids_file=Path(args.ids_file) if args.ids_file else None, place=args.place,
                      need_os=args.os, role=args.role, ticket=args.ticket)
-    line = (f"run={done.run} place={done.place} outcome={done.outcome} reason={done.reason or '-'}"
+    header = ""
+    if done.workers is not None or done.workers_note:  # a pytest command at a PC place: the first line says on how many
+        count = done.workers if done.workers is not None else "set by the command"  # `-n auto`: no count of ours
+        header = f"workers: {count}" + (f" note={done.workers_note}" if done.workers_note else "") + "\n"
+    line = header + (f"run={done.run} place={done.place} outcome={done.outcome} reason={done.reason or '-'}"
             f" collected={done.collected} failed={done.failed}\n")
     return line, TESTS_EXIT.get(done.outcome, TESTS_EXIT_OTHER)
 
