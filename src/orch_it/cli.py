@@ -387,13 +387,16 @@ def _guards_check_text(args) -> tuple[str, int]:
 
 
 def _guards_status(args) -> tuple[str, int]:
-    """`guards status`: the six facts as a table (fact, ok, detail); exit 0 when all are ok, 1 when
-    any is not (a protection that cannot be read is a failed fact, not an error)."""
+    """`guards status`: the six facts as a table (fact, ok, detail), then one line `<name> waits for a <os> place` per
+    required name no place of the settings can cover; exit 0 when all facts are ok, 1 when any is not (a protection that
+    cannot be read is a failed fact, not an error)."""
 
     work_tree = Path(args.work_tree)
     report = guards_status.status(_store(args), args.repo or _repo_of(str(work_tree)), work_tree)
     rows = [[fact.name, "yes" if fact.ok else "no", fact.detail] for fact in report.facts]
-    return render(QueryResult(["fact", "ok", "detail"], rows)), 0 if report.ok else 1
+    table = render(QueryResult(["fact", "ok", "detail"], rows))
+    waiting = "".join(f"{line}\n" for line in report.waiting)  # the names no place of the settings can cover
+    return table + waiting, 0 if report.ok else 1
 
 
 def _guards_install(args) -> tuple[str, int]:

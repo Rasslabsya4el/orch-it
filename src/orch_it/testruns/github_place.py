@@ -76,6 +76,36 @@ def checks_on_os(text: str, required: tuple[str, ...], os_name: str | None) -> t
         and os_name in (os_of({"labels": [label]}) for label in job["labels"]) for job in jobs))
 
 
+def os_free_checks(text: str, required: tuple[str, ...]) -> tuple[str, ...]:
+    """The names of `required` tied to no OS, in the order of `required`: no job of the workflow `text` has the name (a
+    scan of the pull request, the commit e-mail check: checks that run where the suite runs). A job whose runner names no
+    OS (a matrix expression, `self-hosted`) is not OS-free, its OS is only unknown. A workflow with no job at all says
+    nothing of any name, so none is OS-free then."""
+
+    jobs = _jobs_of(text)
+    if not jobs:
+        return ()
+    named = {job["name"] or job["key"] for job in jobs}
+    return tuple(check for check in required if check not in named)
+
+
+def os_bound_checks(text: str, required: tuple[str, ...]) -> dict[str, str]:
+    """The names of `required` that are jobs of the workflow `text` with an OS's runner, each with that OS (the first
+    label that names one), in the order of `required`; a job whose runner names no OS is left out."""
+
+    jobs = _jobs_of(text)
+    bound: dict[str, str] = {}
+    for check in required:
+        for job in jobs:
+            if (job["name"] or job["key"]) != check:
+                continue
+            os_name = next((o for o in (os_of({"labels": [label]}) for label in job["labels"]) if o), None)
+            if os_name:
+                bound[check] = os_name
+                break
+    return bound
+
+
 def workflow_text_of(work_tree: Path) -> str:
     """The text of the work tree's `tests.yml`; empty when it cannot be read."""
 

@@ -168,7 +168,7 @@ def test_a_run_with_github_on_names_no_cause(tmp_path):
 
 # --- the line merges on a result of another place, posted under the required names ------------------------
 
-SCAN_CHECK = "scan-of-another-kind"  # a required name no test job posts: a scan of the pull request, not of the tests
+SCAN_CHECK = "scan-of-another-kind"  # a required name tied to no OS (no job of the workflow): a scan of the pull request
 SUITE_JOBS = {LINUX_CHECK: LINUX_OS, WINDOWS_CHECK: WINDOWS_OS}  # the test jobs of the repo's `tests` workflow, by OS
 
 
@@ -230,9 +230,10 @@ def test_with_github_out_the_suite_runs_at_own_the_names_are_posted_on_the_sha_a
 
 
 @pytest.mark.parametrize("cause", CAUSES)
-@pytest.mark.parametrize("uncovered", [WINDOWS_CHECK, SCAN_CHECK], ids=["other_os_test_job", "scan_not_a_test_job"])
-def test_a_name_the_suite_run_did_not_cover_stays_unposted_and_holds_the_batch_naming_it(tmp_path, cause, uncovered):
-    # the pass ran the test suite at a Linux place: it covers the Linux job only, not the Windows job, not a scan
+def test_a_name_of_another_os_stays_unposted_and_holds_the_batch_naming_it(tmp_path, cause):
+    # the pass ran the test suite at a Linux place: it covers the Linux job only, not the Windows job (a name tied to no
+    # OS, like SCAN_CHECK, is posted with it: tests/test_line_os_free_names.py)
+    uncovered = WINDOWS_CHECK
     w = batch_world(tmp_path, cause, tickets=(10,), required=(LINUX_CHECK, uncovered))
     hub, store, prs, ci = w.world
     done = line(w, tmp_path)
