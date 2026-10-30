@@ -23,16 +23,16 @@ import pytest
 from scan_repos import GITHUB_TOKEN, SOMEONE_HOME, Repo, default_host
 
 from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
-from required_names import LINUX_CHECK, WINDOWS_CHECK
+from required_names import LINUX_CHECK, MACOS_OS, WINDOWS_CHECK
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 JOB_HEAD = re.compile(r"  ['\"]?([A-Za-z0-9_-]+)['\"]?:")
-# the jobs that run pytest themselves; the foreign jobs run `.github/scripts/foreign_run.py` (#414 unit 10)
+# the jobs that run pytest themselves; the foreign jobs run `.github/scripts/foreign_run.py`
 PYTEST_JOBS = (LINUX_CHECK, WINDOWS_CHECK)
-FOREIGN_PREFIX = "foreign-"  # the job names are built from the required names (no quoted job name in code)
-FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS = FOREIGN_PREFIX + LINUX_CHECK, FOREIGN_PREFIX + WINDOWS_CHECK, FOREIGN_PREFIX + "macos"
+FOREIGN_PREFIX = "foreign-"  # the job names are built from the required names and the OS words (no quoted job name in code)
+FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS = FOREIGN_PREFIX + LINUX_CHECK, FOREIGN_PREFIX + WINDOWS_CHECK, FOREIGN_PREFIX + MACOS_OS
 FOREIGN_JOBS = (FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS)
 
 
@@ -498,7 +498,7 @@ def test_the_scan_step_passes_names_that_only_look_like_a_default_host_name(tmp_
     assert (done.returncode, done.stdout) == (0, "hits=0 commits=1\n"), done.stderr
 
 
-# --- the foreign run (#414 unit 10) and the rate-limit file of the pytest jobs (#414 unit 9) --------------------------
+# --- the foreign run (#414) and the rate-limit file of the pytest jobs (#414) ------------------------------------------
 
 def test_the_foreign_jobs_run_the_script_under_bash_and_upload_their_report():
     jobs = job_lines(WORKFLOW.read_text("utf-8"))
@@ -529,9 +529,38 @@ def test_the_pytest_jobs_save_the_rate_limit_after_pytest_and_never_fail_the_job
         step = step_named(steps, "save the rate limit of the account")
         text = "\n".join(step)
         assert "continue-on-error: true" in text, job
-        assert re.search(r"^\s+run: gh api rate_limit > actions-rate-limit\.json$", text, re.M), job
+        if job == LINUX_CHECK:
+            assert re.search(r"^\s+run: gh api rate_limit > actions-rate-limit\.json \|\| rm -f actions-rate-limit\.json$",
+                             text, re.M), job
+        else:  # the Windows job's step is PowerShell: a failed call removes the file it made
+            assert re.search(r"^\s+shell: pwsh$", text, re.M), job
+            assert "gh api rate_limit > actions-rate-limit.json" in text, job
+            assert "if ($LASTEXITCODE -ne 0) { Remove-Item" in text and "actions-rate-limit.json" in text, job
         assert steps.index(step) > steps.index(step_named(steps, "pytest")), job
         assert steps.index(step) < steps.index(step_named(steps, "upload the JUnit report")), job
+
+
+@pytest.mark.parametrize("answer", ["ok", "fails"])
+def test_a_failed_rate_limit_call_leaves_no_file_on_linux(tmp_path, answer):
+    # the workflow's own command line, run under bash with a stand-in `gh` defined as a function (no PATH, no file)
+    step = step_named(steps_of(pytest_job_lines()[LINUX_CHECK]), "save the rate limit of the account")
+    command = re.search(r"^\s+run: (.*)$", "\n".join(step), re.M).group(1)
+    stand_in = ("gh() { echo '{\"resources\":{}}'; }" if answer == "ok"
+                else "gh() { echo 'partial'; return 1; }")
+    done = subprocess.run([a_bash(), "--noprofile", "--norc", "-c", f"{stand_in}\n{command}"], cwd=tmp_path,
+                          capture_output=True, text=True, creationflags=NO_WINDOW)
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "actions-rate-limit.json").exists() is (answer == "ok")
+
+
+def test_the_foreign_linux_job_passes_the_suite_switch_the_linux_pytest_step_sets_and_the_others_do_not():
+    jobs = job_lines(WORKFLOW.read_text("utf-8"))
+    linux = "\n".join(step_named(steps_of(jobs[LINUX_CHECK]), "pytest"))
+    assert re.search(r'^\s+ORCH_IT_REQUIRE_SSHD: "1"$', linux, re.M)
+    for name in (FOREIGN_LINUX, FOREIGN_WINDOWS, FOREIGN_MACOS):
+        run = "\n".join(step_named(steps_of(jobs[name]), "the foreign run"))
+        assert bool(re.search(r'^\s+ORCH_IT_REQUIRE_SSHD: "1"$', run, re.M)) is (name == FOREIGN_LINUX), name
+        assert "GH_TOKEN" not in run, name  # the foreign setup holds no token
 
 
 def test_each_foreign_job_bound_says_on_its_line_that_it_is_unmeasured():

@@ -1,9 +1,14 @@
-"""The foreign run (#414 unit 10): the orch-it suite and the layer's setup commands, run in a copy of the checkout that
-is not the owner's setup. The copy sits in a folder with another name, its origin is a local bare repo under an
-invented account and repo, and the child gets the clean environment (the glossary's term): the OS's base variables
-only, a fresh home, git's configuration read from an empty file, no git identity, no GitHub variable, no token.
-On POSIX the child's PATH is one bin folder: links to the files of python3's folder except the bare name `python`,
-plus the tools git and the suite's shell tests need (git runs its hooks through sh; the shell tests look for bash).
+"""The foreign run (#414): the orch-it suite and the layer's setup commands, run in a copy of the checkout that is not the
+owner's setup. The copy sits in a folder with another name, its origin is a local bare repo under an invented account
+and repo, and the child gets the clean environment (the glossary's term): the OS's base variables only, a fresh home,
+git's configuration read from an empty file, no git identity, no GitHub variable, no token. The one switch of the
+suite that the job sets (ORCH_IT_REQUIRE_SSHD, as the Linux pytest step does) is passed on to the child.
+
+Bin rule (POSIX; macOS is POSIX too, and keeps the same rule): the child's PATH is one bin folder with a link to every
+executable file of the normal PATH, except the names `excluded_from_bin` excludes: `python`, `python2` and any
+`python*` other than `python3`. So python3 is the only Python the child can run, while git, sh and bash (git runs its
+hooks through sh; the shell tests look for bash) and every other tool stay reachable.
+
 Pure standard library: it runs before any install, with the interpreter the job set up.
 """
 
@@ -23,12 +28,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PYTHON_BARE_NAME = "python"
-TOOLS = ("git", "bash", "sh")
-# the OS's base variables a test process gets; mirrors `clean_environment` (src/orch_it/testruns/environment.py)
+SUITE_SWITCHES = ("ORCH_IT_REQUIRE_SSHD",)  # set by a job for the suite (the Linux pytest step sets it); passed on
+# the live tests read GitHub's own runs with GH_TOKEN and gh, which this setup does not hold; the nightly windows job runs them
+NIGHTLY_SELECTION = "not live"
+# the OS's base variables a test process gets; mirrors `clean_environment` (src/orch_it/testruns/environment.py).
+# HOMEDRIVE and HOMEPATH are left out: they name the runner's real home, and USERPROFILE is set to the fresh one.
 BASE_NAMES = {
     "nt": ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP",
-                "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA"),
+           "USERPROFILE", "APPDATA", "LOCALAPPDATA"),
     "posix": ("PATH", "HOME", "TMPDIR"),
 }
 WINDOWS_HOME_NAMES = ("PATH", "HOME", "USERPROFILE")
@@ -111,18 +118,40 @@ def child_env(source: Mapping[str, str], *, home: Path, empty_config: Path, path
     return env
 
 
-def make_bin(bin_dir: Path, python_dir: Path, tools: Mapping[str, str]) -> None:
-    """POSIX: `bin_dir` holds a link to each file of python3's folder except the bare name `python`, and a link to
-    each tool (name -> path). Calling it again links what appeared since (a pip install puts its scripts there)."""
+def suite_switches(env: Mapping[str, str], environ: Mapping[str, str]) -> dict[str, str]:
+    """The child's environment with the suite's own switches of `environ` copied in (only those the job set)."""
 
-    if PYTHON_BARE_NAME in tools:
-        raise ForeignRunError("the bin folder never holds the bare name `python`")
+    return dict(env) | {name: environ[name] for name in SUITE_SWITCHES if name in environ}
+
+
+def selection(nightly: bool, marks_left_out: str) -> str:
+    """The pytest `-m` expression of the run: the change run's marks (the workflow's `MARKS_LEFT_OUT_OF_CHANGE_RUNS`),
+    or on the nightly everything but the live tests (`NIGHTLY_SELECTION`)."""
+
+    return NIGHTLY_SELECTION if nightly else marks_left_out
+
+
+def excluded_from_bin(name: str) -> bool:
+    """The bin rule: no `python`, no `python2`, no `python*` other than `python3` in the child's PATH. macOS keeps
+    this rule as well: its foreign job runs on the same POSIX PATH as Linux, and a looser rule would let a bare
+    `python` through there."""
+
+    return name.startswith("python") and name != "python3"
+
+
+def make_bin(bin_dir: Path, source_path: str) -> None:
+    """POSIX, the bin rule (`excluded_from_bin`): `bin_dir` holds a link to every executable file of the folders of
+    `source_path`, in PATH order, so the first file of a name wins as it does on the PATH; the excluded names are not
+    linked. Calling it again links what appeared since (a pip install puts its scripts in python3's folder)."""
+
     bin_dir.mkdir(exist_ok=True)
-    for entry in sorted(python_dir.iterdir()):
-        if entry.name != PYTHON_BARE_NAME and not entry.is_dir():
+    for folder in source_path.split(os.pathsep):
+        if not folder or not Path(folder).is_dir():
+            continue
+        for entry in sorted(Path(folder).iterdir()):
+            if excluded_from_bin(entry.name) or not entry.is_file() or not os.access(entry, os.X_OK):
+                continue
             _link(bin_dir / entry.name, entry)
-    for name, target in tools.items():
-        _link(bin_dir / name, Path(target))
 
 
 def _link(link: Path, target: Path) -> None:
@@ -183,38 +212,34 @@ def run(checkout: Path, environ: Mapping[str, str]) -> int:
         empty = base / "empty.gitconfig"
         empty.write_text("", "utf-8")
         source_path = environ.get("PATH", "")
-        tools: dict[str, str] = {}
+        bin_dir = None
         if os.name == "nt":
-            path, python, python_dir, bin_dir = source_path, sys.executable, None, None
+            path, python = source_path, sys.executable
         else:
-            found = shutil.which("python3", path=source_path)
-            if found is None:
+            # python3 is looked up on the PATH, not taken as sys.executable: the run proves that python3, found the way
+            # the runner finds it, is enough for the setup commands and the suite
+            if shutil.which("python3", path=source_path) is None:
                 raise ForeignRunError("no python3 on PATH")
-            python_dir = Path(found).parent
-            for tool in TOOLS:
-                located = shutil.which(tool, path=source_path)
-                if located is not None:
-                    tools[tool] = located
             bin_dir = base / "bin"
-            make_bin(bin_dir, python_dir, tools)
+            make_bin(bin_dir, source_path)
             path, python = str(bin_dir), str(bin_dir / "python3")
-        env = child_env(environ, home=home, empty_config=empty, path=path, os_name=this_os())
+        env = suite_switches(child_env(environ, home=home, empty_config=empty, path=path, os_name=this_os()), environ)
         copy = make_copy(checkout, base, names, env)
         print(f"foreign run: the copy is in a folder of its own; its origin is {names.account}/{names.repo}, invented")
         _step([python, "-m", "pip", "install", "--disable-pip-version-check", "-e", ".[test]"], copy, env,
               "the setup command `pip install -e .[test]`")
         if bin_dir is not None:
-            make_bin(bin_dir, python_dir, tools)
+            make_bin(bin_dir, source_path)  # pip put its scripts in python3's folder: link them too
         _step([python, "-m", "orch_it", "guards", "install", "--work-tree", str(copy)], copy, env,
               "the setup command `guards install`")
         nightly = environ.get("NIGHTLY") == "true"
         kind = "nightly" if nightly else "per_change"
         bound = tomllib.loads((copy / "pyproject.toml").read_text("utf-8"))["tool"]["orch_it"]["tests"][
             f"{kind}_timeout_seconds"]
-        args = [python, "-m", "pytest", "-q", f"--timeout={bound}", f"--junitxml={checkout / 'junit.xml'}"]
-        if not nightly:
-            args += ["-m", environ["MARKS_LEFT_OUT_OF_CHANGE_RUNS"]]
-        print(f"foreign run: pytest ({kind} run, each test bound to {bound} seconds)")
+        marks = selection(nightly, environ["MARKS_LEFT_OUT_OF_CHANGE_RUNS"])
+        args = [python, "-m", "pytest", "-q", f"--timeout={bound}", f"--junitxml={checkout / 'junit.xml'}",
+                "-m", marks]
+        print(f"foreign run: pytest ({kind} run, marks `{marks}`, each test bound to {bound} seconds)")
         return subprocess.run(args, cwd=copy, env=env).returncode
     finally:
         shutil.rmtree(base, onerror=_make_writable)

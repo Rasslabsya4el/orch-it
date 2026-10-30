@@ -103,15 +103,15 @@ jobs:
           python .github/scripts/merge_junit.py junit.xml junit.xml junit-serial.xml
           if [ "$serial" = 5 ]; then serial=0; fi
           exit $(( parallel != 0 ? parallel : serial ))
-      # The account's rate limit as GitHub reports it at the end of the run (#414 unit 9; the importer, unit 12a, reads
-      # this file name beside junit.xml). Never fails the job: `continue-on-error`.
+      # The account's rate limit as GitHub reports it at the end of the run (the importer reads this file name beside
+      # junit.xml). Never fails the job: `continue-on-error`; a failed call leaves no empty file behind.
       - name: save the rate limit of the account
         if: always()
         continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api rate_limit > actions-rate-limit.json
+        run: gh api rate_limit > actions-rate-limit.json || rm -f actions-rate-limit.json
       - name: upload the JUnit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -144,7 +144,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # a change run takes only the tests marked as touching the OS (`os_touching`, #414 unit 4); the nightly run takes the whole Windows suite
+          # a change run takes only the tests marked as touching the OS (`os_touching`); the nightly run takes the whole Windows suite
           if [ "$NIGHTLY" = "true" ]; then kind=nightly; select=""; else kind=per_change; select="os_touching and ($MARKS_LEFT_OUT_OF_CHANGE_RUNS) and "; fi
           cores=$(python -c "import os; print(os.cpu_count())")
           bound=$(python -c 'import sys, tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["tool"]["orch_it"]["tests"][sys.argv[1] + "_timeout_seconds"])' "$kind")
@@ -161,15 +161,17 @@ jobs:
           python .github/scripts/merge_junit.py junit.xml junit.xml junit-serial.xml
           if [ "$serial" = 5 ]; then serial=0; fi
           exit $(( parallel != 0 ? parallel : serial ))
-      # The account's rate limit as GitHub reports it at the end of the run (#414 unit 9; the importer, unit 12a, reads
-      # this file name beside junit.xml). Never fails the job: `continue-on-error`.
+      # The account's rate limit as GitHub reports it at the end of the run (the importer reads this file name beside
+      # junit.xml). Never fails the job: `continue-on-error`; a failed call removes the file it made, PowerShell's way.
       - name: save the rate limit of the account
         if: always()
         continue-on-error: true
-        shell: bash
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api rate_limit > actions-rate-limit.json
+        run: |
+          gh api rate_limit > actions-rate-limit.json
+          if ($LASTEXITCODE -ne 0) { Remove-Item -Force -ErrorAction SilentlyContinue actions-rate-limit.json }
       - name: upload the JUnit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -180,8 +182,12 @@ jobs:
             actions-rate-limit.json
           if-no-files-found: ignore
 
-  # The foreign run (#414 unit 10): the suite and the layer's setup commands in a copy that is not the owner's setup (another
-  # folder name, an invented origin, no git identity, no GitHub variable; on Linux and macOS a PATH with no bare `python`).
+  # The foreign run: the suite and the layer's setup commands in a copy that is not the owner's setup (another folder
+  # name, an invented origin, no git identity, no GitHub variable; on Linux and macOS a PATH with no bare `python`). It
+  # runs the same selection as the pytest jobs: a change run takes `MARKS_LEFT_OUT_OF_CHANGE_RUNS` (not slow, not live),
+  # the nightly run everything but the live tests (the script's NIGHTLY_SELECTION). The tests that skip or are left out
+  # here are the ones that need gh or GitHub's network: the live ones, which both selections leave out, since the foreign
+  # setup holds no token.
   foreign-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 20  # unmeasured: a guess until the first runs measure it
@@ -194,6 +200,8 @@ jobs:
           python-version: "3.12"
       - name: the foreign run
         shell: bash
+        env:
+          ORCH_IT_REQUIRE_SSHD: "1"  # the same switch the linux pytest step sets: the real sshd test must run here too
         run: python3 .github/scripts/foreign_run.py
       - name: upload the JUnit report
         if: always()
@@ -213,7 +221,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: the foreign run
+      - name: the foreign run  # no ORCH_IT_REQUIRE_SSHD here: the windows pytest step does not set it either
         shell: bash
         run: python .github/scripts/foreign_run.py
       - name: upload the JUnit report
@@ -224,7 +232,9 @@ jobs:
           path: junit.xml
           if-no-files-found: ignore
 
-  # The nightly schedule only: macOS is no machine of the owner's, so its foreign run is read on the nightly (#414 row 11).
+  # The nightly schedule only: macOS is no machine of the owner's, so its foreign run is read on the nightly. Its PATH
+  # takes the same bin rule as Linux's (no bare `python`); on the nightly the script runs the slow tests too, as the
+  # nightly windows job does, and leaves out the live ones (no token in the foreign setup).
   foreign-macos:
     if: github.event_name == 'schedule'
     runs-on: macos-latest
