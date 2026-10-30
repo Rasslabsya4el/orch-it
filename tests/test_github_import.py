@@ -1025,6 +1025,26 @@ def test_the_summary_count_reads_only_the_pytest_lines_when_some_line_names_the_
     assert summary_count(log) == 3274
 
 
+def logged_count_matches(rows: int, log: str) -> bool:
+    """Whether a job's stored test count agrees with its log: the count the log's summary lines give when it
+    has one, else count None, which the check passes (#462: a log with or without the summary line both pass)."""
+
+    expected = summary_count(log)
+    return expected is None or rows == expected
+
+
+def test_a_log_without_a_summary_line_is_count_none_and_passes_the_live_check():
+    """#462 row 2, the outside case: a job log with no test summary line (pytest did not finish) reads as
+    count None, and the live check passes it whatever the stored rows are; a log with the line is compared."""
+
+    log = ("linux\tUNKNOWN STEP\t2026-10-30T04:49:48Z ........................ [ 63%]\n"
+           "linux\tUNKNOWN STEP\t2026-10-30T04:50:57Z merged report: 1587 test cases\n")
+    assert summary_count(log) is None
+    assert logged_count_matches(1587, log) and logged_count_matches(0, log)
+    counted = "linux\tUNKNOWN STEP\t2026-10-30T04:50:55Z 1581 passed, 6 skipped in 133.99s (0:02:13)\n"
+    assert logged_count_matches(1587, counted) and not logged_count_matches(1586, counted)
+
+
 # the margin the live test leaves for skew between the runner's clock and GitHub's
 CLOCK_SKEW_MARGIN = timedelta(seconds=60)
 
@@ -1182,7 +1202,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
             log = counted_gh(["run", "view", str(run["id"]), "-R", live_repo, "--log", "--job", str(job["id"])])
             rows = store.query("SELECT count(*) FROM events WHERE kind = 'test.result' AND run = ?",
                                (key,)).rows[0][0]
-            assert rows == summary_count(log), key
+            assert logged_count_matches(rows, log), key
             compared += 1
     assert compared, "no pull request job with a report to count"
     judged_ids = [r["id"] for r in judged]
