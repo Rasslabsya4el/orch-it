@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from language_tree import git_tree, write_language
 from orch_it import language, settings, tickets
 
 PACKAGE_TABLES = Path(language.__file__).parent / "language_tables"
@@ -61,9 +62,12 @@ GERMAN = """## For the human
 @pytest.fixture(autouse=True)
 def settings_file(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_IT_SETTINGS", str(tmp_path / "settings.json"))
+    monkeypatch.chdir(git_tree(tmp_path / "tree"))  # the language is the tree file's, read from the cwd (#453 unit 1)
 
 
 def configure(tmp_path, **values):
+    """`human_language` goes to the settings.json of the cwd's work tree; the rest to the installation file."""
+    write_language(Path.cwd(), values.pop("human_language", None))
     (tmp_path / "settings.json").write_text(json.dumps(values), "utf-8")
 
 

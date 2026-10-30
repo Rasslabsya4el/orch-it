@@ -7,6 +7,8 @@ import time
 import pytest
 
 from orch_it import tickets
+from orch_it.guards.values import read_values
+from orch_it.tickets.shape import literal_violations
 from ticket_fixtures import EXPECTED, FIXTURES, fixture
 
 pytestmark = pytest.mark.usefixtures("ticket_language_ru")  # Russian ticket bodies (#413 unit 10a)
@@ -164,3 +166,15 @@ def test_an_adds_line_that_adds_nothing_needs_no_events_row():
 def test_a_weight_that_is_not_one_whole_number_is_bad(weight):
     title, body = fixture("good_basic")
     assert codes_of(title, body.replace("Weight: 3", f"Weight: {weight}")) == ["weight_bad"]
+
+
+# #415 unit 7: the ticket shape check (`literal_violations`) judges a body with the same allowed references
+def test_an_allowed_reference_is_no_literal_violation_and_a_bare_account_beside_it_is():
+    account, repo = "acme" + "-dev", "orch" + "-tools"
+    answers = {("gh", "api", "user", "--jq", ".login"): account + "\n",
+               ("git", "remote", "get-url", "origin"): f"https://github.com/{account}/{repo}.git\n"}
+    values = read_values(env={}, run=lambda cmd: answers.get(tuple(cmd), ""), home="", host="")
+    link = f"https://github.com/{account}/{repo}/commit/0a1b2c3"
+    assert literal_violations(f"Refs {link}\n", values=values) == []
+    found = literal_violations(f"Refs {link}\nthe owner {account} wrote it\n", values=values)
+    assert [(v.code, v.detail) for v in found] == [("literal_value", "account at line 2: a..v")]

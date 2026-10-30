@@ -866,7 +866,7 @@ def test_the_command_prints_the_failed_runs_and_their_codes(tmp_path, gh, monkey
     gh.add_run(100)
     gh.fail_when = lambda args: args[0] == "run"
     monkeypatch.setattr(github, "run_gh", gh)
-    assert main(["--store", str(tmp_path / "s"), "events", "import-github"]) == 0
+    assert main(["--store", str(tmp_path / "s"), "events", "import-github", "--repo", REPO]) == 0
     printed = capsys.readouterr().out
     assert "runs_failed=1" in printed and "failure_codes=gh_failed" in printed
 
@@ -910,7 +910,7 @@ def test_the_command_takes_the_repo_and_since(tmp_path, gh, monkeypatch, capsys)
 def test_the_command_turns_a_gh_failure_into_error_gh_failed_and_exit_2(tmp_path, gh, monkeypatch, capsys):
     gh.fail_when = lambda args: True
     monkeypatch.setattr(github, "run_gh", gh)
-    assert main(["--store", str(tmp_path / "s"), "events", "import-github"]) == 2
+    assert main(["--store", str(tmp_path / "s"), "events", "import-github", "--repo", REPO]) == 2
     assert capsys.readouterr().err.startswith("error: gh_failed")
 
 
