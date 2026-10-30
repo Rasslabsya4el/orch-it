@@ -190,7 +190,7 @@ def test_rows_2_and_3_four_merge_in_order_each_after_one_up_to_date_run_and_the_
     assert row2["ready_span_s"] <= 60
 
     assert row3["passed"], row3
-    assert row3["line_result"] in (None, "left")  # the follow of a held member may take it out between two turns
+    assert row3["line_result"] in (None, "left")  # the follow may take a waiting member out of the line between two turns
     assert row3["ticket_ready"] and not row3["ticket_parked"] and row3["last_comment_names_the_file"]
     assert row3["attempt_counted"] == [False] and not row3["in_line"]
     assert len(row3["behind"]) == 3 and row3["merged_behind"] == row3["behind"]  # nobody behind it was held

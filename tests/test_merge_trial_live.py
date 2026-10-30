@@ -61,7 +61,7 @@ class Hub:
     def issue(self, repo, number):
         return self.issues.get(number)
 
-    def checks(self, repo, sha):
+    def checks(self, repo, sha, *, statuses=False):
         return list(self.by_sha.get(sha, []))
 
 

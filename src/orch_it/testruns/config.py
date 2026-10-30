@@ -6,10 +6,13 @@ Keys (each optional): `test_command` (argv list; `{python}`, `{report}`, `{ids_f
 entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1), `python`,
 `on` (true), `origin` (default: the caller work tree's `origin`), `ssh_options` (list of extra
 `ssh` arguments such as `["-p", "2222"]`)), `own_capacity` (1) and `github_capacity` (20, GitHub's
-concurrent job cap on a free account), `required_checks` (the names of the checks a merge is held to; default
+concurrent job cap on a free account), `github_priority` (a whole number, 0 for every repo: between repos of one
+account a higher one starts first while the account is at its concurrency, #414 item 4; default in `defaults.json`, read
+by `github_priority`), `required_checks` (the names of the checks a merge is held to; default
 in `defaults.json` beside this module, read by `required_checks`), and the thin Windows job's four keys
 (`windows_check`, `windows_os`, `windows_change_minutes`, `windows_change_runs`, `windows_slowest_listed`; defaults in the same
-file, read by `windows_thin`). A key under `repos.<owner/name>` (any case)
+file, read by `windows_thin`), `place_bounds.queue_minutes` (the longest a GitHub job may wait in the account's
+queue before the github place is left out, #414 item 6; default in `bound_defaults.json`). A key under `repos.<owner/name>` (any case)
 overrides the same key for that repo.
 A value of the wrong shape (a NUL in a command or `test_env` value, a bound over a week
 included) raises `SettingsError("bad_setting")` naming the key.
@@ -30,19 +33,37 @@ DEFAULT_COMMAND = ("{python}", "-m", "pytest", "-q", "-p", "orch_it_ids", "--jun
 OSES = ("linux", "windows", "macos")
 MAX_BOUND_MINUTES = 7 * 24 * 60  # a week: a longer bound is no bound
 REQUIRED_CHECKS_SETTING = "required_checks"
+PRIORITY_SETTING = "github_priority"
 REPLACED_SETTING = "github_required_jobs"  # the name `required_checks` replaced; a file that still has it is refused
 _MACHINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
-def _default_required_checks() -> tuple[str, ...]:
-    """The default of the setting `required_checks`, read from `defaults.json` beside this module."""
+def _default(key: str):
+    """The default of the setting `key`, read from `defaults.json` beside this module."""
 
     text = resources.files(__package__).joinpath("defaults.json").read_text("utf-8")
-    return tuple(json.loads(text)[REQUIRED_CHECKS_SETTING])
+    return json.loads(text)[key]
 
 
-DEFAULT_REQUIRED_CHECKS = _default_required_checks()
+DEFAULT_REQUIRED_CHECKS = tuple(_default(REQUIRED_CHECKS_SETTING))
+DEFAULT_GITHUB_PRIORITY = _default(PRIORITY_SETTING)
+#: the longest a GitHub job may wait in the account's queue before the github place is left out: the same bound the
+#: bound check holds (`place_bounds.queue_minutes`); read from its defaults file here, as `bound_check` imports the
+#: merge package, which imports this module
+DEFAULT_QUEUE_BOUND_MINUTES = json.loads(
+    resources.files(__package__).joinpath("bound_defaults.json").read_text("utf-8"))["queue_minutes"]
+
+
+def github_priority(raw: dict, repo: str) -> int:
+    """The repo's priority between the repos of its account: the setting `github_priority`, a repo's own section
+    (`repos.<owner/name>`, any case) overriding the top level, else the default. A whole number (not a bool); any
+    other shape raises `SettingsError("bad_setting")`."""
+
+    value = {**raw, **settings.repo_section(raw, repo)}.get(PRIORITY_SETTING, DEFAULT_GITHUB_PRIORITY)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SettingsError("bad_setting", f"{PRIORITY_SETTING}: a whole number")
+    return value
 
 
 def required_checks(raw: dict, repo: str) -> tuple[str, ...]:
@@ -121,6 +142,7 @@ class TestSettings:
     own_capacity: int = 1
     github_capacity: int = 20
     required_checks: tuple[str, ...] = DEFAULT_REQUIRED_CHECKS
+    queue_bound_minutes: float = DEFAULT_QUEUE_BOUND_MINUTES
 
     @classmethod
     def from_settings(cls, raw: dict, repo: str) -> TestSettings:
@@ -159,6 +181,12 @@ class TestSettings:
         if "test_machines" in merged:
             values["machines"] = _machines(merged["test_machines"])
         values["required_checks"] = required_checks(raw, repo)
+        if "place_bounds" in merged:
+            bounds = merged["place_bounds"]
+            if not isinstance(bounds, dict):
+                raise SettingsError("bad_setting", "place_bounds")
+            if "queue_minutes" in bounds:
+                values["queue_bound_minutes"] = _positive("place_bounds.queue_minutes", bounds["queue_minutes"])
         return cls(**values)
 
 

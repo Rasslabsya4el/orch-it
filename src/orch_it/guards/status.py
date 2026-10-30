@@ -7,6 +7,10 @@ The six facts: the required checks are exactly the setting `required_checks`; th
 admins are enforced; force push and deletion are off; the pre-push hook is installed
 (`core.hooksPath` is our hooks folder and `hooks/pre-push` is there); the Claude Code hook is
 installed. A protection that cannot be read fails its four facts and says why; nothing raises.
+
+Who holds the gate (#414 decision 7): the `required_checks` fact says whether GitHub's branch protection requires the
+every required name (`Report.gate` `github`) or not: the base has no protection (or its plan gives none), or the
+protection leaves a required name out, and the merge line itself holds those names green before it moves the base (`line`); a protection that cannot be read claims no holder (`None`).
 """
 
 from __future__ import annotations
@@ -35,9 +39,14 @@ class Fact:
     detail: str
 
 
+LINE_HOLDS = "held by the merge line, not by GitHub"
+GITHUB_HOLDS = "held by GitHub's branch protection"
+
+
 @dataclass(frozen=True)
 class Report:
     facts: tuple[Fact, ...]
+    gate: str | None = None  # who holds the required checks gate: `line`, `github`, or None when unknown
 
     @property
     def ok(self) -> bool:
@@ -52,7 +61,8 @@ def read_protection(repo: str) -> dict:
 
 def _unprotected(error: BaseException) -> bool:
     text = str(error).lower()
-    return isinstance(error, github.GithubError) and ("not protected" in text or "404" in text)
+    plan_limit = "403" in text and ("upgrade" in text or "not available" in text)  # private repo, plan without protection
+    return isinstance(error, github.GithubError) and ("not protected" in text or "404" in text or plan_limit)
 
 
 def _enabled(protection: dict, key: str) -> bool | None:
@@ -74,19 +84,22 @@ def _checks_of(protection: dict) -> tuple[list[str], bool | None]:
 
 
 def _branch_facts(protection_reader, repo: str, required: tuple[str, ...]):
-    """(the four protection facts, the `check` findings, the `check` facts)."""
+    """(the four protection facts, the `check` findings, the `check` facts, who holds the gate)."""
 
     try:
         protection = protection_reader(repo)
         if not isinstance(protection, dict):
             raise ValueError("not a mapping")
     except Exception as error:
+        gate = None
         if _unprotected(error):
-            finding, detail = "branch_unprotected", f"unprotected: {BRANCH} has no protection"
+            finding, detail, gate = "branch_unprotected", f"unprotected: {BRANCH} has no protection", "line"
         else:
             finding, detail = "protection_unreadable", "protection could not be read"
         facts = [Fact(name, False, detail) for name in FACT_NAMES[:4]]
-        return facts, [finding], {"protection": finding.split("_", 1)[1]}
+        if gate:
+            facts[0] = Fact(facts[0].name, False, f"{detail}; {LINE_HOLDS}")
+        return facts, [finding], {"protection": finding.split("_", 1)[1]}, gate
     names, strict = _checks_of(protection)
     admins = _enabled(protection, "enforce_admins")
     force, deletion = _enabled(protection, "allow_force_pushes"), _enabled(protection, "allow_deletions")
@@ -100,15 +113,17 @@ def _branch_facts(protection_reader, repo: str, required: tuple[str, ...]):
         findings.append("force_push_allowed")
     if deletion is not False:
         findings.append("deletion_allowed")
+    gate = "github" if set(required) <= set(names) else "line"  # a name the protection does not require is the line's
     details = {"required_checks": ", ".join(names) or "none", "strict": str(strict).lower(),
                "enforce_admins": str(admins).lower(),
                "force_push_and_deletion_off": f"allow_force_pushes={str(force).lower()}"
                                               f" allow_deletions={str(deletion).lower()}"}
+    details["required_checks"] += f"; {GITHUB_HOLDS if gate == 'github' else LINE_HOLDS}"
     facts = [Fact(name, ok, details[name]) for name, (ok, _) in found.items()]
     facts.append(Fact("force_push_and_deletion_off", force is False and deletion is False,
                       details["force_push_and_deletion_off"]))
     return facts, findings, {"required_checks": names, "strict": strict, "enforce_admins": admins,
-                             "allow_force_pushes": force, "allow_deletions": deletion}
+                             "allow_force_pushes": force, "allow_deletions": deletion}, gate
 
 
 def status(store, repo: str, work_tree: Path | str = ".", *,
@@ -118,7 +133,7 @@ def status(store, repo: str, work_tree: Path | str = ".", *,
     reads: a protection or a folder that cannot be read is a failed fact."""
 
     required = required_checks(settings.load(), repo)
-    branch, branch_findings, branch_facts = _branch_facts(protection or read_protection, repo, required)
+    branch, branch_findings, branch_facts, gate = _branch_facts(protection or read_protection, repo, required)
 
     hooks_path = None
     pre_push_file = claude = False
@@ -154,4 +169,4 @@ def status(store, repo: str, work_tree: Path | str = ".", *,
              {"hooks_path": hooks_path, "ours": ours, "pre_push_file": pre_push_file}),
             ("guard_install", install_findings, {"pre_push_hook": pre_push_hook, "claude_hook": claude})):
         install.write_check(store, repo, check, repo, "failed" if findings else "passed", findings, detail)
-    return Report(tuple(facts))
+    return Report(tuple(facts), gate)

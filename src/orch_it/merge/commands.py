@@ -11,9 +11,12 @@
   of the `follow` workflow is about; prints `#<pr> <outcome> ticket=#<n> <detail>` (`merged_by_follow` after it
   when the follow merged the pull request, #424) or `skipped: <why>`; a `workflow_run` event (the end of a `tests`
   run) follows every open pull request whose head is the run's commit, one line each;
-- `merge line [--base main] [--repo R]`: one run of the repo's merge line (decision 2,
-  `orch_it.merge.line`); prints `waits: the line of <repo> is held by <holder>` at once when another
-  line holds it, then one line per head, `#<pr> <result> waited <minutes> min updates <n> <why>`, and
+- `merge line [--base main] [--work-tree .] [--repo R]`: one run of the repo's merge line (decision 2,
+  `orch_it.merge.line`); with `batch_size` 2 or more and `--work-tree` a clone of the repo (its `origin` is the repo)
+  the line batches (#414: `orch_it.merge.batch`, the suite at the place the rule picks), else it prints
+  `batch off: <why>` first (before it waits for the lock) and serves one pull request at a time; prints
+  `waits: the line of <repo> is held by <holder>` at once when another line holds it, then one line per head,
+  `#<pr> <result> waited <minutes> min updates <n> <why>`, the run's notes (`batch landing refused: <why>`), and
   `line of <repo> into <base>: merged=<n> left=<n> empty|bound`; a line it could not take is
   `error: lock_busy` or `error: lock_stale`;
 - `main check [--branch main] [--repo R] [--role github]`: the red-on-main tickets brought in line
@@ -44,7 +47,7 @@ from pathlib import Path
 
 from orch_it import settings
 from orch_it.events.store import Store
-from orch_it.merge import closing_check
+from orch_it.merge import batch, closing_check
 from orch_it.merge import git as merge_git
 from orch_it.merge import lock
 from orch_it.merge.follow import ROLE as GITHUB, FollowError, follow, pr_of_event, prs_of_workflow_run
@@ -55,9 +58,12 @@ from orch_it.merge.main_check import check_main
 from orch_it.merge.reconcile import reconcile
 from orch_it.merge.pr_open import ROLE as ORCH, PrError, open_pr, parse_part
 from orch_it.merge.settings import MergeSettings
-from orch_it.testruns.config import required_checks
+from orch_it.testruns import priority
+from orch_it.testruns.config import TestSettings, required_checks
+from orch_it.testruns.github_place import GithubPlace
 from orch_it.tickets.commands import OWNER_SETTING
 from orch_it.tickets.gh_check import read_event
+from orch_it.tickets.hook import repo_of as origin_repo
 from orch_it.tickets.park import ROLE as SCRIPT
 
 GROUPS = ("merge", "pr", "follow", "main", "reconcile")
@@ -75,6 +81,8 @@ def add_parsers(commands, common: argparse.ArgumentParser) -> None:
     p.add_argument("--work-tree", default=".", metavar="PATH")
     p = group.add_parser("line", parents=[repo], help="land the repo's green pull requests one by one")
     p.add_argument("--base", default="main", help="the branch the line merges into (default: main)")
+    p.add_argument("--work-tree", default=".", metavar="PATH",
+                   help="a clone of the repo the batches are fetched into and tested from (default: .)")
     group = commands.add_parser("pr", help="the pull request of a ticket").add_subparsers(dest="command",
                                                                                           required=True)
     p = group.add_parser("open", parents=[repo], help="ORCH's acceptance step: one open pull request per ticket")
@@ -201,10 +209,14 @@ def _reconcile(args, store_of, repo_of, now: datetime) -> str:
     raw = settings.load()
     done = reconcile(GhPullHub(), store_of(), repo, args.base, settings=MergeSettings.from_settings(raw, repo), now=now,
                      role=args.role, required=required_checks(raw, repo), owner=owner_login(raw),
-                     bring_events=os.environ.get("GITHUB_ACTIONS") != "true")
+                     bring_events=os.environ.get("GITHUB_ACTIONS") != "true", raw_settings=raw)
     lines = ["actions=on" if done.actions else "actions=off: the sweep runs here"]
     lines += [f"{code} {what}" for code, what in done.repairs]
     lines += [f"not followed {why}" for why in done.failed]
+    lines += [f"check failed {why}" for why in done.checks.failed]
+    for timed in (done.checks.windows_time, done.checks.nightly_time):  # each line is empty while it has no verdict
+        if timed is not None and timed.line:
+            lines.append(timed.line)
     if done.imported:
         lines.append(f"brought in {done.imported} events files of the workflows")
     return "".join(f"{line}\n" for line in lines)
@@ -213,15 +225,31 @@ def _reconcile(args, store_of, repo_of, now: datetime) -> str:
 def _line(args, store_of, repo_of) -> str:
     repo = args.repo or repo_of(".")
     raw = settings.load()
+    merge_settings = MergeSettings.from_settings(raw, repo)
+    store = store_of()
+    suite, hold, hub = None, None, GhPullHub()
+    if merge_settings.batch_size > 1:
+        found = origin_repo(args.work_tree)
+        if found is not None and found.lower() == repo.lower():
+            test_settings = TestSettings.from_settings(raw, repo)
+            suite = batch.place_rule_suite(store, repo, test_settings, batch.git_checkout(Path(args.work_tree)))
+            readings = priority.HubReadings(hub, (owner_login(raw) or repo.split("/")[0]).lower(),
+                                            GithubPlace(repo, store, test_settings).account_load,
+                                            lambda: datetime.now(UTC))
+            hold = priority.hold_of(raw, repo, readings)
+        else:
+            print(f"batch off: no work tree of {repo} at {args.work_tree} (its origin is "
+                  f"{found or 'not a GitHub repo'}), one pull request at a time", flush=True)  # before the line waits
 
     def say(holder) -> None:
         print(f"waits: the line of {repo} is held by {holder.said()}", flush=True)
 
-    done = run_line(GhPullHub(), store_of(), repo, args.base, settings=MergeSettings.from_settings(raw, repo),
+    done = run_line(hub, store, repo, args.base, settings=merge_settings,
                     holder=f"{holder_of(repo, args.base)} (pid {os.getpid()})", on_wait=say,
-                    required=required_checks(raw, repo), owner=owner_login(raw))
+                    required=required_checks(raw, repo), owner=owner_login(raw), suite=suite, priority_hold=hold)
     lines = [f"#{s.pr} {s.result} waited {s.waited_minutes:g} min updates {s.updates} {s.detail}".rstrip()
              for s in done.served]
+    lines += done.notes
     lines.append(f"line of {repo} into {args.base}: merged={done.merged} left={done.left} {done.reason}")
     return "".join(f"{line}\n" for line in lines)
 

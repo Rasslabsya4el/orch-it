@@ -14,9 +14,9 @@ from required_names import LINUX_CHECK, WINDOWS_CHECK
 from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns import place_rule
-from orch_it.testruns.config import TestSettings
+from orch_it.testruns.config import DEFAULT_QUEUE_BOUND_MINUTES, TestSettings
 from orch_it.testruns.github import GithubError
-from orch_it.testruns.github_place import GithubPlace, oses_of_workflow
+from orch_it.testruns.github_place import QUEUE_GRACE_SECONDS, GithubPlace, oses_of_workflow
 from orch_it.testruns.places import PlaceEnd, PlaceRefused, Request
 from orch_it.testruns.runner import offers_of, run_tests
 
@@ -211,7 +211,9 @@ def test_the_setting_github_capacity_is_the_limit_while_no_job_has_waited(world)
 
 
 def test_a_job_that_waited_in_the_queue_while_others_ran_gives_the_limit_the_runs_show(world):
-    world.actions.hold(OTHER, 8, queued=2, queued_for=300)  # 2 jobs wait 5 minutes while 8 run: the limit is 8
+    waited = QUEUE_GRACE_SECONDS + 60  # `hold` adds a minute: past the grace, inside the queue bound, while 8 run: the limit is 8
+    assert waited + 60 < DEFAULT_QUEUE_BOUND_MINUTES * 60
+    world.actions.hold(OTHER, 8, queued=2, queued_for=waited)
     run(world)
     start = starts(world.store)[0]
     assert offered(start)["note"] == "8 busy of 8" and offered(start)["dropped"] == "busy"
@@ -408,7 +410,9 @@ def test_the_bound_counts_the_seconds_gh_calls_take_not_only_the_sleeps(world):
 
 def test_a_run_that_appears_only_after_the_bound_is_looked_for_once_more_and_cancelled(world):
     world.settings = TestSettings(github_tests=True, bound_minutes=1)
-    slow = SlowGh(world.actions, world.clock, 15, appear_after=60)  # shown first to the look made after the bound
+    # shown first to the look made after the bound: the budget read each pause makes (#414 row 10) moves the looks
+    # by 15 s, so the run is listed from 70 s after its dispatch, not 60 s
+    slow = SlowGh(world.actions, world.clock, 15, appear_after=70)
     done = run(world, github(world, gh=slow), forced="github")
     assert (done.outcome, done.reason) == ("no_result", "cut")
     assert world.actions.cancelled == [world.actions.runs[REPO][0]["id"]]
@@ -420,3 +424,37 @@ def test_a_run_that_never_appears_is_cut_and_nothing_is_cancelled(world):
     done = run(world, github(world, gh=slow), forced="github")
     assert (done.outcome, done.reason) == ("no_result", "cut")
     assert world.actions.cancelled == []
+
+
+# --- the poll waits longer while the request budget is under the threshold (#414 decision 9, row 10) -----
+
+def sleeping(world):
+    """A sleep that records each pause and moves the test clock on, as a real pause would."""
+
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        world.clock.sleep(seconds)
+
+    return sleeps, sleep
+
+
+def test_the_github_poll_is_the_base_while_the_budget_is_above_the_threshold(world):
+    world.actions.core = (2500, 5000)  # half left: above the 20% threshold
+    assert github(world).poll_wait() == 20.0
+    world.settings = TestSettings(github_tests=True, bound_minutes=1)
+    world.actions.dispatch_jobs = {LINUX_CHECK: DispatchedJob(completed=None)}  # never ends: the polls run to the bound
+    sleeps, sleep = sleeping(world)
+    run(world, github(world, sleep=sleep), forced="github")
+    assert sleeps and set(sleeps) == {20.0}
+
+
+def test_the_github_poll_grows_while_the_budget_is_under_the_threshold(world):
+    world.actions.core = (500, 5000)  # a tenth left: 1 + floor(log2(1000 / 500)) = 2 doublings of 20 s
+    assert github(world).poll_wait() == 80.0
+    world.settings = TestSettings(github_tests=True, bound_minutes=2)
+    world.actions.dispatch_jobs = {LINUX_CHECK: DispatchedJob(completed=None)}
+    sleeps, sleep = sleeping(world)
+    run(world, github(world, sleep=sleep), forced="github")
+    assert sleeps[0] == 80.0  # the first pause is the grown interval, then the bound's rest

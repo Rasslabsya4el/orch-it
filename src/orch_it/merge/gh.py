@@ -8,7 +8,10 @@ It is the tickets' `GhHub` (issues, comments, runs, all through `gh api`) plus t
   create with `gh pr create`;
   `PUT .../update-branch` and `PUT .../merge`, both pinned to the head sha the caller saw;
 - check runs of one sha: `repos/{r}/commits/{sha}/check-runs`, the latest run of each name, its
-  Actions run and attempt from `details_url` and `repos/{r}/actions/runs/{id}`;
+  Actions run and attempt from `details_url` and `repos/{r}/actions/runs/{id}`; and the commit statuses of the sha
+  (`repos/{r}/commits/{sha}/status`, the latest of each context; only when the caller asks, `statuses=True`), a check
+  run winning over a status of the same name;
+  the merge line posts a status (`POST repos/{r}/statuses/{sha}`) as a check run cannot be created with a user token;
 - pull request comments: issue comments, submitted reviews and review comments, merged in time order;
 - Actions: rerun the failed jobs, cancel, the runs of `tests.yml` on a branch with the state of
   the required jobs (setting `required_checks`), the failed test ids from the `junit-*`
@@ -44,8 +47,9 @@ from urllib.parse import quote
 from orch_it import settings
 from orch_it.events import schema
 from orch_it.merge import git as merge_git
+from orch_it.merge.batch import BATCH_PREFIX
 from orch_it.merge.git import GitDone, GitError
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, LandingRefused, MainRun, Pull, Result
 from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, skipped, workflow_of
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
@@ -215,9 +219,60 @@ class GhPullHub(GhHub):
             raise GithubError("gh_bad_output", f"{repo}#{number}: a merge answered with no sha")
         return answer["sha"]
 
+    # --- the batch branch (#414 item 5) -------------------------------------------------------
+
+    def start_batch(self, repo: str, base: str, branch: str) -> str:
+        tip = self._tip(repo, base)
+        self._answer(["api", "-X", "POST", f"repos/{repo}/git/refs"], {"ref": f"refs/heads/{branch}", "sha": tip})
+        return tip
+
+    def add_to_batch(self, repo: str, branch: str, head_sha: str) -> str | None:
+        try:
+            answer = self._answer(["api", "-X", "POST", f"repos/{repo}/merges"],
+                                  {"base": branch, "head": head_sha, "commit_message": f"Combine {head_sha[:7]}"})
+        except GithubError as e:
+            if "HTTP 409" in str(e):  # the two conflict
+                return None
+            if e.code == "gh_bad_output" and "expected one object" in str(e):  # 204: the branch holds the head already
+                return self._tip(repo, branch)
+            raise
+        return _text(answer.get("sha")) or self._tip(repo, branch)
+
+    def advance_base(self, repo: str, base: str, sha: str) -> bool:
+        try:
+            self._answer(["api", "-X", "PATCH", f"repos/{repo}/git/refs/heads/{quote(base, safe='/')}"],
+                         {"sha": sha, "force": False})
+        except GithubError as e:
+            said = str(e)
+            fast_forward = "fast forward" in said.lower().replace("-", " ")
+            if "HTTP 409" in said or ("HTTP 422" in said and fast_forward):  # not a fast-forward: the base moved
+                return False
+            if "HTTP 422" in said or "HTTP 403" in said:  # the base's own rules refused the update
+                raise LandingRefused(_message(said)) from e
+            raise
+        return True
+
+    def batch_branches(self, repo: str) -> list[str]:
+        listed = self._list(["api", "--paginate", f"repos/{repo}/git/matching-refs/heads/{BATCH_PREFIX}"])
+        return [name for found in listed if (name := _text(found.get("ref")).removeprefix("refs/heads/"))]
+
+    def end_batch(self, repo: str, branch: str) -> None:
+        try:
+            self.gh(["api", "-X", "DELETE", f"repos/{repo}/git/refs/heads/{quote(branch, safe='/')}"])
+        except GithubError as e:
+            if "HTTP 404" not in str(e) and "HTTP 422" not in str(e):  # already gone
+                raise
+
+    def _tip(self, repo: str, branch: str) -> str:
+        found = self._object(["api", f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}"])
+        sha = _text((found.get("object") or {}).get("sha")) if isinstance(found, dict) else ""
+        if not sha:
+            raise GithubError("gh_bad_output", f"{repo}: no tip for {branch}")
+        return sha
+
     # --- check runs and pull comments ---------------------------------------------------------------
 
-    def checks(self, repo: str, sha: str) -> list[Check]:
+    def checks(self, repo: str, sha: str, *, statuses: bool = False) -> list[Check]:
         latest: dict[str, dict] = {}
         for run in self._pages(["api", "--paginate", f"repos/{repo}/commits/{sha}/check-runs?per_page=100"],
                                "check_runs"):
@@ -235,7 +290,28 @@ class GhPullHub(GhHub):
             found.append(Check(name=name, state=_state(run), run_id=run_id,
                                attempt=attempts[run_id] if run_id else 1,
                                started_at=_moment(run.get("started_at"))))
+        if statuses:
+            found += self._statuses(repo, sha, {check.name for check in found})
         return found
+
+    def _statuses(self, repo: str, sha: str, taken: set[str]) -> list[Check]:
+        """The commit statuses of `sha` under a name no check run has; the combined status lists the latest of each
+        context (`statuses`, paged)."""
+
+        found = []
+        for status in self._pages(["api", "--paginate", f"repos/{repo}/commits/{sha}/status?per_page=100"],
+                                  "statuses"):
+            name = _text(status.get("context"))
+            if not name:
+                raise GithubError("gh_bad_output", f"{repo}@{sha}: a status with no context")
+            if name not in taken:
+                found.append(Check(name=name, state=_STATUS_STATES.get(status.get("state"), NO_RESULT), run_id=None,
+                                   attempt=1, started_at=_moment(status.get("created_at"))))
+        return found
+
+    def post_status(self, repo: str, sha: str, name: str, state: str, description: str) -> None:
+        self._answer(["api", "-X", "POST", f"repos/{repo}/statuses/{sha}"],
+                     {"state": _STATUS_WORDS[state], "context": name, "description": description[:STATUS_DESCRIPTION_MAX]})
 
     def _attempt(self, repo: str, run_id: str) -> int:
         run = self._object(["api", f"repos/{repo}/actions/runs/{run_id}"], missing_ok=True) or {}
@@ -535,6 +611,15 @@ class GhPullHub(GhHub):
 _NO_PROTECTION_403 = ("Upgrade to GitHub Pro", "Branch not protected")
 
 
+def _message(said: str) -> str:
+    """What GitHub said, from a failed `gh` call's text: between `gh: ` and ` (HTTP`."""
+
+    start = said.find("gh: ")
+    start = 0 if start < 0 else start + len("gh: ")
+    end = said.rfind(" (HTTP")
+    return said[start:end if end >= start else len(said)].strip()
+
+
 def _unprotected(error: GithubError) -> bool:
     """GitHub's refusal to say what a base requires: 404 (not protected), or a 403 whose message says the plan
     or the branch has no protection. Any other 403 (rate limit, abuse, no permission) is a failure, not a base
@@ -552,6 +637,11 @@ def _state(run: dict) -> str:
     if run.get("status") != "completed":
         return PENDING
     return {"success": PASSED, "failure": FAILED}.get(run.get("conclusion"), NO_RESULT)
+
+
+STATUS_DESCRIPTION_MAX = 140  # GitHub's longest commit status description (REST "Create a commit status")
+_STATUS_STATES = {"success": PASSED, "failure": FAILED, "error": FAILED, "pending": PENDING}
+_STATUS_WORDS = {PASSED: "success", FAILED: "failure", PENDING: "pending"}
 
 
 def _job_id(job: dict) -> int:
