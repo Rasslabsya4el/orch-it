@@ -86,6 +86,9 @@ class Hub(Protocol):
     def layer_version(self, repo: str) -> str | None:
         """The orch-it version the repo's default branch runs, `X.Y.Z`."""
 
+    def file(self, repo: str, path: str) -> str | None:
+        """The text of the file at `path` on the repo's default branch; None when it has none (a failed read raises)."""
+
 
 class ListingHub(Hub, Protocol):
     def listed(self, repo: str, label: str) -> list[Issue]:
@@ -251,17 +254,22 @@ class GhHub:
         return RunState(ended=ended, passed=ended and found.get("conclusion") == "success")
 
     def layer_version(self, repo: str) -> str | None:
-        text = self._file(repo, VERSION_FILE)
+        text = self.file(repo, VERSION_FILE)
         if text is not None and text.strip():
             return text.strip()
-        project = self._file(repo, "pyproject.toml") or ""
+        project = self.file(repo, "pyproject.toml") or ""
         version = _PROJECT_VERSION.search(project)
         return version.group(1) if _PROJECT_NAME.search(project) and version else None
 
-    def _file(self, repo: str, path: str) -> str | None:
+    def file(self, repo: str, path: str) -> str | None:
+        """The text of the file at `path` on the repo's default branch; None when the repo has no such file."""
+
         found = self._object(["api", f"repos/{repo}/contents/{path}"], missing_ok=True)
-        if found is None or found.get("encoding") != "base64":
+        if found is None:
             return None
+        if found.get("encoding") != "base64":  # a file over 1 MB comes with no content: not read, which is not absent
+            raise GithubError("gh_bad_output", f"{repo}:{path}: GitHub gave no text of the file "
+                                               f"(encoding {found.get('encoding')!r})")
         try:
             return base64.b64decode(found.get("content") or "").decode("utf-8")
         except (ValueError, UnicodeDecodeError):

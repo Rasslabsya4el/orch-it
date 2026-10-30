@@ -1,6 +1,6 @@
 # The guards judge the object, own a process by its tree, and fail open with an event
 
-Status: amended by D4 amd 1, D4 amd 2 (Rasslabsya4el/orchestration-layer#413) and D4 amd 3 (orchestration-layer#453); the decision text below is kept as it was.
+Status: amended by D4 amd 1, D4 amd 2 (Rasslabsya4el/orchestration-layer#413), D4 amd 3 (orchestration-layer#453) and D4 amd 4 (orchestration-layer#464); the decision text below is kept as it was.
 
 The three kept guards — worktree delete, foreign process stop, private data in a public repo —
 decide on the object a command would act on (the real path on disk with links followed and the
@@ -58,3 +58,7 @@ language or add the table). Any other unexpected error still fails open.
 ## D4 amd 3: where human_language lives
 
 Amendment (orchestration-layer#453): the setting `human_language` lives only in the `settings.json` at the root of the git work tree, and is `en` when that file or key is missing or there is no git tree. A command reads the git top level of its working directory, then that tree's file. The installation's settings file no longer holds the setting: a `human_language` key there is refused with `HumanLanguageError`, which names the tree file to move it to. A port or a skills copy never copies the tree file, so another repo gets `en` until it commits its own. This amendment replaces nothing in amd 2: a language with no table is still refused as amd 2 says.
+
+## D4 amd 4: the target repo's settings file is read, and an unreadable one is refused
+
+Amendment (orchestration-layer#464): a command reads the `settings.json` of the repo it is for (its target), not of its working directory. Each entry point names its target once: a hook takes the repo of its `gh` call (`--repo`/`-R`, else `GH_REPO`), else the repo of its `cd` folder or payload cwd; a CLI command or a runner step takes its checkout. A target that is the tree at hand reads that tree's file; another repo's file is read on its default branch through the hook's GitHub hub, and not found is no file, so `en`. This replaces the sentence of amd 3 that reads the git top level of the working directory. A file that is no JSON object, or a GitHub read that fails other than not-found, is a named bad setting, which extends amd 2: the tickets hook refuses the command with the error's words naming the file or the repo. Any other unexpected error still fails open.

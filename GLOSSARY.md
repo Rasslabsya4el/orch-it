@@ -245,6 +245,10 @@ _Avoid_: task, card, story
 The five lines a person decides from, in the owner's language: what changes, the goal, the plan, the result, the undo.
 _Avoid_: summary, TL;DR, abstract
 
+**Tree settings**:
+The `settings.json` at the root of a git work tree: it holds `human_language`, the language of a repo's human block (read by `tree_settings`, `src/orch_it/settings.py`), and the repo's required checks, read by `research/names.py`.
+_Avoid_: repo settings, settings file, config
+
 **Agent block**:
 The spec an agent works from: facts with their sources, the rule, the acceptance rows and the line fields.
 _Avoid_: description, body, spec section

@@ -179,10 +179,21 @@ def decide(raw: str, *, context: Callable[[str | None], Context] | None = None) 
 def main(text: str | None = None) -> int:
     """Read the PreToolUse payload (stdin, or `text`) and print a deny as JSON when the call is refused. Exits 0
     whatever happens: the deny is the JSON on stdout, not the exit code. Any failure of the read, the check or the
-    print is a deny naming the install step."""
+    print is a deny naming the install step. The words are for the repo of the payload's folder (#464), named once."""
 
     try:
         raw = sys.stdin.read() if text is None else text
+        from orch_it import settings
+
+        with settings.target(folder=settings.payload_folder(raw)):
+            return _check(raw)
+    except Exception as e:  # noqa: BLE001 - a failure before the target is named: the call is refused, never passed
+        print(_deny(_unreachable(e)))
+    return 0
+
+
+def _check(raw: str) -> int:
+    try:
         reason, notice = decide(raw)
         if reason is None:
             return 0

@@ -8,6 +8,7 @@ Every sample name, path, account and token is built from parts at run time; the 
 invented one (tests/scan_setup.py), so no value of the layer stands in this committed file.
 """
 
+import errno
 import importlib.util
 import os
 import secrets
@@ -204,6 +205,47 @@ def test_on_linux_the_path_resolves_python3_and_git_and_not_python(tmp_path):
     write_executable(source / "pip-script")  # a second call links what appeared since (a pip install's scripts)
     foreign_run.make_bin(bin_dir, str(source))
     assert shutil.which("pip-script", path=env["PATH"]) is not None
+
+
+@pytest.mark.skipif(ON_WINDOWS, reason="the bin folder is POSIX: links to the executables of the normal PATH")
+def test_the_bin_scan_skips_what_it_cannot_stat_or_list_and_links_the_rest(tmp_path, monkeypatch):
+    # #414: the macOS run died in make_bin on a system file the user may not stat (PermissionError from is_file);
+    # the scan of a PATH folder survives any entry or folder it cannot stat or list, as it does a missing folder
+    source = tmp_path / "normal-path"
+    source.mkdir()
+    write_executable(source / "normal-tool")
+    write_executable(source / "locked-tool")
+    os.symlink(tmp_path / "vanished", source / "broken-link")
+    (tmp_path / "locked-folder").mkdir()
+    (tmp_path / "unlistable").mkdir()
+    real_is_file, real_is_dir, real_iterdir = Path.is_file, Path.is_dir, Path.iterdir
+
+    def is_file(self: Path) -> bool:
+        if self.name == "locked-tool":
+            raise PermissionError(13, "Permission denied", str(self))
+        if self.name == "broken-link":  # a stat that fails with an error is_file does not swallow
+            raise OSError(errno.EIO, "Input/output error", str(self))
+        return real_is_file(self)
+
+    def is_dir(self: Path) -> bool:
+        if self.name == "locked-folder":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_is_dir(self)
+
+    def iterdir(self: Path):
+        if self.name == "unlistable":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    folders = [tmp_path / "locked-folder", tmp_path / "unlistable", tmp_path / "missing", source]
+    bin_dir = tmp_path / "bin"
+    foreign_run.make_bin(bin_dir, os.pathsep.join(str(folder) for folder in folders))
+    assert (bin_dir / "normal-tool").is_symlink()
+    assert not (bin_dir / "locked-tool").is_symlink()
+    assert not (bin_dir / "broken-link").is_symlink()
 
 
 def test_the_suite_switch_reaches_the_child_only_when_the_job_sets_it(tmp_path):

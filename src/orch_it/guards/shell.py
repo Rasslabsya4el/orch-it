@@ -36,6 +36,7 @@ class Simple:
     text: str = ""                  # the segment as written (heredoc markers removed)
     redirects: list = field(default_factory=list)  # `>` targets that overwrite (None: unreadable)
     too_deep: bool = False          # a command nested past MAX_DEPTH: unread, refused as opaque
+    inline_env: dict = field(default_factory=dict)  # `NAME=value cmd ...`: the assignments in front of this command
 
 
 # a command nested deeper than this (substitutions or `-c` wrappers inside one another) is read
@@ -148,9 +149,11 @@ class _PosixSplit:
         held = [self.heredocs[int(k)] for k in _HD_FIND.findall(segment)
                 if int(k) < len(self.heredocs)]
         assignments, rest = _leading_assignments(tokens)
+        inline_env = {}
         for name, raw in assignments:
             value, assigned_subs = self._expand_word(raw)
             self.env[name] = value or ""
+            inline_env[name] = value or ""
             self.walker.out.extend(assigned_subs)  # `x=$(rm -rf y)` runs the substitution
         if not rest:
             return
@@ -172,7 +175,7 @@ class _PosixSplit:
         self.walker.out.append(Simple(
             words, self.cwd, "posix", subs,
             "\n".join(h.body for h in held) if held else None,
-            any(h.to_shell for h in held), _HD_FIND.sub("", segment), written))
+            any(h.to_shell for h in held), _HD_FIND.sub("", segment), written, inline_env=inline_env))
 
     def _change_dir(self, words: list[str | None]) -> None:
         args = words[1:]

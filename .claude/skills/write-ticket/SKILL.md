@@ -5,11 +5,11 @@ description: Use when opening a GitHub issue or rewriting an issue's title or bo
 
 # Write a ticket
 
-A ticket has two readers. The setting `human_language` lives only in the `settings.json` at the root of the git work tree, and is `en` when that file or key is missing or there is no git tree. The human decides from five plain lines written in the language set by the setting `human_language` (the shape check reads it; if it refuses the block for its language, its message names the language to use); the agent works from the spec below them, written in English. One shape function (`orch_it.tickets.violations`) judges every ticket: the session hook refuses `gh issue create` and `gh issue edit` with any violation (and a create in a session that never called this skill), and the workflow `ticket-shape` takes `ready-for-agent` off a ready ticket that breaks a rule, with a comment listing every one. Each rule below carries the code both print.
+A ticket has two readers. The setting `human_language` lives only in the `settings.json` at the root of the git work tree of the repo the ticket is written for (its `--repo` target, not the folder the session stands in), and is `en` when that file or key is missing or there is no git tree. The human decides from five plain lines written in the language set by the setting `human_language` of that repo (the shape check reads it; if it refuses the block for its language, its message names the language to use); the agent works from the spec below them, written in English. One shape function (`orch_it.tickets.violations`) judges every ticket: the session hook refuses `gh issue create` and `gh issue edit` with any violation (and a create in a session that never called this skill), and the workflow `ticket-shape` takes `ready-for-agent` off a ready ticket that breaks a rule, with a comment listing every one. Each rule below carries the code both print.
 
 ## Template
 
-A filled example: copy its form, not its words. Its human block is in English; yours is in the language of `human_language`.
+A filled example: copy its form, not its words. Its human block is in English; yours is in the language of `human_language` of the repo the ticket is written for.
 
 ```
 Title: Cart shows the shipping cost before payment
@@ -65,7 +65,7 @@ Human block:
 - `human_block_not_first`: nothing stands above it but blank lines, HTML comments and the park line.
 - `human_field_missing`: each of the five fields is there and not empty.
 - `human_field_order`: they keep the order What, Goal, Plan, Result, Undo, each once.
-- `human_field_wrong_language`: their text is in the language of the setting `human_language`; a domain term in backticks and the fixed Undo words (`two-way door`, `touches`) stay as written.
+- `human_field_wrong_language`: their text is in the language of the setting `human_language` of the repo the ticket is for (its `--repo` target); a domain term in backticks and the fixed Undo words (`two-way door`, `touches`) stay as written.
 - `human_field_path`: no file path and no file:line in them; those belong to the agent block.
 
 Agent block:
