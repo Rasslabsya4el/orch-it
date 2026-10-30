@@ -71,6 +71,8 @@ class FakeGh:
                 return self.first_page(args[-1].partition("?")[2])
             return self.pages("workflow_runs", self.runs)
         run_id = int(parts[5])
+        if len(parts) == 6:  # the one run
+            return json.dumps(next(r for r in self.runs if r["id"] == run_id))
         if parts[-1] == "jobs":
             return self.pages("jobs", self.jobs[run_id])
         if parts[-1] == "artifacts":
@@ -85,6 +87,7 @@ class FakeGh:
 
         asked = dict(part.partition("=")[::2] for part in query.split("&"))
         matching = [r for r in self.runs if asked.get("status") in (None, r["status"])
+                    and asked.get("event") in (None, r["event"])
                     and r["created_at"] >= asked.get("created", ">=").removeprefix(">=")]
         newest_first = sorted(matching, key=lambda r: (r["created_at"], r["id"]), reverse=True)
         return json.dumps({"total_count": len(matching),
@@ -1133,6 +1136,168 @@ def test_completed_before_keeps_the_runs_completed_before_the_moment_since_the_f
     assert [r["id"] for r in completed_before(runs, moment, since)] == [1, 6]
 
 
+# #462: a `gh` read that fails on the real service is no verdict on the importer. A judged run whose pairs are not
+# stored is read again this many times, `RETRY_WAIT_S` apart; one still failing is left out of the expectation.
+READ_RETRIES, RETRY_WAIT_S = 2, 20
+PULL_REQUEST_RUNS_LISTED = 10  # the newest pull request runs the log comparison may pick from
+LOGS_COMPARED_RUNS = 3  # how many of them it compares
+
+
+def required_jobs(gh, repo, run):
+    jobs = github._items(gh(["api", "--paginate", f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=all&per_page=100"]),
+                         "jobs")
+    return [j for j in jobs if j["name"] in (LINUX_CHECK, WINDOWS_CHECK) and j["conclusion"] != "skipped"]
+
+
+def read_judged(store, repo, gh, judged, *, wait=RETRY_WAIT_S):
+    """(jobs_of, unreadable): each judged run's required jobs by run id, and the runs `gh` would not serve by run id ->
+    code. A run whose jobs have no stored pair is imported again (`import_one_run` writes only what is missing)
+    up to `READ_RETRIES` times; a run that fails with a `gh` error on the last try is unreadable, never judged short.
+    A run read whole whose pairs are still missing stays in `jobs_of`: that is the importer's fault."""
+
+    jobs_of, unreadable = {}, {}
+    for run in judged:
+        targets, error = None, None
+        for attempt in range(READ_RETRIES + 1):
+            if attempt:
+                time.sleep(wait)
+            try:
+                targets = required_jobs(gh, repo, run)
+                held = pairs(store)
+                if all(f"github:{run['id']}/{j['id']}/{j['run_attempt']}" in held for j in targets):
+                    error = None
+                    break
+                github.import_one_run(store, repo, run["id"], gh=gh)
+                error = None
+            except GithubError as e:
+                error = e
+        if error is not None:
+            unreadable[run["id"]] = error.code
+        else:
+            jobs_of[run["id"]] = targets
+    return jobs_of, unreadable
+
+
+def pull_request_runs(gh, repo, moment, since, count=PULL_REQUEST_RUNS_LISTED):
+    """The newest `count` completed pull request runs of the workflow completed before `moment`: their own listing,
+    so the runs of other events that filled the newest judged ones leave them in place."""
+
+    listing = json.loads(gh(["api", f"repos/{repo}/actions/workflows/{github.WORKFLOW_FILE}/runs"
+                                    f"?status=completed&event=pull_request&per_page={count + LIVE_SLACK}&created=>={since}"]))
+    return completed_before(listing["workflow_runs"], moment, since)[:count]
+
+
+def compare_logs(store, repo, gh, runs, jobs_of, *, runs_wanted=LOGS_COMPARED_RUNS):
+    """How many runs (newest first, at most `runs_wanted`) had a job whose stored test count was compared with the
+    count its log gives; a job without a report, or whose log `gh` will not serve, is left out. A count that differs
+    raises AssertionError."""
+
+    compared = 0
+    for run in runs:
+        if compared == runs_wanted:
+            break
+        counted = False
+        for job in jobs_of.get(run["id"], []):
+            key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
+            ended = pairs(store)[key][1]
+            if job["conclusion"] not in ("success", "failure") or not ended["summary_seen"]:
+                continue
+            try:
+                log = gh(["run", "view", str(run["id"]), "-R", repo, "--log", "--job", str(job["id"])])
+            except GithubError:
+                continue
+            rows = store.query("SELECT count(*) FROM events WHERE kind = 'test.result' AND run = ?", (key,)).rows[0][0]
+            assert logged_count_matches(rows, log), key
+            counted = True
+        compared += counted
+    return compared
+
+
+MOMENT, SINCE = "2026-10-27T00:00:00Z","2026-10-26T00:00:00Z"  # after BASE's runs: the fake runs all completed before
+
+
+def judged_of(gh):
+    return completed_before(gh.runs, MOMENT, SINCE)
+
+
+def stored_jobs(store, jobs_of):
+    return {f"github:{run_id}/{job['id']}/{job['run_attempt']}" for run_id, jobs in jobs_of.items() for job in jobs}
+
+
+def test_a_run_whose_read_failed_just_after_it_finished_is_read_again_and_judged(gh, store):
+    """#462 shape A: the first import of a run fails with gh_failed (a read GitHub did not serve yet); the old check
+    asserted the run's pairs after that one import and failed. The run is read again and its pairs are checked."""
+
+    gh.add_run(101, created=0)
+    gh.add_run(102, created=3600)
+    refused = []
+
+    def not_served_yet(args):
+        if args[0] == "run" and args[2] == "102" and not refused:
+            refused.append(args)
+            return True
+        return False
+
+    gh.fail_when = not_served_yet
+    first = run_import(store, gh, newest=5)
+    assert (first.runs_failed, first.failure_codes) == (1, ["gh_failed"])  # what the old check met
+    assert not any(run.startswith("github:102/") for run in pairs(store))
+
+    jobs_of, unreadable = read_judged(store, REPO, gh, judged_of(gh), wait=0)
+    assert unreadable == {}
+    assert sorted(jobs_of) == [101, 102]
+    assert stored_jobs(store, jobs_of) <= set(pairs(store))
+    assert len(stored_jobs(store, jobs_of)) == 4
+
+
+def test_a_run_that_cannot_be_read_is_left_out_and_not_counted_as_failed(gh, store):
+    gh.add_run(101, created=0)
+    gh.add_run(102, created=3600)
+    gh.fail_when = lambda args: args[0] == "run" and args[2] == "102"  # every read of run 102 fails
+
+    run_import(store, gh, newest=5)
+    jobs_of, unreadable = read_judged(store, REPO, gh, judged_of(gh), wait=0)
+    assert unreadable == {102: "gh_failed"}
+    assert sorted(jobs_of) == [101]
+    assert stored_jobs(store, jobs_of) <= set(pairs(store))
+
+
+def test_a_log_that_cannot_be_read_is_left_out_of_the_count_comparison(gh, store):
+    gh.add_run(101, created=0)
+    gh.add_run(102, created=3600)
+    run_import(store, gh, newest=5)
+    jobs_of, unreadable = read_judged(store, REPO, gh, judged_of(gh), wait=0)
+    assert unreadable == {}
+
+    def logs(args):
+        if args[:2] == ["run", "view"] and args[2] == "102":
+            raise GithubError("gh_failed", "the log is not served yet")
+        return "linux\tpytest\t2026-10-26T10:03:00Z 2 passed, 1 skipped in 1.00s\n"
+
+    runs = {r["id"]: r for r in gh.runs}
+    assert compare_logs(store, REPO, logs, [runs[102], runs[101]], jobs_of) == 1  # run 101 compared, run 102 left out
+
+    def wrong(args):
+        return "linux\tpytest\t2026-10-26T10:03:00Z 5 passed in 1.00s\n"
+
+    with pytest.raises(AssertionError):  # a count that differs from the rows is still a failure
+        compare_logs(store, REPO, wrong, [runs[101]], jobs_of)
+
+
+def test_the_pull_request_runs_are_listed_whatever_newer_runs_filled_the_judged_window(gh, store):
+    """#462 shape B: the newest judged runs were all dispatches, so no pull request run was among them and the
+    comparison counted nothing. The pull request runs come from their own listing."""
+
+    gh.add_run(101, created=0, event="pull_request")
+    for n in range(1, 6):
+        gh.add_run(110 + n, created=3600 * n, event="workflow_dispatch", pr=None, branch="flake-hunt")
+    judged = newest_judged(gh.runs, MOMENT, SINCE, 3)
+    assert [r["event"] for r in judged] == ["workflow_dispatch"] * 3  # the old window held no pull request run
+
+    found = pull_request_runs(gh, REPO, MOMENT, SINCE)
+    assert [r["id"] for r in found] == [101]
+
+
 @pytest.mark.live
 def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as_mapped(tmp_path, capsys, record_property):
     """Runs the real `gh` against the repo (nightly only, where GH_TOKEN is set), on the newest N
@@ -1176,36 +1341,29 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     require_enough_judged(judged, runs, completed_since, newest)
     assert judged, "no run completed since the first pull request run and before the moment"
     required = (LINUX_CHECK, WINDOWS_CHECK)
+    # #462: a run `gh` would not serve is read again, then left out of the expectation, never counted as short
+    jobs_of, unreadable = read_judged(store, live_repo, counted_gh, judged)
+    assert len(jobs_of) * 2 > len(judged), f"most judged runs could not be read (run id: code): {unreadable}"
     run_pairs, waits = pairs(store), pairs(store, "wait")
-    jobs_of = {}
-    for run in judged:
-        jobs = github._items(counted_gh(
-            ["api", "--paginate", f"repos/{live_repo}/actions/runs/{run['id']}/jobs?filter=all&per_page=100"]),
-            "jobs")
-        jobs_of[run["id"]] = [j for j in jobs if j["name"] in required and j["conclusion"] != "skipped"]
-        for job in jobs_of[run["id"]]:
-            key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
+    for run_id, jobs in jobs_of.items():
+        for job in jobs:
+            key = f"github:{run_id}/{job['id']}/{job['run_attempt']}"
             assert key in run_pairs, (f"{key}: first import runs_failed={first_import.runs_failed}, "
                                       f"failure_codes={first_import.failure_codes}")
             assert run_pairs[key][1]["outcome"] in MAPPED.get(job["conclusion"], {"no_result"}), key
             assert (key in waits) == bool(job["started_at"]), key
         seen = {started["run_os"] for key, (started, _) in run_pairs.items()
-                if key.startswith(f"github:{run['id']}/")}
-        assert seen >= set(required), run["id"]
+                if key.startswith(f"github:{run_id}/")}
+        assert seen >= set(required), run_id
 
-    compared = 0
-    for run in [r for r in judged if r["event"] == "pull_request"][:3]:
-        for job in jobs_of[run["id"]]:
-            key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
-            if job["conclusion"] not in ("success", "failure") or not run_pairs[key][1]["summary_seen"]:
-                continue
-            log = counted_gh(["run", "view", str(run["id"]), "-R", live_repo, "--log", "--job", str(job["id"])])
-            rows = store.query("SELECT count(*) FROM events WHERE kind = 'test.result' AND run = ?",
-                               (key,)).rows[0][0]
-            assert logged_count_matches(rows, log), key
-            compared += 1
-    assert compared, "no pull request job with a report to count"
-    judged_ids = [r["id"] for r in judged]
+    # the newest pull request runs come from their own listing: what else ran on the repo decides what the newest
+    # judged runs are (#462), and none of them need be a pull request run
+    pull_requests = pull_request_runs(counted_gh, live_repo, moment, since)
+    extra = [r for r in pull_requests if r["id"] not in jobs_of and r["id"] not in unreadable]
+    pull_jobs_of, pull_unreadable = read_judged(store, live_repo, counted_gh, extra)
+    compared = compare_logs(store, live_repo, counted_gh, pull_requests, jobs_of | pull_jobs_of)
+    assert compared, f"no pull request job with a report to count (runs unreadable: {unreadable | pull_unreadable})"
+    judged_ids = list(jobs_of)  # a run left out as unreadable may be read by the second import: it is not judged
     before = rows_per_run(store)
     import_github(store, live_repo, gh=counted_gh, since=since, newest=listed)
     after = rows_per_run(store)
@@ -1213,7 +1371,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
                if before.get(i, 0) != after.get(i, 0)}
     assert not changed, f"a second import wrote rows of judged runs (run id: before, after): {changed}"
     line = (f"live import test: duration {time.monotonic() - started_at:.0f} s;"
-            f" runs judged {len(judged)}; setting {newest}; slack {LIVE_SLACK};"
+            f" runs judged {len(jobs_of)} of {len(judged)} (unreadable: {len(unreadable)}); setting {newest}; slack {LIVE_SLACK};"
             f" completed tests runs since {since}: {completed_since};"
             f" gh API calls: {len(calls)}")
     record_property("live_import_line", line)  # a parallel worker's terminal output is lost; the JUnit report keeps the line
