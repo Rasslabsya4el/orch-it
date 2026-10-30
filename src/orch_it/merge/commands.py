@@ -14,8 +14,9 @@
 - `merge line [--base main] [--work-tree .] [--repo R]`: one run of the repo's merge line (decision 2,
   `orch_it.merge.line`); with `batch_size` 2 or more and `--work-tree` a clone of the repo (its `origin` is the repo)
   the line batches (#414: `orch_it.merge.batch`, the suite at the place the rule picks), else it prints
-  `batch off: <why>` first and serves one pull request at a time; prints `waits: the line of <repo> is held by <holder>` at once when another
-  line holds it, then one line per head, `#<pr> <result> waited <minutes> min updates <n> <why>`, and
+  `batch off: <why>` first (before it waits for the lock) and serves one pull request at a time; prints
+  `waits: the line of <repo> is held by <holder>` at once when another line holds it, then one line per head,
+  `#<pr> <result> waited <minutes> min updates <n> <why>`, the run's notes (`batch landing refused: <why>`), and
   `line of <repo> into <base>: merged=<n> left=<n> empty|bound`; a line it could not take is
   `error: lock_busy` or `error: lock_stale`;
 - `main check [--branch main] [--repo R] [--role github]`: the red-on-main tickets brought in line
@@ -220,15 +221,15 @@ def _line(args, store_of, repo_of) -> str:
     raw = settings.load()
     merge_settings = MergeSettings.from_settings(raw, repo)
     store = store_of()
-    suite, notes = None, []
+    suite = None
     if merge_settings.batch_size > 1:
         found = origin_repo(args.work_tree)
         if found is not None and found.lower() == repo.lower():
             suite = batch.place_rule_suite(store, repo, TestSettings.from_settings(raw, repo),
                                            batch.git_checkout(Path(args.work_tree)))
         else:
-            notes.append(f"batch off: no work tree of {repo} at {args.work_tree} (its origin is "
-                         f"{found or 'not a GitHub repo'}), one pull request at a time")
+            print(f"batch off: no work tree of {repo} at {args.work_tree} (its origin is "
+                  f"{found or 'not a GitHub repo'}), one pull request at a time", flush=True)  # before the line waits
 
     def say(holder) -> None:
         print(f"waits: the line of {repo} is held by {holder.said()}", flush=True)
@@ -236,8 +237,9 @@ def _line(args, store_of, repo_of) -> str:
     done = run_line(GhPullHub(), store, repo, args.base, settings=merge_settings,
                     holder=f"{holder_of(repo, args.base)} (pid {os.getpid()})", on_wait=say,
                     required=required_checks(raw, repo), owner=owner_login(raw), suite=suite)
-    lines = notes + [f"#{s.pr} {s.result} waited {s.waited_minutes:g} min updates {s.updates} {s.detail}".rstrip()
-                     for s in done.served]
+    lines = [f"#{s.pr} {s.result} waited {s.waited_minutes:g} min updates {s.updates} {s.detail}".rstrip()
+             for s in done.served]
+    lines += done.notes
     lines.append(f"line of {repo} into {args.base}: merged={done.merged} left={done.left} {done.reason}")
     return "".join(f"{line}\n" for line in lines)
 

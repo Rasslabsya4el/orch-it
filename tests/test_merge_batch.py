@@ -205,6 +205,18 @@ def test_a_landing_github_does_not_mark_merged_in_a_minute_is_reported_pending_a
     assert all(hub.pull(REPO, pr).state == "merged" for pr in prs.values())
 
 
+def test_a_base_whose_protection_refuses_the_landing_is_noted_and_the_line_goes_on_one_by_one(tmp_path):
+    world = line_world(tmp_path)
+    hub, store, prs, ci = world
+    hub.advance_refusal = "Changes must be made through a pull request."
+    suite, place = make_suite(world, tmp_path)
+    done = line(world, tmp_path, suite)
+    assert done.notes == ("batch landing refused: Changes must be made through a pull request.",)
+    assert passes(store) == 1 and hub.advances == []  # one pass, then no second batch is tried
+    assert [(s.pr, s.result) for s in done.served] == [(prs[n], "merged") for n in (10, 11, 12, 13)]
+    assert ci.merged == [prs[n] for n in (10, 11, 12, 13)] and done.reason == "empty"
+
+
 def test_batch_size_one_is_the_line_as_it_was_and_runs_no_suite(tmp_path):
     world = line_world(tmp_path, tickets=(10, 11))
     hub, store, prs, ci = world

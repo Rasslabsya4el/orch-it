@@ -17,7 +17,7 @@ from pathlib import Path
 from fake_hub import REPO, FakeHub
 
 from orch_it.merge import workflow_watch as watch
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, LandingRefused, MainRun, Pull, Result
 from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
 from orch_it.testruns.github import GithubError
 from orch_it.tickets.hub import Comment
@@ -260,6 +260,8 @@ class FakeGitHub(FakeHub):
 
     def advance_base(self, repo, base, sha):
         self.calls.append(("advance_base", base, sha))
+        if self.advance_refusal is not None:
+            raise LandingRefused(self.advance_refusal)
         branch = next((b for b, tree in self.branches.items() if b in self.batch_members and tree[-1] == sha), None)
         main = self.branches[base]
         if branch is None or self.branches[branch][:len(main)] != main:

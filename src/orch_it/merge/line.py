@@ -50,7 +50,7 @@ from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.merge import batch, lock, marks, record
 from orch_it.merge.follow import FollowReport, follow, follow_conflict, follow_red
-from orch_it.merge.hub import Pull, PullHub
+from orch_it.merge.hub import LandingRefused, Pull, PullHub
 from orch_it.merge.pr_open import refers_to
 from orch_it.merge.settings import MergeSettings, required_checks_now
 from orch_it.tickets.park import ROLE
@@ -103,6 +103,7 @@ class LineReport:
     base: str
     served: tuple[Served, ...]
     reason: str  # `empty`: no member left; `next_run`: the ones left wait for the next run; `bound`: the run's bound
+    notes: tuple[str, ...] = ()  # what the run noticed beside its turns: a landing the base refused, a main red
 
     @property
     def merged(self) -> int:
@@ -152,6 +153,8 @@ class _Line:
     ready_at: dict[int, datetime] = field(default_factory=dict)  # pr -> its ready time, as members() read it
     suite: batch.Suite | None = None  # the required suite on a commit; None: no batches
     batches_made: int = 0
+    refused: str | None = None  # the base's own reason for refusing a batch landing: the rest goes one by one
+    notes: list[str] = field(default_factory=list)
 
     def run(self) -> tuple[list[Served], str]:
         turns = self.turns
@@ -163,7 +166,7 @@ class _Line:
             members = [m for m in self.members() if m.pull.number not in self.for_next_run]
             if not members:
                 return turns, "next_run" if self.for_next_run else "empty"
-            if self.suite is not None and self.settings.batch_size > 1:
+            if self.suite is not None and self.settings.batch_size > 1 and not self.refused:
                 self.serve_batch(members[:self.settings.batch_size])
             else:
                 self.end_turn(turns, self.serve(members[0]))
@@ -214,7 +217,7 @@ class _Line:
         did not combine, as a group of their own."""
 
         rebuilt = 0
-        while group:
+        while group and not self.refused:
             if self.clock() >= self.deadline:
                 return self.postpone(group, "bound")
             made = self.combine(group)
@@ -224,6 +227,8 @@ class _Line:
                     result = self.suite(made.tip)
                     if result.outcome == batch.PASSED:
                         if not self.land(made):
+                            if self.refused:
+                                return  # the members stay in the line and go one by one
                             rebuilt += 1  # the base or a head moved under the pass: the batch is made again
                             if rebuilt > self.settings.max_updates:
                                 return self.postpone(group, "starved")
@@ -246,7 +251,7 @@ class _Line:
         conflict rule; one that conflicts with the ones before it is `apart`."""
 
         self.batches_made += 1
-        branch = f"orch-batch/{int(self.clock().timestamp())}-{self.batches_made}"
+        branch = batch.branch_name(self.clock(), self.batches_made)
         made = _Batch(branch, self.hub.start_batch(self.repo, self.base, branch), [], {}, [])
         for member in group:
             number = member.pull.number
@@ -276,7 +281,12 @@ class _Line:
             pull = self.hub.pull(self.repo, member.pull.number)
             if pull is None or pull.state != "open" or pull.head_sha != made.heads[member.pull.number]:
                 return False
-        if not self.hub.advance_base(self.repo, self.base, made.tip):
+        try:
+            if not self.hub.advance_base(self.repo, self.base, made.tip):
+                return False
+        except LandingRefused as refusal:  # the base's protection: no batch lands here, the members go one by one
+            self.refused = refusal.reason
+            self.notes.append(f"batch landing refused: {refusal.reason}")
             return False
         merged, pending = self.confirmed(made.included)
         for member in merged:
@@ -437,7 +447,7 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
                          [("step.started", {"base": base, "prs": None}),
                           ("step.ended", {"outcome": "refused", "reason": e.code})])
         raise
-    report = LineReport(repo, base, tuple(turns), reason)
+    report = LineReport(repo, base, tuple(turns), reason, tuple(line.notes))
     record.write(store, repo, None, role, run, "line",
                  [("step.ended", {"outcome": "passed", "reason": reason, "merged": report.merged,
                                   "left": report.left})])

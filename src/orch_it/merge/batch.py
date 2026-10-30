@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from orch_it.events.store import Store
@@ -22,6 +23,22 @@ from orch_it.testruns.runner import run_tests
 from orch_it.tickets.park import ROLE
 
 PASSED, FAILED, NO_RESULT = "passed", "failed", "no_result"
+BATCH_PREFIX = "orch-batch/"  # a batch branch is `orch-batch/<unix seconds>-<n>`
+
+
+def branch_name(moment: datetime, n: int) -> str:
+    return f"{BATCH_PREFIX}{int(moment.timestamp())}-{n}"
+
+
+def stale(name: str, now: datetime, minutes: float) -> bool:
+    """A batch branch older than `minutes` by the time in its name, or whose name holds none: a young one may belong to
+    a line on another machine."""
+
+    try:
+        made = datetime.fromtimestamp(int(name.removeprefix(BATCH_PREFIX).split("-")[0]), UTC)
+    except (ValueError, OverflowError, OSError):
+        return True
+    return (now - made).total_seconds() > minutes * 60
 
 
 @dataclass(frozen=True)

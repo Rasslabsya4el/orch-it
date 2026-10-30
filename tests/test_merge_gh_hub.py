@@ -501,6 +501,40 @@ def test_a_merge_that_broke_or_answered_badly_raises(answer):
         GhPullHub(Gh((["PUT"], answer))).merge(REPO, 5, "abc", "merge")
 
 
+def advance_gh(error):
+    return Gh((["PATCH", f"repos/{REPO}/git/refs/heads/main"], error))
+
+
+@pytest.mark.parametrize("error", [failed(422, "Update is not a fast forward"), failed(409, "Update is not a fast forward"),
+                                   failed(409, "Reference cannot be updated"), failed(409, "Conflict")])
+def test_a_base_that_moved_is_not_advanced_and_is_false(error):
+    assert GhPullHub(advance_gh(error)).advance_base(REPO, "main", "abc") is False
+
+
+@pytest.mark.parametrize(("error", "reason"), [
+    (failed(422, f"Required status check \"{LINUX_CHECK}\" is expected."),
+     f"Required status check \"{LINUX_CHECK}\" is expected."),
+    (failed(403, "Protected branch rules not configured for this branch"),
+     "Protected branch rules not configured for this branch"),
+    (failed(422, "Changes must be made through a pull request."), "Changes must be made through a pull request.")])
+def test_a_protection_refusal_of_the_base_update_raises_landing_refused_with_its_reason(error, reason):
+    with pytest.raises(hub_mod.LandingRefused) as refused:
+        GhPullHub(advance_gh(error)).advance_base(REPO, "main", "abc")
+    assert refused.value.reason == reason
+
+
+@pytest.mark.parametrize("error", [failed(500, "boom"), failed(404, "Not Found"), GithubError("gh_timeout", "api")])
+def test_any_other_failure_of_the_base_update_raises_github_error(error):
+    with pytest.raises(GithubError):
+        GhPullHub(advance_gh(error)).advance_base(REPO, "main", "abc")
+
+
+def test_the_base_is_advanced_without_force():
+    gh = advance_gh({"ref": "refs/heads/main"})
+    assert GhPullHub(gh).advance_base(REPO, "main", "abc") is True
+    assert gh.inputs == [{"sha": "abc", "force": False}]
+
+
 # --- Actions ----------------------------------------------------------------------------------
 
 

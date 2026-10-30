@@ -44,8 +44,9 @@ from urllib.parse import quote
 from orch_it import settings
 from orch_it.events import schema
 from orch_it.merge import git as merge_git
+from orch_it.merge.batch import BATCH_PREFIX
 from orch_it.merge.git import GitDone, GitError
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, LandingRefused, MainRun, Pull, Result
 from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, skipped, workflow_of
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
@@ -239,10 +240,18 @@ class GhPullHub(GhHub):
             self._answer(["api", "-X", "PATCH", f"repos/{repo}/git/refs/heads/{quote(base, safe='/')}"],
                          {"sha": sha, "force": False})
         except GithubError as e:
-            if any(f"HTTP {status}" in str(e) for status in (409, 422)):  # not a fast-forward: the base moved
+            said = str(e)
+            fast_forward = "fast forward" in said.lower().replace("-", " ")
+            if "HTTP 409" in said or ("HTTP 422" in said and fast_forward):  # not a fast-forward: the base moved
                 return False
+            if "HTTP 422" in said or "HTTP 403" in said:  # the base's own rules refused the update
+                raise LandingRefused(_message(said)) from e
             raise
         return True
+
+    def batch_branches(self, repo: str) -> list[str]:
+        listed = self._list(["api", "--paginate", f"repos/{repo}/git/matching-refs/heads/{BATCH_PREFIX}"])
+        return [name for found in listed if (name := _text(found.get("ref")).removeprefix("refs/heads/"))]
 
     def end_batch(self, repo: str, branch: str) -> None:
         try:
@@ -576,6 +585,15 @@ class GhPullHub(GhHub):
 
 
 _NO_PROTECTION_403 = ("Upgrade to GitHub Pro", "Branch not protected")
+
+
+def _message(said: str) -> str:
+    """What GitHub said, from a failed `gh` call's text: between `gh: ` and ` (HTTP`."""
+
+    start = said.find("gh: ")
+    start = 0 if start < 0 else start + len("gh: ")
+    end = said.rfind(" (HTTP")
+    return said[start:end if end >= start else len(said)].strip()
 
 
 def _unprotected(error: GithubError) -> bool:

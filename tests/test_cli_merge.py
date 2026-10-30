@@ -219,6 +219,28 @@ def test_merge_line_hands_run_line_a_suite_when_batch_size_is_two_or_more_and_no
         assert len(seen) == 1 and callable(seen[0]) == expect_suite and (seen[0] is None) == (not expect_suite)
 
 
+def test_merge_line_prints_batch_off_before_the_line_runs_and_its_notes_before_the_summary(
+        github, tmp_path, capsys, monkeypatch):
+    from orch_it.merge.line import LineReport, Served
+
+    monkeypatch.setattr(lock.installation, "data_folder", lambda: tmp_path / "data")
+    printed = []
+
+    def fake(hub, store, repo, base, **kwargs):
+        printed.append(capsys.readouterr().out)  # what the command had said when the line began
+        return LineReport(repo, base, (Served(7, None, "merged", 1.0, 0),), "empty",
+                          ("batch landing refused: Changes must be made through a pull request.",))
+
+    monkeypatch.setattr(commands, "run_line", fake)
+    (tmp_path / "plain").mkdir()
+    code, out, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "line", "--repo", REPO,
+                         "--work-tree", str(tmp_path / "plain"))
+    assert (code, err) == (0, "") and len(printed) == 1 and printed[0].startswith("batch off: no work tree of ")
+    assert out.splitlines() == ["#7 merged waited 1 min updates 0",
+                                "batch landing refused: Changes must be made through a pull request.",
+                                f"line of {REPO} into main: merged=1 left=0 empty"]
+
+
 def test_merge_line_with_no_clone_of_the_repo_goes_one_by_one_and_says_so(seen, tmp_path, capsys):
     (tmp_path / "plain").mkdir()
     code, out, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "line", "--repo", REPO,
