@@ -179,10 +179,10 @@ def workflow_of(jobs):
         f"  {name}:\n    name: {name}\n    runs-on: {os_name}-latest\n" for name, os_name in jobs.items())
 
 
-def batch_world(tmp_path, cause, *, tickets=(10, 11, 12, 13), required=(LINUX_CHECK,), jobs=None):
+def batch_world(tmp_path, cause, *, tickets=(10, 11, 12, 13), required=(LINUX_CHECK,), jobs=None, workflow=None):
     """The line with the suite at `own` (which runs on the Linux word) and GitHub out for `cause`. `required`: the
     names the repo requires (the setting, and what the base's protection requires on the fake); `jobs`: the test jobs
-    of its workflow, name -> OS."""
+    of its workflow, name -> OS; `workflow`: its text, instead of one built from `jobs`."""
 
     world = line_world(tmp_path, tickets=tickets)
     hub, store, prs, ci = world
@@ -190,7 +190,7 @@ def batch_world(tmp_path, cause, *, tickets=(10, 11, 12, 13), required=(LINUX_CH
     actions = actions_for(tmp_path)
     turn_off(actions, cause)
     settings = TestSettings(github_tests=True, required_checks=tuple(required))
-    workflow = workflow_of(SUITE_JOBS if jobs is None else jobs)
+    workflow = workflow or workflow_of(SUITE_JOBS if jobs is None else jobs)
     place = FixturePlace(hub, set())
     place.posted = []  # the pass at this place runs the suite and posts nothing
 

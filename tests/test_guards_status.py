@@ -215,8 +215,8 @@ def test_the_command_prints_the_six_facts_as_a_table_and_exits_0_when_all_are_ok
     out = capsys.readouterr().out.splitlines()
     assert code == 0
     assert out[0].split() == ["fact", "ok", "detail"]
-    assert [line.split()[0] for line in out[1:]] == list(FACTS)
-    assert all(line.split()[1] == "yes" for line in out[1:])
+    assert [line.split()[0] for line in out[1:7]] == list(FACTS)  # the six rows; names only GitHub runs follow them
+    assert all(line.split()[1] == "yes" for line in out[1:7])
 
 
 def test_the_command_exits_1_and_still_prints_the_table_when_a_fact_fails(bare, tmp_path, monkeypatch, capsys):
@@ -228,7 +228,7 @@ def test_the_command_exits_1_and_still_prints_the_table_when_a_fact_fails(bare, 
                  "--work-tree", str(bare)])
     out = capsys.readouterr().out.splitlines()
     assert code == 1
-    assert [line.split()[1] for line in out[1:]] == ["no"] * 6
+    assert [line.split()[1] for line in out[1:7]] == ["no"] * 6
     assert "unprotected" in out[1] or "not protected" in out[1]
 
 

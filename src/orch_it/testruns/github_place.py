@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
@@ -55,9 +56,9 @@ def oses_of_workflow(text: str, required: tuple[str, ...]) -> tuple[str, ...]:
     found: list[str] = []
     for check in required:
         for job in jobs:
-            if (job["name"] or job["key"]) != check:
+            if _job_label(job) != check:
                 continue
-            os_name = next((o for o in (os_of({"labels": [label]}) for label in job["labels"]) if o), None)
+            os_name = _job_os(job)
             if os_name and os_name not in found:
                 found.append(os_name)
     return tuple(found)
@@ -76,34 +77,59 @@ def checks_on_os(text: str, required: tuple[str, ...], os_name: str | None) -> t
         and os_name in (os_of({"labels": [label]}) for label in job["labels"]) for job in jobs))
 
 
-def os_free_checks(text: str, required: tuple[str, ...]) -> tuple[str, ...]:
-    """The names of `required` tied to no OS, in the order of `required`: no job of the workflow `text` has the name (a
-    scan of the pull request, the commit e-mail check: checks that run where the suite runs). A job whose runner names no
-    OS (a matrix expression, `self-hosted`) is not OS-free, its OS is only unknown. A workflow with no job at all says
-    nothing of any name, so none is OS-free then."""
+@dataclass(frozen=True)
+class CheckClasses:
+    """What a workflow says of each required name: `bound` (name -> the OS of the job that has it), `free` (tied to no OS)
+    and `unclassified` (the workflow cannot say)."""
 
-    jobs = _jobs_of(text)
-    if not jobs:
-        return ()
-    named = {job["name"] or job["key"] for job in jobs}
-    return tuple(check for check in required if check not in named)
+    bound: dict[str, str]
+    free: tuple[str, ...]
+    unclassified: tuple[str, ...]
 
 
-def os_bound_checks(text: str, required: tuple[str, ...]) -> dict[str, str]:
-    """The names of `required` that are jobs of the workflow `text` with an OS's runner, each with that OS (the first
-    label that names one), in the order of `required`; a job whose runner names no OS is left out."""
+def classify_checks(text: str, required: tuple[str, ...]) -> CheckClasses:
+    """Sort the names of `required` by what the workflow `text` says, in the order of `required`. A name is `bound` when a
+    job of that name (its `name`, else its key) runs on an OS. A name no job has is `free` (a scan of the pull request,
+    the commit e-mail check: they run where the suite runs) only when the workflow is read whole: it has a job and
+    every job has a literal name and a runner that names an OS. Else (no job at all, a job named or run on by an
+    expression, a reusable workflow, an unknown runner: the name may be that job's, or live in another file) the name is
+    `unclassified`: it fails closed, so no run is taken to have covered it."""
 
     jobs = _jobs_of(text)
     bound: dict[str, str] = {}
     for check in required:
-        for job in jobs:
-            if (job["name"] or job["key"]) != check:
-                continue
-            os_name = next((o for o in (os_of({"labels": [label]}) for label in job["labels"]) if o), None)
-            if os_name:
-                bound[check] = os_name
-                break
-    return bound
+        os_name = next((_job_os(job) for job in jobs if _job_label(job) == check and _job_os(job)), None)
+        if os_name:
+            bound[check] = os_name
+    rest = tuple(check for check in required if check not in bound)
+    if _read_whole(jobs):
+        return CheckClasses(bound, rest, ())
+    return CheckClasses(bound, (), rest)
+
+
+def os_free_checks(text: str, required: tuple[str, ...]) -> tuple[str, ...]:
+    """The names of `required` tied to no OS in the workflow `text` (`classify_checks`); none when it is not read whole."""
+
+    return classify_checks(text, required).free
+
+
+def _job_label(job: dict) -> str:
+    """The name a job posts as a check: its `name`, else its key."""
+
+    return job["name"] or job["key"]
+
+
+def _job_os(job: dict) -> str | None:
+    """The OS of a job: its first `runs-on` label that names one."""
+
+    return next((o for o in (os_of({"labels": [label]}) for label in job["labels"]) if o), None)
+
+
+def _read_whole(jobs: list[dict]) -> bool:
+    """The workflow has a job and every job has a literal name and a runner that names an OS and holds no expression."""
+
+    return bool(jobs) and all(
+        "${{" not in " ".join([_job_label(job), *job["labels"]]) and _job_os(job) for job in jobs)
 
 
 def workflow_text_of(work_tree: Path) -> str:

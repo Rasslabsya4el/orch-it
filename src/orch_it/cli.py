@@ -387,16 +387,24 @@ def _guards_check_text(args) -> tuple[str, int]:
 
 
 def _guards_status(args) -> tuple[str, int]:
-    """`guards status`: the six facts as a table (fact, ok, detail), then one line `<name> waits for a <os> place` per
-    required name no place of the settings can cover; exit 0 when all facts are ok, 1 when any is not (a protection that
+    """`guards status`: the six facts as a table (fact, ok, detail), then one line per required name only
+    GitHub runs (an OS no place of the settings has, or a name the workflow cannot place); exit 0 when all facts are ok, 1 when any is not (a protection that
     cannot be read is a failed fact, not an error)."""
 
     work_tree = Path(args.work_tree)
     report = guards_status.status(_store(args), args.repo or _repo_of(str(work_tree)), work_tree)
     rows = [[fact.name, "yes" if fact.ok else "no", fact.detail] for fact in report.facts]
     table = render(QueryResult(["fact", "ok", "detail"], rows))
-    waiting = "".join(f"{line}\n" for line in report.waiting)  # the names no place of the settings can cover
-    return table + waiting, 0 if report.ok else 1
+    return table + "".join(f"{_waiting_line(held)}\n" for held in report.waiting), 0 if report.ok else 1
+
+
+def _waiting_line(held) -> str:
+    """One line for a required name only GitHub runs: it holds a batch only while GitHub does not run it."""
+
+    if held.os is None:
+        return (f"{held.name}: the workflow ties it to no OS it can read, so no other place posts it;"
+                " it holds a batch while GitHub does not run it")
+    return f"{held.name}: only GitHub runs {held.os}; it holds a batch while GitHub does not run it"
 
 
 def _guards_install(args) -> tuple[str, int]:

@@ -12,9 +12,10 @@ Who holds the gate (#414 decision 7): the `required_checks` fact says whether Gi
 every required name (`Report.gate` `github`) or not: the base has no protection (or its plan gives none), or the
 protection leaves a required name out, and the merge line itself holds those names green before it moves the base (`line`); a protection that cannot be read claims no holder (`None`).
 
-Names waiting (#414 unit 16): with GitHub's runs not starting the line posts only the names a suite run covered, those of
-the OS it ran on and the OS-free ones; `Report.waiting` has one line `<name> waits for a <os> place` for each required
-name that is a job on an OS no place of the settings (this machine, the machines that are on) has.
+Names held by GitHub alone (#414 unit 16): with GitHub's runs not starting the line posts only the names a suite run
+covered, those of the OS it ran on and the OS-free ones. `Report.waiting` has a `Waiting` for each required name that holds
+a batch in that case, true whether GitHub is out or not: a name that is a job on an OS no place of the settings (this
+machine, the machines that are on) has, or (`os` None) a name the workflow cannot place on an OS at all.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from orch_it.guards import install
 from orch_it.testruns import github
 from orch_it.testruns.config import TestSettings, required_checks
 from orch_it.testruns.environment import this_os
-from orch_it.testruns.github_place import os_bound_checks, workflow_text_of
+from orch_it.testruns.github_place import classify_checks, workflow_text_of
 
 BRANCH = "main"
 FACT_NAMES = ("required_checks", "strict", "enforce_admins", "force_push_and_deletion_off",
@@ -50,10 +51,19 @@ GITHUB_HOLDS = "held by GitHub's branch protection"
 
 
 @dataclass(frozen=True)
+class Waiting:
+    """A required name only GitHub runs: `os` is the OS of its job that no place of the settings has, None when the
+    workflow cannot say what the name is tied to (it is unclassified)."""
+
+    name: str
+    os: str | None
+
+
+@dataclass(frozen=True)
 class Report:
     facts: tuple[Fact, ...]
     gate: str | None = None  # who holds the required checks gate: `line`, `github`, or None when unknown
-    waiting: tuple[str, ...] = ()  # one line per required name tied to an OS no place of the settings has
+    waiting: tuple[Waiting, ...] = ()  # the required names only GitHub runs; they hold a batch while it does not
 
     @property
     def ok(self) -> bool:
@@ -133,19 +143,20 @@ def _branch_facts(protection_reader, repo: str, required: tuple[str, ...]):
                              "allow_force_pushes": force, "allow_deletions": deletion}, gate
 
 
-def waiting_lines(text: str, required: tuple[str, ...], place_oses: set[str]) -> tuple[str, ...]:
-    """One line `<name> waits for a <os> place` for each name of `required` that is a job of the workflow `text` on an OS
-    that is in no of `place_oses`: with GitHub's runs not starting, no run covers it and it holds a batch. An OS-free
-    name (no job of the workflow) is covered by the place that runs the suite and never waits."""
+def waiting_names(text: str, required: tuple[str, ...], place_oses: set[str]) -> tuple[Waiting, ...]:
+    """The names of `required` only GitHub runs, in the order of `required`: a job of the workflow `text` on an OS in none
+    of `place_oses`, or a name the workflow cannot place on an OS (unclassified). An OS-free name is covered by the place
+    that runs the suite and never waits."""
 
-    return tuple(f"{name} waits for a {os_name} place"
-                 for name, os_name in os_bound_checks(text, required).items() if os_name not in place_oses)
+    classes = classify_checks(text, required)
+    return tuple(Waiting(name, classes.bound.get(name)) for name in required
+                 if (name in classes.bound and classes.bound[name] not in place_oses) or name in classes.unclassified)
 
 
 def status(store, repo: str, work_tree: Path | str = ".", *,
            protection: Callable[[str], dict] | None = None, own_os: str | None = None) -> Report:
     """Read `repo`'s protection of `main` (`protection(repo)`, default the GitHub API) and the hooks
-    of `work_tree`, write the three checks and return the six facts and the names waiting for a place of an OS (from the
+    of `work_tree`, write the three checks and return the six facts and the required names only GitHub runs (from the
     workflow of `work_tree`, the required checks, and the OSes of this machine, `own_os` by default, and of the
     machines that are on in the settings). Never raises on what it reads: a protection or a folder that cannot be read
     is a failed fact."""
@@ -156,7 +167,7 @@ def status(store, repo: str, work_tree: Path | str = ".", *,
     place_oses = {machine.os for machine in test_settings.machines if machine.on}
     if test_settings.own_capacity > 0:
         place_oses.add(own_os or this_os())
-    waiting = waiting_lines(workflow_text_of(Path(work_tree)), required, place_oses)
+    waiting = waiting_names(workflow_text_of(Path(work_tree)), required, place_oses)
     branch, branch_findings, branch_facts, gate = _branch_facts(protection or read_protection, repo, required)
 
     hooks_path = None
