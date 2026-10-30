@@ -311,9 +311,10 @@ class _Line:
     def post_missing(self, sha: str, covered: tuple[str, ...]) -> None:
         """GitHub's runs would not start (Actions off, minutes spent, a queue past its bound), so the suite that just
         passed ran at another place and no workflow will post the required names. The pass speaks for the names its run
-        covered (`covered`: the test jobs on the OS it ran on): the line posts PASSED for each of those nobody posted on
-        `sha` (a name some place posted, red or pending, is left as it is). Any other required name (a scan, a test job
-        of another OS) stays unposted and holds the batch (`checks_missing`). Only after a passed suite."""
+        covered (`covered`: the jobs on the OS it ran on, and the OS-free names, tied to no OS, which run where the suite
+        runs): the line posts PASSED for each of those nobody posted on `sha` (a name some place posted, red or pending,
+        is left as it is). A required name of another OS never gets a post no run covered: it stays unposted and holds
+        the batch (`checks_missing`). Only after a passed suite."""
 
         posted = {check.name for check in self.hub.checks(self.repo, sha, statuses=True)}
         for name in self.required:
