@@ -40,6 +40,7 @@ import re
 import tempfile
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
@@ -291,12 +292,29 @@ class GhPullHub(GhHub):
                                attempt=attempts[run_id] if run_id else 1,
                                started_at=_moment(run.get("started_at"))))
         if statuses:
-            found += self._statuses(repo, sha, {check.name for check in found})
+            found = self._with_statuses(found, self._statuses(repo, sha))
         return found
 
-    def _statuses(self, repo: str, sha: str, taken: set[str]) -> list[Check]:
-        """The commit statuses of `sha` under a name no check run has; the combined status lists the latest of each
-        context (`statuses`, paged)."""
+    @staticmethod
+    def _with_statuses(runs: list[Check], statuses: list[Check]) -> list[Check]:
+        """`runs` and the statuses under a name no check run has. A check run wins over a status of its name, except
+        that a green check run beside a status that is not green reads as that status (never green over a worse one);
+        beside a green status it reads as a status too (`status`), the kind a base's protection counts."""
+
+        by_status = {status.name: status for status in statuses}
+        merged = []
+        for run in runs:
+            status = by_status.pop(run.name, None)
+            if status is None or run.state != PASSED:
+                merged.append(run)
+            elif status.state == PASSED:
+                merged.append(replace(run, status=True))
+            else:
+                merged.append(status)
+        return merged + list(by_status.values())
+
+    def _statuses(self, repo: str, sha: str) -> list[Check]:
+        """The commit statuses of `sha`; the combined status lists the latest of each context (`statuses`, paged)."""
 
         found = []
         for status in self._pages(["api", "--paginate", f"repos/{repo}/commits/{sha}/status?per_page=100"],
@@ -304,9 +322,8 @@ class GhPullHub(GhHub):
             name = _text(status.get("context"))
             if not name:
                 raise GithubError("gh_bad_output", f"{repo}@{sha}: a status with no context")
-            if name not in taken:
-                found.append(Check(name=name, state=_STATUS_STATES.get(status.get("state"), NO_RESULT), run_id=None,
-                                   attempt=1, started_at=_moment(status.get("created_at"))))
+            found.append(Check(name=name, state=_STATUS_STATES.get(status.get("state"), NO_RESULT), run_id=None,
+                               attempt=1, started_at=_moment(status.get("created_at")), status=True))
         return found
 
     def post_status(self, repo: str, sha: str, name: str, state: str, description: str) -> None:

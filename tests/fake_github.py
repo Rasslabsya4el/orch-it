@@ -103,6 +103,9 @@ class FakeGitHub(FakeHub):
         self.merge_lag_seconds = 0  # seconds GitHub takes to mark a pull request merged after a base advance
         self.lagging: dict[int, tuple[datetime, str]] = {}  # pr -> (when it shows merged, the sha it merged at)
         self.advance_refusal: str | None = None  # the message of a 422 that `advance_base` raises (protection)
+        # whether the base's protection counts a check run on a ref update; GitHub does not count the check runs of a
+        # manual (dispatch) run on a batch branch (#414 row 3, enforce_admins on), only commit statuses
+        self.counts_check_runs = True
         self._shas = 0
 
     # building the world
@@ -190,7 +193,7 @@ class FakeGitHub(FakeHub):
 
     def post_status(self, repo, sha, name, state, description):
         self.calls.append(("post_status", sha, name, state))
-        self.checks_on(sha, state, names=(name,))
+        self.check_runs.setdefault(sha, {})[name] = Check(name, state, None, 1, self.now, status=True)
 
     def pull_comments(self, repo, number):
         self._check(repo, number)
@@ -270,7 +273,8 @@ class FakeGitHub(FakeHub):
         main = self.branches[base]
         if branch is None or self.branches[branch][:len(main)] != main:
             return False
-        held = {name for name, check in self.check_runs.get(sha, {}).items() if check.state == PASSED}
+        held = {name for name, check in self.check_runs.get(sha, {}).items()
+                if check.state == PASSED and (check.status or self.counts_check_runs)}
         if self.required_by_base.get(base, set()) - held:  # protection with admins included: a name not green refuses
             raise LandingRefused("Required status checks are expected: "
                                  + ", ".join(sorted(self.required_by_base[base] - held)))
