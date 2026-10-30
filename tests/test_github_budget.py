@@ -131,6 +131,14 @@ def test_repo_of_names_the_repo_a_call_is_about():
     assert github_budget.repo_of(["api", "user"]) is None  # names no repo: not stored (the envelope needs one)
 
 
+def test_repo_of_reads_the_repo_qualifier_of_a_search_query():
+    # the parked-issue search of hub.py: its one `q=` field names the repo as `repo:OWNER/NAME`
+    search = ["api", "--method", "GET", "search/issues", "-f",
+              'q=repo:acme-dev/orch-tools is:issue is:open in:body "Parked:"', "-f", "per_page=100"]
+    assert github_budget.repo_of(search) == "acme-dev/orch-tools"
+    assert github_budget.repo_of(["api", "--method", "GET", "search/issues", "-f", "q=is:issue is:open"]) is None
+
+
 @pytest.mark.parametrize("args", [
     ["pr", "create", "--repo", "acme-dev/orch-tools", "--base", "main", "--head", "orch-9"],  # merge/gh.py:152
     ["pr", "merge", "7", "--repo=acme-dev/orch-tools", "--squash"],  # merge/gh.py:206

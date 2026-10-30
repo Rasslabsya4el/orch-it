@@ -55,6 +55,7 @@ class FakeGh:
         self.zips = tmp_path / "zips"
         self.zips.mkdir()
         self.runs, self.jobs, self.artifacts, self.timing = [], {}, {}, {}
+        self.pull_bodies, self.issues = {}, {}  # what the ticket of a run's pull request reads (#406 decision 1)
         self.calls = []
         self.fail_when = None
 
@@ -64,7 +65,14 @@ class FakeGh:
             raise GithubError("gh_failed", "recorded failure")
         if args[0] == "run":
             return self.download(args)
+        if "search/issues" in args:  # the ticket reader's search for parked issues: none here
+            return json.dumps({"items": []})
         path = args[-1].partition("?")[0]
+        if path.endswith("/issues"):  # the ticket reader's list of parked issues: none here
+            return json.dumps([])
+        found = re.fullmatch(r"repos/[^/]+/[^/]+/(pulls|issues)/(\d+)", path)
+        if found:
+            return self.pull(int(found.group(2))) if found.group(1) == "pulls" else self.issue(int(found.group(2)))
         parts = path.split("/")
         if path.endswith(f"/workflows/{github.WORKFLOW_FILE}/runs"):
             if "--paginate" not in args:
@@ -89,6 +97,17 @@ class FakeGh:
         newest_first = sorted(matching, key=lambda r: (r["created_at"], r["id"]), reverse=True)
         return json.dumps({"total_count": len(matching),
                            "workflow_runs": newest_first[:int(asked.get("per_page", 30))]})
+
+    def pull(self, number):
+        """A closed pull request (no compare read) of this repo, its body from `pull_bodies`."""
+        return json.dumps({"number": number, "title": "a change", "body": self.pull_bodies.get(number, ""),
+                           "head": {"sha": f"pr-head-{number}", "ref": "feat/x"}, "base": {"ref": "main"},
+                           "created_at": stamp(BASE, 0), "state": "closed", "merged_at": None, "draft": False})
+
+    def issue(self, number):
+        if number not in self.issues:
+            raise GithubError("gh_failed", "HTTP 404: Not Found")
+        return json.dumps(self.issues[number])
 
     @staticmethod
     def pages(key, items):
@@ -129,7 +148,7 @@ class FakeGh:
             labels = ["ubuntu-latest"] if name == LINUX_CHECK else ["windows-latest"]
             ran = spec["conclusion"] != "skipped"
             self.jobs[run_id].append({
-                "id": job_id, "name": name, "status": "completed", "conclusion": spec["conclusion"],
+                "id": job_id, "name": name, "status": spec.get("status", "completed"), "conclusion": spec["conclusion"],
                 "run_attempt": spec["attempt"], "labels": labels,
                 "created_at": stamp(base, 0),
                 "started_at": None if spec["started"] is False else stamp(
@@ -186,6 +205,12 @@ def pairs(store, step="test_run"):
     return {run: (sides.get("step.started"), sides.get("step.ended")) for run, sides in found.items()}
 
 
+def ends_of_test_runs(store) -> int:
+    """How many `test_run` ends (`step.ended`) the store holds."""
+
+    return store.query("SELECT count(*) FROM events WHERE kind = 'step.ended' AND step = 'test_run'").rows[0][0]
+
+
 def ended_of(store, job_name):
     """The ended detail of the one test_run of the job named `job_name` (by its run_os)."""
 
@@ -219,7 +244,7 @@ def test_the_started_detail_holds_where_on_what_and_for_which_pull_request(store
     run_import(store, gh)
     started, _ = pairs(store)["github:100/1001/1"]
     assert started == {"place": "github", "chosen": "github", "reason": None, "run_os": "linux",
-                       "commit": "sha100", "branch": "feat/x", "pr": 7, "selection": "full",
+                       "commit": "sha100", "branch": "feat/x", "pr": 7, "part": LINUX_CHECK, "selection": "full",
                        "event": "pull_request"}
 
 
@@ -474,10 +499,14 @@ def test_every_attempt_of_a_run_has_its_own_test_run(store, gh):
                         "github:100/1002/2": "passed"}
 
 
-def test_a_run_still_in_progress_is_left_for_the_next_import(store, gh):
-    gh.add_run(100, status="in_progress", conclusion=None)
+def test_a_run_still_in_progress_gives_each_started_job_its_start_and_wait_only(store, gh):
+    """#406 decision 1: a job that started is a `test_run` pair from its start; its end waits for its completion."""
+    running = {"status": "in_progress", "conclusion": None, "completed": None}
+    gh.add_run(100, status="in_progress", conclusion=None, **{LINUX_CHECK: running, WINDOWS_CHECK: running})
     report = run_import(store, gh)
-    assert report.written == 0 and store.query("SELECT count(*) FROM events").rows == [(0,)]
+    assert report.written == 6  # per job: the start, the wait's start and its end
+    assert ends_of_test_runs(store) == 0
+    assert len(pairs(store)) == 2 and all(ended is None for _started, ended in pairs(store).values())
     assert gh.downloads() == []
 
 
@@ -1188,7 +1217,7 @@ NEWEST = github.DEFAULT_NEWEST_RUNS
 SHORT_HISTORY, LONG_HISTORY = 30, 300
 FIRST_ID = 8000  # the id of the newest run of `add_history`
 RUN_SPACING_S = 1000
-CALLS_PER_RUN = 5  # jobs, artifacts and timing of the run, one download per required job
+CALLS_PER_RUN = 8  # jobs, artifacts and timing of the run, one download per required job, and the 3 reads of its PR's ticket (#406 decision 1)
 
 
 def add_history(gh, count):
@@ -1235,7 +1264,8 @@ def test_newest_counts_completed_runs_only(store, gh):
     gh.add_run(101, created=RUN_SPACING_S, status="in_progress", conclusion=None)
     gh.add_run(102, created=2 * RUN_SPACING_S)
     assert run_import(store, gh, newest=2).runs_read == 2
-    assert {run.split("/")[0] for run in pairs(store)} == {"github:100", "github:102"}
+    # the run still going (101) has its started job's start, but no end: the ended pairs are the completed runs
+    assert {run.split("/")[0] for run, (_started, ended) in pairs(store).items() if ended} == {"github:100", "github:102"}
 
 
 def test_newest_with_since_asks_only_for_the_runs_created_since_it(store, gh):
