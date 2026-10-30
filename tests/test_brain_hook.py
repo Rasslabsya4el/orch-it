@@ -158,7 +158,7 @@ def test_the_rules_are_read_from_origin_s_default_branch_not_the_work_tree(tmp_p
     git("init", "--bare", "-b", "main", str(origin), cwd=tmp_path)
     git("clone", str(origin), str(work), cwd=tmp_path)
     (work / "docs" / "agents").mkdir(parents=True)
-    (work / "docs" / "agents" / "brain.md").write_text(RULES, "utf-8")
+    (work / "docs" / "agents" / "brain.md").write_bytes(RULES.encode("utf-8"))  # bytes: no newline conversion
     git("-c", "user.name=t", "-c", "user.email=t@t", "add", ".", cwd=work)
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "rules", cwd=work)
     git("push", "origin", "main", cwd=work)

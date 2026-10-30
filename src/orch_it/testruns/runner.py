@@ -10,6 +10,7 @@ between the two events stays a live run in the store until its bound and a grace
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 import subprocess
@@ -25,7 +26,7 @@ from orch_it.events.store import Store
 from orch_it.testruns import environment, outcome, place_rule
 from orch_it.testruns.config import TestSettings
 from orch_it.testruns.github import run_gh
-from orch_it.testruns.github_place import GithubPlace
+from orch_it.testruns.github_place import GithubPlace, budget_poll
 from orch_it.testruns.machine import MachinePlace
 from orch_it.testruns.places import OwnPlace, PlaceEnd, PlaceRefused, PlaceVanished, Request
 
@@ -56,6 +57,10 @@ class RunDone:
     collected: int
     failed: int
     missing_ids: tuple[str, ...] = ()
+    failed_tests: tuple[str, ...] = ()  # the ids of the red cases of this run
+    placeholder_tests: tuple[str, ...] = ()  # the tests that ran on placeholder files at GitHub (see `run_tests`)
+    github_out: str | None = None  # why GitHub's runs would not start (`places.RUNS_NOT_STARTING`) when the run went elsewhere
+    run_os: str | None = None  # the OS the run went on (the place's, else the one asked for); None when unknown
 
 
 def read_ids(path: Path) -> list[str]:
@@ -134,13 +139,20 @@ def default_places(settings: TestSettings, work_tree: Path, *, ssh: tuple[str, .
 def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSettings,
               ids_file: Path | None = None, place: str | None = None, need_os: str = "any",
               role: str = "script", ticket: int | None = None, places: dict | None = None,
-              wait_minutes: float | None = None, sleep=time.sleep, now=None) -> RunDone:
+              wait_minutes: float | None = None, sleep=time.sleep, now=None, clock=time.monotonic) -> RunDone:
     """One run of the repo's test command at the place the rule picks (or `place`, forced).
     `places` maps a place id to its adapter (default: `default_places`). A place lost or refusing
     mid-run is left out and the rule picks again, until a place finishes the run or none is
     left. No place left writes a `wait` on `test_place`: while a place it can free is busy it
-    lasts up to `wait_minutes` (default: the bound), re-deciding every `WAIT_POLL_SECONDS`, else
-    it ends at once; a wait that finds no place ends the run `refused`."""
+    lasts up to `wait_minutes` (default: the bound) on `clock`, re-deciding every poll interval
+    (`WAIT_POLL_SECONDS`, longer under the GitHub request budget's threshold, the last one clamped to
+    the time left), else it ends at once; a wait that finds no place ends the run `refused`.
+
+    A run at the `github` place that passes does not settle while a test of it read a placeholder file (a stub for
+    private data GitHub does not have; the report marks the test, see `junit.Case.placeholder`): those tests rerun, as
+    a run of their own, at the rule's next place that is not `github`, and that rerun is the run's result, with
+    `placeholder_tests` naming them. A rerun that no place takes ends `refused`, so a placeholder's green lands
+    nothing. A red run, a run at another place or one with no marked test is not rerun."""
 
     work_tree = Path(work_tree)
     if not work_tree.is_dir():
@@ -156,33 +168,44 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     with store.writer() as writer:
         if place is not None:  # a human's choice: taken as it is, the rule's view kept beside it
             decision = place_rule.Decision(place, "forced", run.decide({}).offered)
-            return run.attempt(writer, places[place], decision)
-        excluded: dict[str, str] = {}  # places that refused or vanished in this run
-        last = None
-        while True:
-            decision = run.decide(excluded)
-            if decision.chosen is None:  # no place left: a wait on test_place, polled only while
-                # a place it can free is busy, else ended at once
-                polls = _polls(settings, wait_minutes) if run.may_free(decision, excluded) else 0
-                decision = run.wait(writer, excluded, polls, sleep)
-            if decision.chosen is None:
-                # after a lost or refused attempt, that attempt ends the run; else one refusal
-                return last if last is not None else run.refused(writer, decision)
-            last = run.attempt(writer, places[decision.chosen], decision)
-            if last.outcome not in ("lost", "refused"):
-                return last
-            excluded[last.place] = last.reason
+            done = run.attempt(writer, places[place], decision)
+        else:
+            done = _placed(run, writer, places, {}, wait_minutes, sleep, clock)
+        if done.place != "github" or done.outcome != "passed" or not done.placeholder_tests:
+            return run.named(done)
+        again = run.with_ids(list(done.placeholder_tests))
+        rerun = _placed(again, writer, places, {"github": "placeholders"}, wait_minutes, sleep, clock)
+        return replace(again.named(rerun), placeholder_tests=done.placeholder_tests)
 
 
-def _polls(settings: TestSettings, wait_minutes: float | None) -> int:
-    """How many `WAIT_POLL_SECONDS` polls a wait of `wait_minutes` (default: the bound) makes: a
-    count, so a clock standing still or stepping back never stretches it."""
+def _placed(run: _Run, writer, places: dict, excluded: dict[str, str], wait_minutes, sleep, clock) -> RunDone:
+    """One run of `run` at the place the rule picks, `excluded` places left out from the start."""
+
+    excluded = dict(excluded)  # plus the places that refused or vanished in this run
+    last = None
+    while True:
+        decision = run.decide(excluded)
+        if decision.chosen is None:  # no place left: a wait on test_place, polled only while
+            # a place it can free is busy, else ended at once
+            seconds = _wait_seconds(run.settings, wait_minutes) if run.may_free(decision, excluded) else 0.0
+            decision = run.wait(writer, excluded, seconds, sleep, clock)
+        if decision.chosen is None:
+            # after a lost or refused attempt, that attempt ends the run; else one refusal
+            return last if last is not None else run.refused(writer, decision)
+        last = run.attempt(writer, places[decision.chosen], decision)
+        if last.outcome not in ("lost", "refused"):
+            return last
+        excluded[last.place] = last.reason
+
+
+def _wait_seconds(settings: TestSettings, wait_minutes: float | None) -> float:
+    """The length of a wait of `wait_minutes` (default: the bound), in seconds: the bound on the clock, so a poll
+    interval that grows under the GitHub budget never stretches it."""
 
     minutes = settings.bound_minutes if wait_minutes is None else wait_minutes
     if not (isinstance(minutes, (int, float)) and math.isfinite(minutes)):
         minutes = settings.bound_minutes
-    minutes = min(max(minutes, 0.0), place_rule.MAX_MINUTES)
-    return math.ceil(minutes * 60 / WAIT_POLL_SECONDS)
+    return min(max(minutes, 0.0), place_rule.MAX_MINUTES) * 60.0
 
 
 class _Run:
@@ -198,6 +221,15 @@ class _Run:
         status = git_output(work_tree, "status", "--porcelain")
         self.dirty = None if status is None else bool(status)
         self.branch = _branch(work_tree)
+        self.reran: tuple[str, ...] = ()  # the placeholder tests this run reruns; empty: it is no rerun
+        self.github_cause: str | None = None  # why GitHub's runs would not start at the last decision, if they would not
+
+    def with_ids(self, ids: list[str]) -> _Run:
+        """This run's facts for a run of just `ids` (its own selection)."""
+
+        other = copy.copy(self)
+        other.ids, other.selection, other.reran = ids, selection_of(ids), tuple(ids)
+        return other
 
     def envelope(self, step: str) -> dict:
         return self.base | {"step": step, "run": live_id()}
@@ -206,6 +238,7 @@ class _Run:
         live, measured = place_rule.read_facts(self.store, repo=self.repo, selection=self.selection,
                                                need_os=self.need_os, now=self.now())
         offers, notes = self.offers, {}
+        self.github_cause = None
         github = self.places.get("github")
         if hasattr(github, "availability"):  # the place whose room is the account's, read from GitHub
             offers = []
@@ -213,9 +246,15 @@ class _Run:
                 if offer.place == "github" and offer.on:
                     room = github.availability(self.now())
                     live["github"], notes["github"] = room.busy, room.note
-                    offer = replace(offer, on=room.on, capacity=room.limit)
+                    self.github_cause = room.cause
+                    offer = replace(offer, on=room.on, capacity=room.limit, metered=room.metered)
                 offers.append(offer)
         return place_rule.choose(self.need_os, offers, live, measured, excluded, notes)
+
+    def named(self, done: RunDone) -> RunDone:
+        """`done` with `github_out`: the cause GitHub's runs would not start, when the run went to another place."""
+
+        return replace(done, github_out=None if done.place == "github" else self.github_cause)
 
     def may_free(self, decision: place_rule.Decision, excluded: dict[str, str]) -> bool:
         """A place busy with live runs that has room once they end: the only drop a wait can
@@ -225,16 +264,18 @@ class _Run:
         return any(o.dropped == place_rule.BUSY and o.place not in excluded and capacity[o.place] > 0
                    for o in decision.offered)
 
-    def wait(self, writer, excluded: dict[str, str], polls: int, sleep) -> place_rule.Decision:
+    def wait(self, writer, excluded: dict[str, str], seconds: float, sleep, clock) -> place_rule.Decision:
         envelope = self.envelope("wait")
         writer.write(envelope | {"kind": "step.started",
                                  "detail": {"reason": "test_place", "on": f"test_run:{self.selection}"}})
         try:
+            deadline = clock() + seconds
             decision = self.decide(excluded)
-            for _ in range(polls):
-                if decision.chosen is not None:
+            while decision.chosen is None:
+                left = deadline - clock()
+                if left <= 0:  # the bound on the clock: the wait ends, and its last poll never runs past it
                     break
-                sleep(WAIT_POLL_SECONDS)
+                sleep(min(self.poll_wait(), left))
                 decision = self.decide(excluded)
         except BaseException:  # stopped by a person or a failing store: the wait is not left open
             writer.write(envelope | {"kind": "step.ended", "detail": {"outcome": "stopped", "reason": None}})
@@ -242,6 +283,15 @@ class _Run:
         writer.write(envelope | {"kind": "step.ended", "detail": {
             "outcome": "passed" if decision.chosen else "no_result", "reason": None}})
         return decision
+
+    def poll_wait(self) -> float:
+        """The wait before the next re-decision of a wait on test_place (#414 decision 9, as the line's `poll_wait`):
+        `WAIT_POLL_SECONDS`, longer while the GitHub request budget is under its threshold. No github place or no
+        reading keeps the interval."""
+
+        github = self.places.get("github")
+        left = github.rate_limit() if hasattr(github, "rate_limit") else None
+        return budget_poll(WAIT_POLL_SECONDS, left)
 
     def _started(self, writer, envelope, decision, run_os) -> None:
         writer.write(envelope | {"kind": "step.started", "detail": {
@@ -269,8 +319,8 @@ class _Run:
 
     def attempt(self, writer, adapter, decision) -> RunDone:
         envelope = self.envelope("test_run")
-        self._started(writer, envelope, decision,
-                      adapter.os or (self.need_os if self.need_os != "any" else None))
+        run_os = adapter.os or (self.need_os if self.need_os != "any" else None)
+        self._started(writer, envelope, decision, run_os)
         request = Request(self.work_tree, self.commit, self.settings.command, self.settings.test_env,
                           self.settings.bound_minutes * 60, self.ids)
         with tempfile.TemporaryDirectory(prefix="orch-it-run-") as scratch:
@@ -287,10 +337,20 @@ class _Run:
                                     slept=place_end.slept)
             for detail in run_end.result_details():
                 writer.write(envelope | {"kind": "test.result", "detail": detail})
-        writer.write(envelope | {"kind": "step.ended",
-                                 "detail": run_end.ended_detail() | _timing(place_end, run_end)})
+        red = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.outcome in outcome.RED_OUTCOMES))
+        detail = run_end.ended_detail() | _timing(place_end, run_end)
+        if self.reran:  # the store says which tests were rerun for being on placeholders, and which failed
+            detail["placeholder_tests"] = list(self.reran)
+            if red:
+                detail["failed_tests"] = list(red)
+        writer.write(envelope | {"kind": "step.ended", "detail": detail})
+        # only GitHub has stubs in place of real files: a marked case at a place that has them is no placeholder
+        placeholder_tests = ()
+        if decision.chosen == "github":
+            placeholder_tests = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.placeholder))
         return RunDone(envelope["run"], decision.chosen, run_end.outcome, run_end.reason,
-                       run_end.collected, run_end.failed, run_end.missing_ids)
+                       run_end.collected, run_end.failed, run_end.missing_ids, red, placeholder_tests,
+                       run_os=run_os)
 
 
 def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str,

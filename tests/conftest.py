@@ -28,6 +28,18 @@ def isolated_settings(tmp_path_factory, monkeypatch):
     monkeypatch.chdir(cwd)
 
 
+@pytest.fixture(autouse=True)
+def no_login_call(monkeypatch):
+    """No test asks the real `gh` who the token is (#414 unit 12a): the account key of a counted call falls back to
+    the repo's owner, and each test starts with no login cached. A test of the key puts `_read_login` back."""
+
+    from orch_it.events import github_budget
+
+    monkeypatch.setattr(github_budget, "_read_login", lambda: None)
+    monkeypatch.setattr(github_budget, "_login", None)
+    monkeypatch.setattr(github_budget, "_login_failed_at", None)
+
+
 @pytest.fixture
 def ticket_language_ru(tmp_path, monkeypatch):
     """The human block of a ticket is Russian (#413 unit 10a): the `settings.json` at the root of the git work tree

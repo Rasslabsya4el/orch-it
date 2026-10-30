@@ -46,12 +46,23 @@ class PlaceEnd:
 class Availability:
     """What a place whose room is not in the store tells the rule at a decision (the `github` place: its machines
     are the account's, read from GitHub). `on`: it may be offered. `busy` of `limit`: its machines in use and all
-    it has. `note`: the words the decision carries for it (`18 busy of 20`, or why it is off)."""
+    it has. `note`: the words the decision carries for it (`18 busy of 20`, or why it is off). `cause`: when its
+    runs will not start, one of `RUNS_NOT_STARTING` (a place that is off for another reason, a budget or an unreadable
+    GitHub, names none). `metered`: a run there costs money (a private repo), so the rule ranks it after the places
+    that are free."""
 
     on: bool
     busy: int
     limit: int
     note: str
+    cause: str | None = None
+    metered: bool = False
+
+
+# why GitHub's runs do not start (#414 decision 6): Actions off for the repo, the account's minutes spent, a job
+# waiting in the account's queue past its bound
+ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUND = "actions_off", "minutes_spent", "queue_past_bound"
+RUNS_NOT_STARTING = (ACTIONS_OFF, MINUTES_SPENT, QUEUE_PAST_BOUND)
 
 
 REFUSAL_CODES = ("busy", "os_missing", "place_off", "out_of_minutes")

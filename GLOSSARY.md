@@ -61,6 +61,29 @@ _Avoid_: runner, host, target, executor
 The one rule that picks a test run's place from the runs live and the times measured in the store.
 _Avoid_: scheduler, routing, placement policy
 
+**Priority**:
+The per-repo whole number `github_priority` ranking the repos of one account for the account's GitHub machines: while the
+account's live jobs are at its concurrency, a repo's line starts no run while a repo of the same account with a higher
+one has a ready member; equal priorities hold nothing.
+_Avoid_: weight, rank, precedence
+
+**Availability**:
+The readiness verdict of the `github` test place: whether it may be offered (Actions on, its request budget with room,
+GitHub readable, for a private repo the account's included minutes not spent, no job of the account waiting in the queue past
+its bound), its machines busy of their limit, whether a run there costs money (a private repo's does, so the place rule
+ranks it after the places that are free), and the note the decision carries (its busy-of-limit count, or why it is off).
+A place off because its runs would not start also carries the cause: Actions off, minutes spent, or queue wait past the bound.
+_Avoid_: status, health, state
+
+**Queue wait**:
+The time a GitHub job waits from its queued to its started, the wait for a machine; read from the job's own times, never
+from the run's status.
+_Avoid_: queue time, pending time, waiting time
+
+**Placeholder file**:
+A stub a test place puts where a file of private data should be, because that place does not have the real one; a test that read one has not been run on the real file until it reruns at a place that has it.
+_Avoid_: mock file, fixture, dummy data
+
 **Clean environment**:
 What a test run's process sees of its environment: the OS's base variables and the repo's own test settings, nothing of whoever started it.
 _Avoid_: sandbox, isolated environment
@@ -68,7 +91,11 @@ _Avoid_: sandbox, isolated environment
 **Bound**:
 The longest a test run or a research run may take; a run that reaches it is cut, which is never a failed run. A
 research run also has a stall bound: the longest its session tree may go without a new step. The merge line's run, its
-wait for its head's checks and the wait for its line lock each have a bound of their own.
+wait for its head's checks, its wait for the required checks on a batch's sha and the wait for its line lock each have a
+bound of their own. The bound check's bound is
+a median instead: the median run time of the newest `LAST_RUNS` ended test runs at a test place and OS (passed or failed
+ones), or a GitHub place's median queue wait over the same window; a median past its bound opens one `needs-triage`
+ticket, and a later crossing comments on it.
 _Avoid_: timeout, limit, deadline
 
 ## Research
@@ -330,6 +357,16 @@ _Avoid_: stop hook, gate, validator
 The order in which a repo's green pull requests land on its main line, one at a time, the oldest ready first.
 _Avoid_: merge queue, merge train, merge window
 
+**Batch**:
+The members the merge line combines on one branch from `main` for one full pass: a batch lands, all of it, when the pass
+is green and every name of the required checks is green on its sha; a red test or a red name splits it in halves.
+_Avoid_: group, bundle, train, queue
+
+**Required checks**:
+The check names a repo's merge is held to, the setting `required_checks`; the merge line lands a batch only when each is
+green on its exact sha, whichever place posted it, and a base's branch protection accepts or refuses the update of `main`.
+_Avoid_: required jobs, check list, gate
+
 **Line lock**:
 The one hold on a repo's merge line: while one line runs, a second waits for it and names who holds it.
 _Avoid_: merge turn, mutex, merge lock
@@ -358,10 +395,6 @@ _Avoid_: dequeued, removed from queue
 **Follow mark**:
 The layer's mark on a ticket saying what its follow did with it; red returns in a row are counted from them.
 _Avoid_: status comment, bot note
-
-**Held member**:
-A pull request of the merge line kept from merging on its own while another one is served, until its turn comes.
-_Avoid_: paused PR, blocked PR, frozen
 
 **Follow**:
 What the layer does with a ticket when its pull request ends, is stopped by a person or goes red: closes it, returns

@@ -17,7 +17,7 @@ from pathlib import Path
 from fake_hub import REPO, FakeHub
 
 from orch_it.merge import workflow_watch as watch
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, LandingRefused, MainRun, Pull, Result
 from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
 from orch_it.testruns.github import GithubError
 from orch_it.tickets.hub import Comment
@@ -96,6 +96,13 @@ class FakeGitHub(FakeHub):
         self.main_branch = DEFAULT_BRANCH  # the repo's default branch, as `default_branch` reads it
         self.required_by_base: dict[str, set[str]] = {}  # base -> the check names its protection requires
         self.required = REQUIRED  # the check names a merge is held to (a test may name its own)
+        self.clashes: set[frozenset[int]] = set()  # pairs of pull requests that conflict when combined
+        self.advances: list[str] = []  # every sha a base was moved forward to, in order
+        self.batch_members: dict[str, list[int]] = {}  # batch branch -> the pull requests merged into it, in order
+        self.trees: dict[str, list[str]] = {}  # a batch commit's sha -> the commits it holds
+        self.merge_lag_seconds = 0  # seconds GitHub takes to mark a pull request merged after a base advance
+        self.lagging: dict[int, tuple[datetime, str]] = {}  # pr -> (when it shows merged, the sha it merged at)
+        self.advance_refusal: str | None = None  # the message of a 422 that `advance_base` raises (protection)
         self._shas = 0
 
     # building the world
@@ -164,6 +171,7 @@ class FakeGitHub(FakeHub):
 
     def pull(self, repo, number):
         self._check(repo, number)
+        self._mark_due()
         found = self.pulls.get(number)
         if found is None:
             return None
@@ -177,8 +185,12 @@ class FakeGitHub(FakeHub):
         return [self.pull(repo, n) for n, p in sorted(self.pulls.items(), key=lambda item: item[1].created_at)
                 if p.state == "open" and p.base == base]
 
-    def checks(self, repo, sha):
+    def checks(self, repo, sha, *, statuses=False):
         return list(self.check_runs.get(sha, {}).values())
+
+    def post_status(self, repo, sha, name, state, description):
+        self.calls.append(("post_status", sha, name, state))
+        self.checks_on(sha, state, names=(name,))
 
     def pull_comments(self, repo, number):
         self._check(repo, number)
@@ -230,6 +242,74 @@ class FakeGitHub(FakeHub):
         for hook in list(self.on_merge):
             hook(number)
         return sha
+
+    def start_batch(self, repo, base, branch):
+        self.calls.append(("start_batch", branch))
+        self.branches[branch] = list(self.branches[base])
+        self.batch_members[branch] = []
+        return self.branches[branch][-1]
+
+    def add_to_batch(self, repo, branch, head_sha):
+        self.calls.append(("add_to_batch", branch, head_sha))
+        number = next(n for n in self.pulls if self.head(n) == head_sha)
+        found, held = self.pulls[number], self.batch_members[branch]
+        if found.conflict or any(frozenset((number, other)) in self.clashes for other in held):
+            return None
+        tree = self.branches[branch]
+        tree += [sha for sha in self.branches[found.branch] if sha not in tree]
+        tree.append(self.sha("b"))
+        held.append(number)
+        self.trees[tree[-1]] = list(tree)
+        return tree[-1]
+
+    def advance_base(self, repo, base, sha):
+        self.calls.append(("advance_base", base, sha))
+        if self.advance_refusal is not None:
+            raise LandingRefused(self.advance_refusal)
+        branch = next((b for b, tree in self.branches.items() if b in self.batch_members and tree[-1] == sha), None)
+        main = self.branches[base]
+        if branch is None or self.branches[branch][:len(main)] != main:
+            return False
+        held = {name for name, check in self.check_runs.get(sha, {}).items() if check.state == PASSED}
+        if self.required_by_base.get(base, set()) - held:  # protection with admins included: a name not green refuses
+            raise LandingRefused("Required status checks are expected: "
+                                 + ", ".join(sorted(self.required_by_base[base] - held)))
+        main[:] = self.branches[branch]
+        self.advances.append(sha)
+        for number in self.batch_members[branch]:
+            self.lagging[number] = (self.now + timedelta(seconds=self.merge_lag_seconds), sha)
+        self._mark_due()
+        return True
+
+    def _mark_due(self):
+        """The pull requests of an advanced base that GitHub has marked merged by now."""
+
+        for number, (due, sha) in sorted(self.lagging.items()):
+            if due <= self.now:
+                del self.lagging[number]
+                self._mark_merged(number, sha)
+
+    def _mark_merged(self, number, sha):
+        found = self.pulls[number]
+        found.state, found.merged_at, found.merge_sha = "merged", self.now, sha
+        self.commit_pulls[sha] = [*self.commit_pulls.get(sha, []), number]
+        self.close(number, merged=True)
+        for hook in list(self.on_merge):
+            hook(number)
+
+    def end_batch(self, repo, branch):
+        self.calls.append(("end_batch", branch))
+        self.branches.pop(branch, None)
+        self.batch_members.pop(branch, None)
+
+    def batch_branches(self, repo):
+        return sorted(b for b in self.branches if b.startswith("orch-batch/"))
+
+    def members_of(self, sha):
+        """The pull requests whose heads the commit `sha` holds, ascending."""
+
+        tree = self.trees.get(sha, [])
+        return sorted(n for n in self.pulls if self.head(n) in tree)
 
     def close_pull(self, repo_or_number, number=None):
         number = repo_or_number if number is None else number
@@ -391,6 +471,9 @@ class FakeActions:
         self.run_status = "in_progress"  # a dispatched run's own status: GitHub leaves it so long after its jobs end
         self.run_updated = 1100  # seconds after the dispatch the run's own record was last updated
         self.enabled = True
+        self.private = False  # the repo's `private` flag
+        self.billing = {"total_minutes_used": 0, "included_minutes": 2000, "total_paid_minutes_used": 0}  # the account's minutes
+        self.core = (5000, 5000)  # the core quota `api rate_limit` reports: (remaining, limit), a test sets it
         self.known_shas = None  # None: every sha exists on GitHub
         self.refs: dict[str, str] = {}
         self.deleted: list[str] = []
@@ -456,8 +539,11 @@ class FakeActions:
         self.calls.append(list(args))
         if args[0] == "run":
             return self._download(args)
+        if args[1:] == ["rate_limit"]:
+            remaining, limit = self.core
+            return json.dumps({"resources": {"core": {"remaining": remaining, "limit": limit}}})
         method = args[args.index("-X") + 1] if "-X" in args else "GET"
-        endpoint = next(a for a in args[1:] if a.startswith(("repos/", "user/")))
+        endpoint = next(a for a in args[1:] if a.startswith(("repos/", "user/", "users/")))
         fields = {a.partition("=")[0]: a.partition("=")[2] for a in args[1:] if "=" in a and a != endpoint}
         path, _, query = endpoint.partition("?")
         asked = dict(part.partition("=")[::2] for part in query.split("&") if part)
@@ -465,7 +551,11 @@ class FakeActions:
         if path == "user/repos":
             return self._pages(args, asked, None, [{"full_name": r, "owner": {"login": r.split("/")[0]},
                                                     "archived": False} for r in self.repos])
+        if path == f"users/{self.repo.split('/')[0]}/settings/billing/actions":
+            return json.dumps(self.billing)
         repo, rest = "/".join(parts[1:3]), "/".join(parts[3:])
+        if rest == "":  # the repo itself
+            return json.dumps({"full_name": repo, "private": self.private})
         if rest == "actions/permissions":
             return json.dumps({"enabled": self.enabled})
         if rest == "git/refs" and method == "POST":
