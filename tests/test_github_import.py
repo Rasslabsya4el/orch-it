@@ -978,7 +978,7 @@ def summary_count(log: str) -> int | None:
     for line in log.splitlines():
         columns = line.split("\t", 2)
         if len(columns) == 3 and columns[1] not in (github.TEST_STEP, GH_UNKNOWN_STEP):
-            continue  # only the test step's lines: a pull request body printed by another step says "143 passed in 2.03s" too
+            continue  # only the test step's lines (named `pytest`, or gh's `UNKNOWN STEP`): a pull request body printed by another named step says "143 passed in 2.03s" too
         found = SUMMARY_LINE.search(line)
         if found:
             seen = True
