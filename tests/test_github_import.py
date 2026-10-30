@@ -964,6 +964,7 @@ def test_the_command_turns_a_gh_failure_into_error_gh_failed_and_exit_2(tmp_path
 
 COUNTED_IN_SUMMARY = ("passed", "failed", "skipped", "error", "errors", "xfailed", "xpassed")
 SUMMARY_LINE = re.compile(r"((?:\d+ [a-z]+(?:, )?)+) in \d+(?:\.\d+)?s")
+UNKNOWN_STEP = "UNKNOWN STEP"  # the step name GitHub's log gives a line whose step it did not name
 
 
 def summary_count(log: str) -> int | None:
@@ -972,10 +973,16 @@ def summary_count(log: str) -> int | None:
     pytest in two phases (the parallel one, then the `serial` one) prints one summary line per phase,
     and the report holds the tests of both."""
 
+    lines = [line.split("\t", 2) for line in log.splitlines()]
+    named = any(len(columns) == 3 and columns[1] == github.TEST_STEP for columns in lines)
+    unnamed = any(len(columns) == 3 and columns[1] == UNKNOWN_STEP for columns in lines)
+    # GitHub's log may not name the step at all: when no line says "pytest" but some say "UNKNOWN STEP",
+    # those are the test step's lines (the step's name is lost; nothing else can tell them apart)
+    test_step = UNKNOWN_STEP if unnamed and not named else github.TEST_STEP
+
     total, seen = 0, False
-    for line in log.splitlines():
-        columns = line.split("\t", 2)
-        if len(columns) == 3 and columns[1] != github.TEST_STEP:
+    for line, columns in zip(log.splitlines(), lines):
+        if len(columns) == 3 and columns[1] != test_step:
             continue  # only the test step's lines: a pull request body printed by another step says "143 passed in 2.03s" too
         found = SUMMARY_LINE.search(line)
         if found:
@@ -1002,6 +1009,20 @@ def test_the_summary_count_sums_what_ran_and_leaves_deselected_out():
     assert summary_count("linux\tpytest\t2026-10-25T20:50:01.1Z 1 failed, 2 passed, 1 error, 3 warnings"
                          " in 3.00s (0:00:03)") == 4
     assert summary_count("no summary here") is None
+
+
+def test_the_summary_count_reads_the_unknown_step_lines_when_no_line_names_the_pytest_step():
+    # GitHub's log does not always name the step: every line of such a job reads "UNKNOWN STEP"
+    log = ("linux\tUNKNOWN STEP\t2026-10-30T10:00:01Z Run pytest\n"
+           "linux\tUNKNOWN STEP\t2026-10-30T10:01:57Z 3271 passed, 3 skipped in 117.11s (0:01:57)\n")
+    assert summary_count(log) == 3274
+
+
+def test_the_summary_count_reads_only_the_pytest_lines_when_some_line_names_the_pytest_step():
+    log = ("linux\tUNKNOWN STEP\t2026-10-30T10:00:01Z 143 passed in 2.03s on the branch\n"
+           "linux\tpytest\t2026-10-30T10:01:57Z 3271 passed, 3 skipped in 117.11s (0:01:57)\n"
+           "linux\tUNKNOWN STEP\t2026-10-30T10:02:00Z 9 passed in 1.00s\n")
+    assert summary_count(log) == 3274
 
 
 # the margin the live test leaves for skew between the runner's clock and GitHub's
