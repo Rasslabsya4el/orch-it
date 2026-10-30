@@ -130,8 +130,9 @@ def test_merge_line_prints_each_head_and_how_the_run_ended(github, tmp_path, cap
     hub.checks_on(hub.head(pr), PASSED)
     code, out, err = run(capsys, "--store", store, "merge", "line", "--repo", REPO)
     assert (code, err) == (0, "")
-    assert out.splitlines()[0].startswith(f"#{pr} merged waited ") and out.splitlines()[-1] == (
-        "line of owner-x/repo-y into main: merged=1 left=0 empty")
+    lines = out.splitlines()  # the work tree here is no clone of the repo: the line says so and goes one by one
+    assert lines[0].startswith("batch off: ") and lines[1].startswith(f"#{pr} merged waited ")
+    assert lines[-1] == "line of owner-x/repo-y into main: merged=1 left=0 empty"
 
 
 def test_merge_line_says_who_holds_the_line_and_gives_up(github, tmp_path, capsys, monkeypatch):
@@ -139,7 +140,9 @@ def test_merge_line_says_who_holds_the_line_and_gives_up(github, tmp_path, capsy
     (tmp_path / "settings.json").write_text('{"merge": {"lock_wait_minutes": 0.02, "poll_seconds": 1}}', "utf-8")
     with lock.hold(REPO, "merge line of another session", settings=MergeSettings()):
         code, out, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "line", "--repo", REPO)
-    assert code == 2 and out.startswith("waits: the line of owner-x/repo-y is held by merge line of another session")
+    lines = out.splitlines()  # `batch off:` comes first (no clone here), then the wait
+    assert code == 2 and lines[0].startswith("batch off: ")
+    assert lines[1].startswith("waits: the line of owner-x/repo-y is held by merge line of another session")
     assert err.startswith("error: lock_busy")
 
 
@@ -177,3 +180,74 @@ def test_pr_open_with_an_acceptance_file_that_is_not_there_is_refused(github, tm
     code, out, err = run(capsys, "--store", str(tmp_path / "events"), "pr", "open", "10", "--acceptance",
                          str(tmp_path / "none.md"), "--repo", REPO)
     assert (code, out) == (2, "") and err.startswith("error: acceptance_unreadable")
+
+
+@pytest.fixture
+def seen(github, tmp_path, monkeypatch):
+    """`run_line` replaced: it answers an empty run and notes the `suite` it was given."""
+    from orch_it.merge.line import LineReport
+
+    monkeypatch.setattr(lock.installation, "data_folder", lambda: tmp_path / "data")
+    given = []
+
+    def fake(hub, store, repo, base, **kwargs):
+        given.append(kwargs.get("suite"))
+        return LineReport(repo, base, (), "empty")
+
+    monkeypatch.setattr(commands, "run_line", fake)
+    return given
+
+
+def clone_of_repo(folder):
+    from orch_it.merge import git as merge_git
+
+    folder.mkdir()
+    owner, name = REPO.split("/")
+    for args in (["init", "--quiet"], ["remote", "add", "origin", f"https://github.com/{owner}/{name}.git"]):
+        assert merge_git.run(["-C", str(folder), *args]).code == 0
+    return folder
+
+
+def test_merge_line_hands_run_line_a_suite_when_batch_size_is_two_or_more_and_none_when_it_is_one(
+        seen, tmp_path, capsys):
+    tree = clone_of_repo(tmp_path / "clone")
+    store, settings = str(tmp_path / "events"), tmp_path / "settings.json"
+    for size, expect_suite in ((4, True), (2, True), (1, False)):
+        settings.write_text(f'{{"merge": {{"batch_size": {size}}}}}', "utf-8")
+        seen.clear()
+        code, out, err = run(capsys, "--store", store, "merge", "line", "--repo", REPO, "--work-tree", str(tree))
+        assert (code, err) == (0, "")
+        assert out == f"line of {REPO} into main: merged=0 left=0 empty" + chr(10)
+        assert len(seen) == 1 and callable(seen[0]) == expect_suite and (seen[0] is None) == (not expect_suite)
+
+
+def test_merge_line_prints_batch_off_before_the_line_runs_and_its_notes_before_the_summary(
+        github, tmp_path, capsys, monkeypatch):
+    from orch_it.merge.line import LineReport, Served
+
+    monkeypatch.setattr(lock.installation, "data_folder", lambda: tmp_path / "data")
+    printed = []
+
+    def fake(hub, store, repo, base, **kwargs):
+        printed.append(capsys.readouterr().out)  # what the command had said when the line began
+        return LineReport(repo, base, (Served(7, None, "merged", 1.0, 0),), "empty",
+                          ("batch landing refused: Changes must be made through a pull request.",))
+
+    monkeypatch.setattr(commands, "run_line", fake)
+    (tmp_path / "plain").mkdir()
+    code, out, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "line", "--repo", REPO,
+                         "--work-tree", str(tmp_path / "plain"))
+    assert (code, err) == (0, "") and len(printed) == 1 and printed[0].startswith("batch off: no work tree of ")
+    assert out.splitlines() == ["#7 merged waited 1 min updates 0",
+                                "batch landing refused: Changes must be made through a pull request.",
+                                f"line of {REPO} into main: merged=1 left=0 empty"]
+
+
+def test_merge_line_with_no_clone_of_the_repo_goes_one_by_one_and_says_so(seen, tmp_path, capsys):
+    (tmp_path / "plain").mkdir()
+    code, out, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "line", "--repo", REPO,
+                         "--work-tree", str(tmp_path / "plain"))
+    assert (code, err) == (0, "") and seen == [None]
+    first, last = out.splitlines()
+    assert first.startswith("batch off: no work tree of owner-x/repo-y at ") and "one pull request at a time" in first
+    assert last == f"line of {REPO} into main: merged=0 left=0 empty"

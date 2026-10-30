@@ -22,6 +22,22 @@ that has no line. One run, until the line is empty or `line_minutes` pass:
    `refused`, left for the next run). A head that moved since the checks were read is refused by GitHub
    (the merge is pinned to the sha), so a pull request never lands on a tree whose checks were not read.
 
+With the setting `batch_size` over 1 and a `suite` given (#414 item 5), steps 2 and 3 are one pass for up to
+`batch_size` members instead of one pass each: the oldest ready members are combined on one branch from the base (each
+head merged in line order; a member that does not combine with the ones before it is left apart and goes in a batch of
+its own after), the required suite runs once on that tree through the place rule, and green lands them all by moving
+the base forward to the tested commit (the base's sha is the tested tree's, each pull request ends merged); red
+splits the batch in halves, each half is combined again from the base as it then is and checked, down to the one
+red pull request, which goes back to its ticket by the follow's red rule while the others land. A red whose every
+failing test also fails on main (an open red-on-main ticket covers them, and a run of those ids alone on the sha main had
+when the batch was made fails them all) is not a member's fault: the line stops there (note `main is red on <ids>`), the
+members stay for the next run, none is sent back. A base that moved under a green pass rebuilds the batch on the new
+base (without the members that left it), at most `max_updates` times. A landing counts as merged only when GitHub says
+the pull request is merged (polled up to a minute; else `bound`, detail `landed_pending`, for the next run). A base whose
+protection refuses the landing (note `batch landing refused: <why>`) sends the rest of the run one by one. A line that
+batches first deletes the `orch-batch/` branches older than `lock_stale_minutes`. `batch_size` 1, or no suite, is the
+one-by-one line above.
+
 Events: a `line` step, run `line:<repo>@<start>` (started `base`, `prs`; ended `merged`, `left`,
 reason `empty`, `next_run` or `bound`; `failed` with `error` when the run breaks; `refused` with
 `lock_busy`/`lock_stale` when the lock is not had) and one `line.served` per turn under that run
@@ -38,9 +54,9 @@ from pathlib import Path
 
 from orch_it.events import github_budget
 from orch_it.events.store import Store
-from orch_it.merge import lock, marks, record
-from orch_it.merge.follow import FollowReport, follow, follow_conflict
-from orch_it.merge.hub import Pull, PullHub
+from orch_it.merge import batch, lock, marks, record, red_main
+from orch_it.merge.follow import FollowReport, follow, follow_conflict, follow_red
+from orch_it.merge.hub import LandingRefused, Pull, PullHub
 from orch_it.merge.pr_open import refers_to
 from orch_it.merge.settings import MergeSettings, required_checks_now
 from orch_it.tickets.park import ROLE
@@ -49,6 +65,7 @@ from orch_it.tickets.park import ROLE
 # `raced` follow wrote nothing: the member waits a poll and is followed again)
 _STAYS = ("waiting", "green", "behind", "rerun", "stuck", "raced")
 LINE_ERROR_CODES = ("closing_keyword",)  # a merge the line will not make
+LAND_POLL_SECONDS, LAND_WAIT_SECONDS = 5, 60  # after a batch moved the base: GitHub marks the pull requests merged
 
 
 def poll_wait(hub: PullHub, settings: MergeSettings) -> float:
@@ -92,6 +109,7 @@ class LineReport:
     base: str
     served: tuple[Served, ...]
     reason: str  # `empty`: no member left; `next_run`: the ones left wait for the next run; `bound`: the run's bound
+    notes: tuple[str, ...] = ()  # what the run noticed beside its turns: a landing the base refused, a main red
 
     @property
     def merged(self) -> int:
@@ -107,6 +125,20 @@ class _Member:
     pull: Pull
     ready_at: datetime
     ticket: int | None
+
+
+@dataclass
+class _Batch:
+    """One combined branch: `included` members in line order with the head each was merged at, those `apart` that did
+    not combine with the ones before it."""
+
+    branch: str
+    tip: str
+    included: list[_Member]
+    heads: dict[int, str]
+    apart: list[_Member]
+    base_sha: str  # the sha the base had when the batch was made
+    gone: set[int] = field(default_factory=set)  # members combine ended (closed, or in conflict with the base)
 
 
 @dataclass
@@ -126,9 +158,16 @@ class _Line:
     for_next_run: set[int] = field(default_factory=set)  # members this run leaves for the next one
     turns: list[Served] = field(default_factory=list)
     ready_at: dict[int, datetime] = field(default_factory=dict)  # pr -> its ready time, as members() read it
+    suite: batch.Suite | None = None  # the required suite on a commit; None: no batches
+    batches_made: int = 0
+    held: bool = False  # main is red on every test a batch failed: the run stops, nothing is sent back
+    refused: str | None = None  # the base's own reason for refusing a batch landing: the rest goes one by one
+    notes: list[str] = field(default_factory=list)
 
     def run(self) -> tuple[list[Served], str]:
         turns = self.turns
+        if self.suite is not None and self.settings.batch_size > 1:
+            self.clean_batches()
         while self.clock() < self.deadline:
             members = self.members()
             for member in [m for m in members if m.pull.mergeable == "conflicting"]:
@@ -137,8 +176,22 @@ class _Line:
             members = [m for m in self.members() if m.pull.number not in self.for_next_run]
             if not members:
                 return turns, "next_run" if self.for_next_run else "empty"
-            self.end_turn(turns, self.serve(members[0]))
+            if self.suite is not None and self.settings.batch_size > 1 and not self.refused:
+                self.serve_batch(members[:self.settings.batch_size])
+                if self.held:
+                    return turns, "next_run"
+            else:
+                self.end_turn(turns, self.serve(members[0]))
         return turns, "bound"
+
+    def clean_batches(self) -> None:
+        """A line that died leaves its batch branch: each one older than `lock_stale_minutes` (or with no time in its
+        name) goes; a young one may belong to a line on another machine."""
+
+        now = self.clock()
+        for name in self.hub.batch_branches(self.repo):
+            if batch.stale(name, now, self.settings.lock_stale_minutes):
+                self.hub.end_batch(self.repo, name)
 
     def end_turn(self, turns: list[Served], turn: Served) -> None:
         turns.append(turn)
@@ -159,6 +212,167 @@ class _Line:
             found.append(_Member(pull, ready.at if ready else pull.created_at, refers_to(pull.body)))
             self.ready_at[pull.number] = found[-1].ready_at
         return sorted(found, key=lambda m: (m.ready_at, m.pull.number))
+
+    # a batch
+
+    def serve_batch(self, candidates: list[_Member]) -> None:
+        """The oldest ready members as one batch: each is followed and its text checked as `serve` does, then the
+        ones that stay are settled together."""
+
+        group = []
+        for member in candidates:
+            done = self.follow(member.pull.number)
+            if done.outcome not in _STAYS:
+                self.end_turn(self.turns, self.turn(member, "left", 0, done.outcome))
+                continue
+            try:
+                self.closing_check(member.pull.number)
+            except LineError as refusal:
+                self.end_turn(self.turns, self.refuse(member, refusal, 0))
+                continue
+            group.append(member)
+        self.settle(group)
+
+    def settle(self, group: list[_Member]) -> None:
+        """Check `group` as one batch and land it; on red split the batch and settle each half; then the members that
+        did not combine, as a group of their own."""
+
+        rebuilt = 0
+        while group and not self.refused and not self.held:
+            if self.clock() >= self.deadline:
+                return self.postpone(group, "bound")
+            made = self.combine(group)
+            group = [m for m in group if m.pull.number not in made.gone]  # a rebuild serves only the stayers
+            try:
+                if made.included:
+                    result = self.suite(made.tip)
+                    if result.outcome == batch.PASSED:
+                        if not self.land(made):
+                            if self.refused:
+                                return  # the members stay in the line and go one by one
+                            rebuilt += 1  # the base or a head moved under the pass: the batch is made again
+                            if rebuilt > self.settings.max_updates:
+                                return self.postpone(group, "starved")
+                            continue
+                    elif result.outcome == batch.FAILED and result.failing and len(made.included) == 1:
+                        self.red(made.included[0], list(result.failing))
+                    elif result.outcome == batch.FAILED and result.failing and self.red_on_main(made, result.failing):
+                        pass  # main itself is red on all of it: nothing to split, nothing to send back
+                    elif result.outcome == batch.FAILED and result.failing:
+                        half = len(made.included) // 2
+                        self.settle(made.included[:half])
+                        self.settle(made.included[half:])
+                    else:  # no result, or a red that names no test: no member is blamed
+                        self.postpone(made.included, "bound", "no_result")
+            finally:
+                self.hub.end_batch(self.repo, made.branch)
+            group = made.apart
+
+    def red_on_main(self, made: _Batch, failing: tuple[str, ...]) -> bool:
+        """Whether every failing id of `made` is red on main too: an open red-on-main ticket covers them all, and a
+        run of just those ids on the sha main had when the batch was made fails them all. Then the line holds: the
+        members wait for main's next sha, none is sent back."""
+
+        ids = {red_main.normal(test_id) for test_id in failing}
+        reds = red_main.open_reds(self.hub, self.repo)
+        known = set().union(*(red.ids for red in reds if red.ids is not None))
+        if not (any(red.covers(ids) for red in reds) or ids <= known):
+            return False
+        on_main = self.suite(made.base_sha, only=failing)
+        if on_main.outcome != batch.FAILED or not ids <= {red_main.normal(test_id) for test_id in on_main.failing}:
+            return False
+        self.held = True
+        self.notes.append(f"main is red on {', '.join(sorted(ids))}")
+        self.postpone(made.included, "bound", "main_red")
+        return True
+
+    def combine(self, group: list[_Member]) -> _Batch:
+        """A branch from the base holding the head of each member of `group` that combines, in order. A pull request
+        gone or closed since it was read leaves the line; the first one that conflicts with the base itself takes the
+        conflict rule; one that conflicts with the ones before it is `apart`."""
+
+        self.batches_made += 1
+        branch = batch.branch_name(self.clock(), self.batches_made)
+        base_sha = self.hub.start_batch(self.repo, self.base, branch)
+        made = _Batch(branch, base_sha, [], {}, [], base_sha)
+        for member in group:
+            number = member.pull.number
+            pull = self.hub.pull(self.repo, number)
+            if pull is None or pull.state != "open":
+                self.follow(number)
+                self.end_turn(self.turns, self.turn(member, "left", 0, "closed"))
+                made.gone.add(number)
+                continue
+            tip = self.hub.add_to_batch(self.repo, branch, pull.head_sha)
+            if tip is not None:
+                made.tip = tip
+                made.included.append(member)
+                made.heads[number] = pull.head_sha
+            elif made.included:
+                made.apart.append(member)
+            else:
+                self.end_turn(self.turns, self.conflict(member, self.hub.conflict_files(self.repo, self.base, number)))
+                made.gone.add(number)
+        return made
+
+    def land(self, made: _Batch) -> bool:
+        """Move the base to the tested commit and settle every member; False, nothing landed, when a head is not the
+        one tested or the base is no longer where the batch started."""
+
+        for member in made.included:
+            pull = self.hub.pull(self.repo, member.pull.number)
+            if pull is None or pull.state != "open" or pull.head_sha != made.heads[member.pull.number]:
+                return False
+        try:
+            if not self.hub.advance_base(self.repo, self.base, made.tip):
+                return False
+        except LandingRefused as refusal:  # the base's protection: no batch lands here, the members go one by one
+            self.refused = refusal.reason
+            self.notes.append(f"batch landing refused: {refusal.reason}")
+            return False
+        merged, pending = self.confirmed(made.included)
+        for member in merged:
+            self.follow(member.pull.number)  # its ticket closes now, whether the workflow runs or not
+            self.end_turn(self.turns, self.turn(member, "merged", 0))
+        self.postpone(pending, "bound", "landed_pending")
+        return True
+
+    def confirmed(self, members: list[_Member]) -> tuple[list[_Member], list[_Member]]:
+        """The members GitHub says are merged, polled every `LAND_POLL_SECONDS` up to `LAND_WAIT_SECONDS` after the base
+        moved, and those still open after it (not followed: they wait for the next run); one closed unmerged ends
+        `left`."""
+
+        waiting, merged = list(members), []
+        until = self.clock() + timedelta(seconds=LAND_WAIT_SECONDS)
+        while waiting:
+            still = []
+            for member in waiting:
+                pull = self.hub.pull(self.repo, member.pull.number)
+                if pull is not None and pull.state == "open":
+                    still.append(member)
+                elif pull is not None and pull.state == "merged":
+                    merged.append(member)
+                else:
+                    self.follow(member.pull.number)
+                    self.end_turn(self.turns, self.turn(member, "left", 0, "closed"))
+            waiting = still
+            if waiting and self.clock() < until:
+                self.sleep(LAND_POLL_SECONDS)
+            elif waiting:
+                break
+        return merged, waiting
+
+    def red(self, member: _Member, failing: list[str]) -> None:
+        done = follow_red(self.hub, self.store, self.repo, member.pull.number, ", ".join(self.required), failing,
+                          settings=self.settings, now=self.clock(), role=self.role, owner=self.owner)
+        if done.outcome == "raced":
+            self.for_next_run.add(member.pull.number)
+        self.end_turn(self.turns, self.turn(member, "left", 0, done.outcome))
+
+    def postpone(self, group: list[_Member], result: str, detail: str = "") -> None:
+        for member in group:
+            self.for_next_run.add(member.pull.number)
+            self.end_turn(self.turns, self.turn(member, result, 0, detail))
 
     # the head
 
@@ -246,10 +460,11 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
              clock: Callable[[], datetime] = lambda: datetime.now(UTC), sleep: Callable[[float], None] = time.sleep,
              root: Path | None = None, holder: str | None = None, on_wait: Callable[[lock.Holder], None] | None = None,
              role: str = ROLE, required: tuple[str, ...] | None = None,
-             owner: str | None = None) -> LineReport:
+             owner: str | None = None, suite: batch.Suite | None = None) -> LineReport:
     """Run the repo's merge line once; see the module text. Another line holding the lock past
     `lock_wait_minutes`, or a stale lock, is `LockError` (and a `line` step ended `refused`); a run
-    that breaks ends its step `failed` (`error`)."""
+    that breaks ends its step `failed` (`error`). `suite`: the required suite on a commit (`batch.place_rule_suite`),
+    which the batches need; none, or `batch_size` 1, serves one pull request at a time."""
 
     if required is None:
         required = required_checks_now(repo)
@@ -258,7 +473,8 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
         with lock.hold(repo, holder or holder_of(repo, base), settings=settings, root=root, clock=clock, sleep=sleep,
                        on_wait=on_wait):
             line = _Line(hub, store, repo, base, settings, clock, sleep, role, required,
-                         (owner or repo.split("/")[0]).lower(), clock() + timedelta(minutes=settings.line_minutes), run)
+                         (owner or repo.split("/")[0]).lower(), clock() + timedelta(minutes=settings.line_minutes), run,
+                         suite=suite)
             record.write(store, repo, None, role, run, "line",
                          [("step.started", {"base": base, "prs": len(line.members())})])
             try:
@@ -273,7 +489,7 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
                          [("step.started", {"base": base, "prs": None}),
                           ("step.ended", {"outcome": "refused", "reason": e.code})])
         raise
-    report = LineReport(repo, base, tuple(turns), reason)
+    report = LineReport(repo, base, tuple(turns), reason, tuple(line.notes))
     record.write(store, repo, None, role, run, "line",
                  [("step.ended", {"outcome": "passed", "reason": reason, "merged": report.merged,
                                   "left": report.left})])

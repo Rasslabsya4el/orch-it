@@ -17,7 +17,7 @@ from pathlib import Path
 from fake_hub import REPO, FakeHub
 
 from orch_it.merge import workflow_watch as watch
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, LandingRefused, MainRun, Pull, Result
 from orch_it.testruns.config import DEFAULT_REQUIRED_CHECKS
 from orch_it.testruns.github import GithubError
 from orch_it.tickets.hub import Comment
@@ -96,6 +96,13 @@ class FakeGitHub(FakeHub):
         self.main_branch = DEFAULT_BRANCH  # the repo's default branch, as `default_branch` reads it
         self.required_by_base: dict[str, set[str]] = {}  # base -> the check names its protection requires
         self.required = REQUIRED  # the check names a merge is held to (a test may name its own)
+        self.clashes: set[frozenset[int]] = set()  # pairs of pull requests that conflict when combined
+        self.advances: list[str] = []  # every sha a base was moved forward to, in order
+        self.batch_members: dict[str, list[int]] = {}  # batch branch -> the pull requests merged into it, in order
+        self.trees: dict[str, list[str]] = {}  # a batch commit's sha -> the commits it holds
+        self.merge_lag_seconds = 0  # seconds GitHub takes to mark a pull request merged after a base advance
+        self.lagging: dict[int, tuple[datetime, str]] = {}  # pr -> (when it shows merged, the sha it merged at)
+        self.advance_refusal: str | None = None  # the message of a 422 that `advance_base` raises (protection)
         self._shas = 0
 
     # building the world
@@ -164,6 +171,7 @@ class FakeGitHub(FakeHub):
 
     def pull(self, repo, number):
         self._check(repo, number)
+        self._mark_due()
         found = self.pulls.get(number)
         if found is None:
             return None
@@ -230,6 +238,70 @@ class FakeGitHub(FakeHub):
         for hook in list(self.on_merge):
             hook(number)
         return sha
+
+    def start_batch(self, repo, base, branch):
+        self.calls.append(("start_batch", branch))
+        self.branches[branch] = list(self.branches[base])
+        self.batch_members[branch] = []
+        return self.branches[branch][-1]
+
+    def add_to_batch(self, repo, branch, head_sha):
+        self.calls.append(("add_to_batch", branch, head_sha))
+        number = next(n for n in self.pulls if self.head(n) == head_sha)
+        found, held = self.pulls[number], self.batch_members[branch]
+        if found.conflict or any(frozenset((number, other)) in self.clashes for other in held):
+            return None
+        tree = self.branches[branch]
+        tree += [sha for sha in self.branches[found.branch] if sha not in tree]
+        tree.append(self.sha("b"))
+        held.append(number)
+        self.trees[tree[-1]] = list(tree)
+        return tree[-1]
+
+    def advance_base(self, repo, base, sha):
+        self.calls.append(("advance_base", base, sha))
+        if self.advance_refusal is not None:
+            raise LandingRefused(self.advance_refusal)
+        branch = next((b for b, tree in self.branches.items() if b in self.batch_members and tree[-1] == sha), None)
+        main = self.branches[base]
+        if branch is None or self.branches[branch][:len(main)] != main:
+            return False
+        main[:] = self.branches[branch]
+        self.advances.append(sha)
+        for number in self.batch_members[branch]:
+            self.lagging[number] = (self.now + timedelta(seconds=self.merge_lag_seconds), sha)
+        self._mark_due()
+        return True
+
+    def _mark_due(self):
+        """The pull requests of an advanced base that GitHub has marked merged by now."""
+
+        for number, (due, sha) in sorted(self.lagging.items()):
+            if due <= self.now:
+                del self.lagging[number]
+                self._mark_merged(number, sha)
+
+    def _mark_merged(self, number, sha):
+        found = self.pulls[number]
+        found.state, found.merged_at, found.merge_sha = "merged", self.now, sha
+        self.commit_pulls[sha] = [*self.commit_pulls.get(sha, []), number]
+        self.close(number, merged=True)
+        for hook in list(self.on_merge):
+            hook(number)
+
+    def end_batch(self, repo, branch):
+        self.calls.append(("end_batch", branch))
+        self.branches.pop(branch, None)
+        self.batch_members.pop(branch, None)
+
+    def batch_branches(self, repo):
+        return sorted(b for b in self.branches if b.startswith("orch-batch/"))
+
+    def members_of(self, sha):
+        """The pull requests whose heads the commit `sha` holds, ascending."""
+
+        tree = self.trees.get(sha, [])
+        return sorted(n for n in self.pulls if self.head(n) in tree)
 
     def close_pull(self, repo_or_number, number=None):
         number = repo_or_number if number is None else number

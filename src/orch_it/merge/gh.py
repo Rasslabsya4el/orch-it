@@ -44,8 +44,9 @@ from urllib.parse import quote
 from orch_it import settings
 from orch_it.events import schema
 from orch_it.merge import git as merge_git
+from orch_it.merge.batch import BATCH_PREFIX
 from orch_it.merge.git import GitDone, GitError
-from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, MainRun, Pull, Result
+from orch_it.merge.hub import FAILED, NO_RESULT, PASSED, PENDING, Check, LandingRefused, MainRun, Pull, Result
 from orch_it.merge.workflow_watch import WatchIssue, WorkflowRun, last_run_id, skipped, workflow_of
 from orch_it.testruns import junit
 from orch_it.testruns.github import (
@@ -214,6 +215,57 @@ class GhPullHub(GhHub):
         if not _text(answer.get("sha")):
             raise GithubError("gh_bad_output", f"{repo}#{number}: a merge answered with no sha")
         return answer["sha"]
+
+    # --- the batch branch (#414 item 5) -------------------------------------------------------
+
+    def start_batch(self, repo: str, base: str, branch: str) -> str:
+        tip = self._tip(repo, base)
+        self._answer(["api", "-X", "POST", f"repos/{repo}/git/refs"], {"ref": f"refs/heads/{branch}", "sha": tip})
+        return tip
+
+    def add_to_batch(self, repo: str, branch: str, head_sha: str) -> str | None:
+        try:
+            answer = self._answer(["api", "-X", "POST", f"repos/{repo}/merges"],
+                                  {"base": branch, "head": head_sha, "commit_message": f"Combine {head_sha[:7]}"})
+        except GithubError as e:
+            if "HTTP 409" in str(e):  # the two conflict
+                return None
+            if e.code == "gh_bad_output" and "expected one object" in str(e):  # 204: the branch holds the head already
+                return self._tip(repo, branch)
+            raise
+        return _text(answer.get("sha")) or self._tip(repo, branch)
+
+    def advance_base(self, repo: str, base: str, sha: str) -> bool:
+        try:
+            self._answer(["api", "-X", "PATCH", f"repos/{repo}/git/refs/heads/{quote(base, safe='/')}"],
+                         {"sha": sha, "force": False})
+        except GithubError as e:
+            said = str(e)
+            fast_forward = "fast forward" in said.lower().replace("-", " ")
+            if "HTTP 409" in said or ("HTTP 422" in said and fast_forward):  # not a fast-forward: the base moved
+                return False
+            if "HTTP 422" in said or "HTTP 403" in said:  # the base's own rules refused the update
+                raise LandingRefused(_message(said)) from e
+            raise
+        return True
+
+    def batch_branches(self, repo: str) -> list[str]:
+        listed = self._list(["api", "--paginate", f"repos/{repo}/git/matching-refs/heads/{BATCH_PREFIX}"])
+        return [name for found in listed if (name := _text(found.get("ref")).removeprefix("refs/heads/"))]
+
+    def end_batch(self, repo: str, branch: str) -> None:
+        try:
+            self.gh(["api", "-X", "DELETE", f"repos/{repo}/git/refs/heads/{quote(branch, safe='/')}"])
+        except GithubError as e:
+            if "HTTP 404" not in str(e) and "HTTP 422" not in str(e):  # already gone
+                raise
+
+    def _tip(self, repo: str, branch: str) -> str:
+        found = self._object(["api", f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}"])
+        sha = _text((found.get("object") or {}).get("sha")) if isinstance(found, dict) else ""
+        if not sha:
+            raise GithubError("gh_bad_output", f"{repo}: no tip for {branch}")
+        return sha
 
     # --- check runs and pull comments ---------------------------------------------------------------
 
@@ -533,6 +585,15 @@ class GhPullHub(GhHub):
 
 
 _NO_PROTECTION_403 = ("Upgrade to GitHub Pro", "Branch not protected")
+
+
+def _message(said: str) -> str:
+    """What GitHub said, from a failed `gh` call's text: between `gh: ` and ` (HTTP`."""
+
+    start = said.find("gh: ")
+    start = 0 if start < 0 else start + len("gh: ")
+    end = said.rfind(" (HTTP")
+    return said[start:end if end >= start else len(said)].strip()
 
 
 def _unprotected(error: GithubError) -> bool:

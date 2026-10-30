@@ -23,6 +23,15 @@ from orch_it.tickets.hub import Comment, Hub, Issue
 PENDING, PASSED, FAILED, NO_RESULT = "pending", "passed", "failed", "no_result"
 
 
+class LandingRefused(Exception):
+    """The base's own rules refused a batch landing (branch protection, a required check, a rule that wants a pull
+    request): `reason` is GitHub's message. Not a failed call: the line goes on one pull request at a time."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
 @dataclass(frozen=True)
 class Pull:
     repo: str
@@ -110,6 +119,24 @@ class PullHub(Hub, Protocol):
     def merge(self, repo: str, number: int, head_sha: str, method: str) -> str | None:
         """Merge only if the head is still `head_sha`; the merge commit's sha, None when GitHub
         refused (the head moved, the base moved under strict protection, a check is not green)."""
+
+    def start_batch(self, repo: str, base: str, branch: str) -> str:
+        """Make `branch` at the tip of `base`; the tip's sha. The merge line's batch branch (#414 item 5)."""
+
+    def add_to_batch(self, repo: str, branch: str, head_sha: str) -> str | None:
+        """Merge the commit `head_sha` into `branch` with a merge commit; the branch's new tip, or None when the two
+        conflict (nothing changed)."""
+
+    def advance_base(self, repo: str, base: str, sha: str) -> bool:
+        """Move `base` forward to `sha`, never otherwise: False when `base` is not an ancestor of `sha` (it moved since
+        the batch was made); the pull requests whose heads `sha` holds end merged. The base's own rules refusing the
+        update raise `LandingRefused`."""
+
+    def end_batch(self, repo: str, branch: str) -> None:
+        """Delete a batch branch; one already gone is not an error."""
+
+    def batch_branches(self, repo: str) -> list[str]:
+        """The names of the repo's batch branches (`orch-batch/...`), as GitHub lists them now."""
 
     def rerun(self, repo: str, run_id: str) -> None:
         """Run the failed and cancelled jobs of an Actions run again."""
