@@ -35,9 +35,9 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     # Per change: 4 minutes = ceil(2.6 minutes x 1.5), the first measured per-change job (2:36, pull request 213, one run).
-    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 16 minutes,
-    # unmeasured: set to 1.5 x the first nightly's job.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 16 || 4 }}
+    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 6 minutes,
+    # the first measured nightly job: 3 min 24 s x 1.5 = 5 min 6 s, rounded up to 6 minutes (run 41020341857, a manual run with slow_and_live).
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 6 || 4 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,7 +125,7 @@ jobs:
     runs-on: windows-latest
     # Per change: 5 minutes = ceil(2.7 minutes x 1.5), the first measured per-change job (2:44, pull request 213, one run).
     # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 16 minutes,
-    # unmeasured: set to 1.5 x the first nightly's job.
+    # the first measured nightly job: 10 min 40 s x 1.5 = 16 minutes (run 41020341857, a manual run with slow_and_live).
     timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 16 || 5 }}
     steps:
       - uses: actions/checkout@v4
@@ -190,9 +190,9 @@ jobs:
   foreign-linux:
     runs-on: ubuntu-latest
     # Per change: 9 minutes = ceil(5.95 minutes x 1.5), the first measured per-change job (5:57, pull request 213, one run).
-    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 11 minutes,
-    # unmeasured: set to 1.5 x the first nightly's job.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 11 || 9 }}
+    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 12 minutes,
+    # the first measured nightly job: 7 min 41 s x 1.5 = 11 min 32 s, rounded up to 12 minutes (run 41020341857, a manual run with slow_and_live).
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 12 || 9 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -216,9 +216,9 @@ jobs:
   foreign-windows:
     runs-on: windows-latest
     # Per change: 12 minutes = ceil(7.6 minutes x 1.5), the first measured per-change job (7:36, pull request 213, one run).
-    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 40 minutes,
-    # unmeasured: set to 1.5 x the first nightly's job.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 40 || 12 }}
+    # Nightly (the `env.NIGHTLY` condition, written out here because `env` is not readable in a job-level timeout): 33 minutes,
+    # the first measured nightly job: 21 min 59 s x 1.5 = 32 min 59 s, rounded up to 33 minutes (run 41020341857, a manual run with slow_and_live).
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)) && 33 || 12 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -237,11 +237,12 @@ jobs:
           path: junit.xml
           if-no-files-found: ignore
 
-  # The nightly schedule only: macOS is no machine of the owner's, so its foreign run is read on the nightly. Its PATH
-  # takes the same bin rule as Linux's (no bare `python`); on the nightly the script runs the slow tests too, as the
-  # nightly windows job does, and leaves out the live ones (no token in the foreign setup).
+  # The nightly rule only (a schedule run, or a manual run with slow_and_live, as `env.NIGHTLY`): macOS is no machine of the
+  # owner's, so its foreign run is read on the nightly. Its PATH takes the same bin rule as Linux's (no bare `python`); on
+  # the nightly the script runs the slow tests too, as the nightly windows job does, and leaves out the live ones (no token
+  # in the foreign setup).
   foreign-macos:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.slow_and_live)
     runs-on: macos-latest
     timeout-minutes: 30  # unmeasured: set to 1.5 x the first nightly's job
     steps:
