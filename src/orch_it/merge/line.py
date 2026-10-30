@@ -44,6 +44,12 @@ protection refuses the landing (note `batch landing refused: <why>`) sends the r
 batches first deletes the `orch-batch/` branches older than `lock_stale_minutes`. `batch_size` 1, or no suite, is the
 one-by-one line above.
 
+Before each ask of the place rule for a run (the batch's pass, the run of a failing test's ids on main) the line asks its
+`priority_hold` (#414 item 4, `testruns/priority.py`): while it names a repo of the account with a higher
+`github_priority` that has a ready member and the account's jobs are at their concurrency, the line waits (every
+`poll_seconds`) and asks again; held to the run's bound, nothing starts, every member stays for the next run (note
+`start held for <repo>`, detail `priority_hold`).
+
 Events: a `line` step, run `line:<repo>@<start>` (started `base`, `prs`; ended `merged`, `left`,
 reason `empty`, `next_run` or `bound`; `failed` with `error` when the run breaks; `refused` with
 `lock_busy`/`lock_stale` when the lock is not had) and one `line.served` per turn under that run
@@ -164,8 +170,10 @@ class _Line:
     ready_at: dict[int, datetime] = field(default_factory=dict)  # pr -> its ready time, as members() read it
     suite: batch.Suite | None = None  # the required suite on a commit; None: no batches
     batches_made: int = 0
+    priority_hold: Callable[[], str | None] | None = None  # the repo whose ready member holds the start; None: none does
     held: str | None = None  # the run stops, nothing is sent back; why (a turn's detail): main is red on every test a
-    # batch failed (`main_red`), or a required name stays not green (`checks_missing`)
+    # batch failed (`main_red`), a required name stays not green (`checks_missing`), or the start is held for a repo
+    # of higher priority to the run's bound (`priority_hold`)
     refused: str | None = None  # the base's own reason for refusing a batch landing: the rest goes one by one
     notes: list[str] = field(default_factory=list)
 
@@ -208,12 +216,7 @@ class _Line:
 
     def members(self) -> list[_Member]:
         found = []
-        for pull in self.hub.open_pulls(self.repo, self.base):
-            if pull.draft or (pull.head_repo or "").lower() != self.repo.lower():
-                continue
-            ready = marks.ready_since(marks.of_layer(self.hub.pull_comments(self.repo, pull.number), self.owner))
-            if ready is None:
-                continue
+        for pull, ready in marks.ready_pulls(self.hub, self.repo, self.base, self.owner):
             found.append(_Member(pull, ready.at if ready else pull.created_at, refers_to(pull.body)))
             self.ready_at[pull.number] = found[-1].ready_at
         return sorted(found, key=lambda m: (m.ready_at, m.pull.number))
@@ -249,7 +252,9 @@ class _Line:
             made = self.combine(group)
             group = [m for m in group if m.pull.number not in made.gone]  # a rebuild serves only the stayers
             try:
-                if made.included:
+                if made.included and (rival := self.wait_for_turn()):
+                    self.yield_to(made, rival)
+                elif made.included:
                     result, by_check, unmet = self.tested(made)
                     if unmet:
                         self.hold(made, unmet)
@@ -313,6 +318,25 @@ class _Line:
 
         return min(self.deadline, self.clock() + timedelta(minutes=self.settings.check_minutes))
 
+    def wait_for_turn(self) -> str | None:
+        """Before a run is asked for: None when no repo of higher priority holds the start; else wait (`poll_wait`) and
+        ask again, and the repo still holding it at the run's bound."""
+
+        if self.priority_hold is None:
+            return None
+        while (rival := self.priority_hold()) is not None:
+            if self.clock() >= self.deadline:
+                return rival
+            self.sleep(poll_wait(self.hub, self.settings))
+        return None
+
+    def yield_to(self, made: _Batch, rival: str) -> None:
+        """The start held for `rival` to the run's bound: nothing runs, the run stops, no member is sent back."""
+
+        self.held = "priority_hold"
+        self.notes.append(f"start held for {rival}: a ready member of higher priority, the account at its concurrency")
+        self.postpone(made.included, "bound", "priority_hold")
+
     def hold(self, made: _Batch, unmet: tuple[str, ...]) -> None:
         """A required name not green when the wait ended: nothing lands, the run stops, no member is sent back."""
 
@@ -330,6 +354,9 @@ class _Line:
         known = set().union(*(red.ids for red in reds if red.ids is not None))
         if not (any(red.covers(ids) for red in reds) or ids <= known):
             return False
+        if rival := self.wait_for_turn():
+            self.yield_to(made, rival)
+            return True
         on_main = self.suite(made.base_sha, only=failing)
         if on_main.outcome != batch.FAILED or not ids <= {red_main.normal(test_id) for test_id in on_main.failing}:
             return False
@@ -516,11 +543,13 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
              clock: Callable[[], datetime] = lambda: datetime.now(UTC), sleep: Callable[[float], None] = time.sleep,
              root: Path | None = None, holder: str | None = None, on_wait: Callable[[lock.Holder], None] | None = None,
              role: str = ROLE, required: tuple[str, ...] | None = None,
-             owner: str | None = None, suite: batch.Suite | None = None) -> LineReport:
+             owner: str | None = None, suite: batch.Suite | None = None,
+             priority_hold: Callable[[], str | None] | None = None) -> LineReport:
     """Run the repo's merge line once; see the module text. Another line holding the lock past
     `lock_wait_minutes`, or a stale lock, is `LockError` (and a `line` step ended `refused`); a run
     that breaks ends its step `failed` (`error`). `suite`: the required suite on a commit (`batch.place_rule_suite`),
-    which the batches need; none, or `batch_size` 1, serves one pull request at a time."""
+    which the batches need; none, or `batch_size` 1, serves one pull request at a time. `priority_hold`: what the line
+    asks before it asks for a run (`testruns/priority.hold_of`); None: nothing holds the start."""
 
     if required is None:
         required = required_checks_now(repo)
@@ -530,7 +559,7 @@ def run_line(hub: PullHub, store: Store, repo: str, base: str, *, settings: Merg
                        on_wait=on_wait):
             line = _Line(hub, store, repo, base, settings, clock, sleep, role, required,
                          (owner or repo.split("/")[0]).lower(), clock() + timedelta(minutes=settings.line_minutes), run,
-                         suite=suite)
+                         suite=suite, priority_hold=priority_hold)
             record.write(store, repo, None, role, run, "line",
                          [("step.started", {"base": base, "prs": len(line.members())})])
             try:

@@ -1,6 +1,7 @@
 """The merge flow's commands (#400): `merge unlock` removes only a stale repo lock and says whose it
 was, with a `lock.removed` event; a refusal prints `error: <code>` and exits 2."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -219,6 +220,32 @@ def test_merge_line_hands_run_line_a_suite_when_batch_size_is_two_or_more_and_no
         assert (code, err) == (0, "")
         assert out == f"line of {REPO} into main: merged=0 left=0 empty" + chr(10)
         assert len(seen) == 1 and callable(seen[0]) == expect_suite and (seen[0] is None) == (not expect_suite)
+
+
+def test_merge_line_hands_run_line_a_priority_hold_only_when_a_repo_of_its_account_is_set_above_it(
+        github, tmp_path, capsys, monkeypatch):
+    from orch_it.merge.line import LineReport
+
+    monkeypatch.setattr(lock.installation, "data_folder", lambda: tmp_path / "data")
+    given = []
+
+    def fake(hub, store, repo, base, **kwargs):
+        given.append(kwargs.get("priority_hold"))
+        return LineReport(repo, base, (), "empty")
+
+    monkeypatch.setattr(commands, "run_line", fake)
+    tree = clone_of_repo(tmp_path / "clone")
+    settings_file = tmp_path / "settings.json"
+    owner = REPO.split("/")[0]
+    for text, expect_hold in (("{}", False),
+                              (json.dumps({"repos": {REPO: {"github_priority": 1}}}), False),
+                              (json.dumps({"repos": {f"{owner}/other-z": {"github_priority": 4}}}), True),
+                              (json.dumps({"repos": {"stranger-q/other-z": {"github_priority": 4}}}), False)):
+        settings_file.write_text(text, "utf-8")
+        given.clear()
+        code, _, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "line", "--repo", REPO,
+                           "--work-tree", str(tree))
+        assert (code, err) == (0, "") and len(given) == 1 and callable(given[0]) == expect_hold, text
 
 
 def test_merge_line_prints_batch_off_before_the_line_runs_and_its_notes_before_the_summary(
