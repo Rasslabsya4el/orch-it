@@ -42,18 +42,25 @@ def no_login_call(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_real_gh_in_test_runs(monkeypatch):
-    """No test starts the real `gh` (#414 unit 14): every `gh` call of the layer goes through `_call_gh` in
-    `orch_it.testruns.github` (`run_gh` and `call_gh` both call it by name at call time), so that one name refuses
-    here as `gh_failed`. A github place then reads as GitHub unreadable and is off, whatever default `gh` it was built
-    with (`run_tests`, `GithubPlace` with no `gh`, the merge command). A test that wants a `gh` passes its own."""
+    """No test starts the real `gh` (#414 unit 14): every `gh` call of the layer ends in `subprocess.run(["gh", ...])`
+    inside `_call_gh` in `orch_it.testruns.github`, so that one process start refuses here as `gh_failed`. A github
+    place then reads as GitHub unreadable and is off, whatever default `gh` it was built with (`run_tests`,
+    `GithubPlace` with no `gh`, the merge command). The refusal sits at the process start, below `run_gh` and `_call_gh`,
+    so a test of their error mapping (timeout, failed exit, missing `gh`) puts its own `subprocess.run` over it and
+    still reaches the real code; any other command passes through. A test that wants a `gh` passes its own."""
 
-    from orch_it.testruns import github
+    import subprocess
+
     from orch_it.testruns.github import GithubError
 
-    def refused(args, timeout=None):
-        raise GithubError("gh_failed", "no real gh in a test: " + " ".join(args[:3]))
+    real_run = subprocess.run
 
-    monkeypatch.setattr(github, "_call_gh", refused)
+    def run(command, *args, **kwargs):
+        if isinstance(command, (list, tuple)) and command and command[0] == "gh":
+            raise GithubError("gh_failed", "no real gh in a test: " + " ".join(command[1:4]))
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
 
 
 @pytest.fixture

@@ -682,6 +682,13 @@ def test_the_default_runner_is_bounded_and_hides_the_console_window(monkeypatch)
     assert seen["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def test_a_test_that_overrides_nothing_never_reaches_the_real_gh():
+    with pytest.raises(GithubError) as error:
+        github.run_gh(["api", "x"])
+    assert error.value.code == "gh_failed"
+    assert "no real gh in a test" in str(error.value)
+
+
 def test_the_default_runner_turns_a_missing_gh_into_gh_failed(monkeypatch):
     def missing(*args, **kwargs):
         raise FileNotFoundError("gh")
