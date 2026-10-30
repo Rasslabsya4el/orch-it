@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -672,6 +673,18 @@ def _skills(args) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run a command. The text it writes to a human is for the repo whose folder it runs in: that folder is the
+    command's target, named here once (#464), never read from a default deeper down."""
+
+    try:
+        here = os.getcwd()
+    except OSError:  # the folder was removed under the process: git then says no work tree, and the language is English
+        here = "."
+    with settings.target(folder=here):
+        return _main(argv)
+
+
+def _main(argv: list[str] | None) -> int:
     try:
         args = _parser().parse_args(argv)
     except SystemExit as e:

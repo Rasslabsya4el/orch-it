@@ -524,9 +524,10 @@ def test_a_tickets_hook_reason_takes_its_words_from_the_table(tmp_path, monkeypa
     transcript = WITHOUT_SKILL if key == "ticket_write_ticket_missing" else WITH_SKILL
 
     def make():
-        call = ticket_hook._Call.of(argv, str(tmp_path))
+        here = str(Path.cwd())  # the tree whose language the case sets: the call runs there (#464)
+        call = ticket_hook._Call.of(argv, here)
         codes, lines, repo = call.judge({"transcript_path": str(transcript)}, hubs.get(key),
-                                        lambda folder: REPO, str(tmp_path), Values(), {})
+                                        lambda folder: REPO, here, Values(), {})
         return "\n".join(lines)
 
     texts = in_each_language(tmp_path, monkeypatch, make)

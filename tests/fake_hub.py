@@ -25,6 +25,7 @@ class FakeHub:
         self.parents: dict[tuple[str, int], tuple[str, int]] = {}
         self.runs: dict[tuple[str, str], RunState] = {}
         self.versions: dict[str, str] = {}
+        self.files: dict[tuple[str, str], str | Exception] = {}  # (repo, path) -> text; an Exception is raised
         self.writes: list[tuple[str, int, str, list[str]]] = []
         self.failing: set[tuple[str, int]] = set()  # issues every call about fails
         self.pins: dict[str, list[int]] = {}
@@ -103,6 +104,12 @@ class FakeHub:
 
     def layer_version(self, repo):
         return self.versions.get(repo)
+
+    def file(self, repo, path):
+        answer = self.files.get((repo, path))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
     def listed(self, repo, label):
         return [issue for (r, _), issue in sorted(self.issues.items())
