@@ -8,9 +8,10 @@ like any other report; the job's GitHub conclusion decides the outcome:
 
 - `success`: passed, always (the report only gives the rows and the counts);
 - `failure`: failed `red` when the report holds a red case, else no_result `summary_missing`;
-- `cancelled`: no_result `cut` when the job ran for at least the setting
-  `github_job_timeout_minutes` (default 9, the workflow's per-change bound; GitHub may call a job that hit the workflow's
-  `timeout-minutes` cancelled), else stopped `superseded` when a newer run superseded its run,
+- `cancelled`: no_result `cut` when the job ran for at least its bound: the job's own `timeout-minutes` in the workflow
+  text (the nightly value for a `schedule` run, the smaller of the two for a `workflow_dispatch` run, else the
+  per-change one; see `job_bound_of`), or the setting `github_job_timeout_minutes` when the workflow gives the job none.
+  GitHub may call a job that hit its `timeout-minutes` cancelled; else stopped `superseded` when a newer run superseded its run,
   else stopped with no reason. A newer run supersedes a run when it was created after it (and
   before `now`), has the same event and another head commit, and, for pull request runs, the
   same pull request number (else the same head branch);
@@ -48,6 +49,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from orch_it import settings
 from orch_it.events import schema
@@ -152,7 +154,7 @@ def _call_gh(args: list[str], timeout: int | None = None) -> str:
 
 
 def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str | None = None,
-                  now: datetime | None = None, newest: int | None = None) -> ImportReport:
+                  now: datetime | None = None, newest: int | None = None, workflow_text: str = "") -> ImportReport:
     """Write the events of `repo`'s `tests` workflow runs the store does not hold yet.
 
     `gh` takes the argument list of one `gh` call and returns its stdout (default: the real
@@ -163,7 +165,8 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
     runs (created at or after `since`), a whole number from 1 to `MAX_PER_PAGE`, read with one
     unpaginated list call, so the number of `gh` calls is the same whatever the history holds;
     None: every run, page after page. In that mode only the listed completed runs can supersede
-    a cancelled one: a cancelled run whose superseder is still running gets reason None."""
+    a cancelled one: a cancelled run whose superseder is still running gets reason None.
+    `workflow_text`: the text of the `tests` workflow file, whose `timeout-minutes` bound each job (empty: none)."""
 
     gh = gh or run_gh
     if not schema.is_repo(repo):
@@ -187,7 +190,7 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
                   key=lambda r: (_created(r), r["id"]))
     report = ImportReport(runs_read=len(runs))
     stored = _stored_ends(store, repo)
-    importer = _Importer(store, repo, gh, required, job_bound, every_run, now, report)
+    importer = _Importer(store, repo, gh, required, job_bound, every_run, now, report, workflow_text=workflow_text)
     with store.writer() as writer:
         for run in runs:
             if run.get("status") != "completed":
@@ -209,13 +212,14 @@ def import_github(store: Store, repo: str, *, gh: Gh | None = None, since: str |
 
 def import_one_run(store: Store, repo: str, run_id: int, *, gh: Gh | None = None, now: datetime | None = None,
                    required: tuple[str, ...] | None = None, keep: Path | None = None,
-                   timed: bool = True) -> ImportReport:
+                   timed: bool = True, workflow_text: str = "") -> ImportReport:
     """Write the events of the one run `run_id` of `repo`, whatever its own status says (#414 decision 11: a run's
     own status can stay not-completed long after every job has ended; the caller has settled on the jobs). The
     events are the ones `import_github` writes for a completed run, with the same ids. `required`: the check names
     (default: the setting `required_checks`). `keep`: a folder that gets a copy of each job's JUnit report, named by
     its run, job and attempt. `timed` False: the jobs' end events carry no start or run minutes (the caller keeps
-    the run's own time, so the rule reads one time per run). A `gh` failure raises `GithubError`."""
+    the run's own time, so the rule reads one time per run). `workflow_text`: the `tests` workflow file's text, whose
+    `timeout-minutes` bound each job (empty: the setting only). A `gh` failure raises `GithubError`."""
 
     gh = gh or run_gh
     if not schema.is_repo(repo):
@@ -233,7 +237,8 @@ def import_one_run(store: Store, repo: str, run_id: int, *, gh: Gh | None = None
     if _moment(run.get("created_at")) is None:
         raise GithubError("gh_bad_output", f"run {run['id']} has no created_at")
     report = ImportReport(runs_read=1)
-    importer = _Importer(store, repo, gh, names, _job_timeout_minutes(config), [run], now, report, keep, timed)
+    importer = _Importer(store, repo, gh, names, _job_timeout_minutes(config), [run], now, report, keep, timed,
+                         workflow_text)
     with store.writer() as writer:
         importer.import_run(run, writer)
     return report
@@ -290,6 +295,109 @@ def _job_timeout_minutes(config: dict) -> float:
             or not math.isfinite(minutes) or minutes <= 0):
         raise settings.SettingsError("bad_setting", JOB_TIMEOUT_SETTING)
     return minutes
+
+
+# the expression `${{ (<nightly condition>) && <nightly> || <per change> }}`: the groups are nightly, per change
+_BOUND_EXPRESSION = re.compile(r"\$\{\{.*&&\s*(\d+)\s*\|\|\s*(\d+)\s*\}\}")
+
+
+class JobBound(NamedTuple):
+    """A job's bound in minutes: the per-change one and the nightly one, by name (the regex groups come nightly first)."""
+    per_change: int
+    nightly: int
+
+
+def _bound_pair(value: str) -> JobBound | None:
+    """A job's `timeout-minutes` value: one whole number for both bounds, or the expression
+    `${{ (<the nightly condition>) && <nightly minutes> || <per change minutes> }}`; None for any other form."""
+
+    if value.isdigit():
+        return JobBound(int(value), int(value))
+    found = _BOUND_EXPRESSION.fullmatch(value)
+    return JobBound(per_change=int(found.group(2)), nightly=int(found.group(1))) if found else None
+
+
+def workflow_bounds(text: str) -> dict[str, JobBound]:
+    """Each job's bound in the workflow `text`, by the job's check name (its `name`, else its key). A job whose
+    `timeout-minutes` is none of the two forms, or has none, is left out."""
+
+    bounds = {}
+    for job in jobs_of(text):
+        pair = _bound_pair(job["timeout"]) if job["timeout"] else None
+        if pair is not None:
+            bounds[job["name"] or job["key"]] = pair
+    return bounds
+
+
+def job_bound_of(bounds: dict[str, JobBound], name: str, event: str | None, fallback: float) -> float:
+    """The minutes a job named `name` may run in a run of `event`: a `schedule` run gets the job's nightly bound, a
+    `workflow_dispatch` run the smaller of its two bounds, any other event its per-change one; `fallback` (the setting)
+    when the workflow gives the job none.
+
+    A dispatch run's listing does not show the `slow_and_live` input, so a person's cancel after the smaller bound
+    cannot be told from a timeout: every such cancel is read as a cut, and the smaller bound makes every timeout a cut."""
+
+    bound = bounds.get(name)
+    if bound is None:
+        return fallback
+    if event == "schedule":
+        return bound.nightly
+    if event == "workflow_dispatch":
+        return min(bound)
+    return bound.per_change
+
+
+def _unquote(text: str) -> str:
+    text = text.strip()
+    return text[1:-1] if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"" else text
+
+
+def jobs_of(text: str) -> list[dict]:
+    """The jobs of a workflow's `jobs:` section: `key`, `name` (or None), `labels` (the `runs-on` labels) and `timeout`
+    (the raw `timeout-minutes` value, or None). A line scan, no YAML parser in the dependencies."""
+
+    jobs: list[dict] = []
+    in_jobs, job_indent, child_indent, listing = False, None, None, False
+    for raw in text.splitlines():
+        line = raw.split(" #")[0].rstrip()
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            in_jobs, job_indent, child_indent, listing = stripped == "jobs:", None, None, False
+            continue
+        if not in_jobs:
+            continue
+        if job_indent is None:
+            job_indent = indent
+        if indent == job_indent:
+            jobs.append({"key": _unquote(stripped.partition(":")[0]), "name": None, "labels": [], "timeout": None})
+            child_indent, listing = None, False
+            continue
+        if not jobs:
+            continue
+        if child_indent is None:
+            child_indent = indent
+        job = jobs[-1]
+        if listing and stripped.startswith("-"):
+            job["labels"].append(_unquote(stripped[1:].strip()))
+            continue
+        listing = False
+        if indent != child_indent:
+            continue
+        key, _, value = stripped.partition(":")
+        value = value.strip()
+        if key == "name":
+            job["name"] = _unquote(value)
+        elif key == "runs-on":
+            if value:
+                job["labels"] += [_unquote(v.strip()) for v in value.strip("[]").split(",") if v.strip()]
+            else:
+                listing = True
+        elif key == "timeout-minutes":
+            job["timeout"] = value
+    return jobs
 
 
 def json_values(text: str) -> list:
@@ -423,9 +531,11 @@ class _Target:
 
 
 class _Importer:
-    def __init__(self, store, repo, gh, required, job_bound, every_run, now, report, keep=None, timed=True):
+    def __init__(self, store, repo, gh, required, job_bound, every_run, now, report, keep=None, timed=True,
+                 workflow_text=""):
         self.store, self.repo, self.gh, self.keep, self.timed = store, repo, gh, keep, timed
         self.required, self.job_bound, self.now, self.report = required, job_bound, now, report
+        self.bounds = workflow_bounds(workflow_text)  # each job's own bound; `job_bound` only where it has none
         self.budgeted: set[int] = set()  # runs whose Actions budget reading is among the events built
         self.facts_of_run = {run["id"]: _facts(run) for run in every_run}
 
@@ -542,7 +652,7 @@ class _Importer:
         else:
             job_created, job_started = _moment(job.get("created_at")), _moment(job.get("started_at"))
             job_ended = _moment(job.get("completed_at"))
-            hit_bound = self._ran_to_the_bound(job, job_started, job_ended)
+            hit_bound = self._ran_to_the_bound(run, target.name, job, job_started, job_ended)
             end, found, reading = self._judge(run, target, listed, hit_bound or job.get("conclusion") == "timed_out")
             if not found:
                 self.report.reports_missing += 1
@@ -590,12 +700,14 @@ class _Importer:
                                   envelope | {"step": "test_run"}, end.ended_detail() | minutes))
         return events
 
-    def _ran_to_the_bound(self, job: dict, started: datetime | None, ended: datetime | None) -> bool:
-        """A cancelled job that ran for the bound of the workflow's `timeout-minutes` or more:
-        GitHub may call such a job cancelled rather than timed out."""
+    def _ran_to_the_bound(self, run: dict, name: str, job: dict, started: datetime | None,
+                          ended: datetime | None) -> bool:
+        """A cancelled job that ran for its bound or more: the workflow's `timeout-minutes` of the job for the run's
+        event, else the setting. GitHub may call such a job cancelled rather than timed out."""
 
         minutes = _minutes(started, ended)
-        return job.get("conclusion") == "cancelled" and minutes is not None and minutes >= self.job_bound
+        bound = job_bound_of(self.bounds, name, run.get("event"), self.job_bound)
+        return job.get("conclusion") == "cancelled" and minutes is not None and minutes >= bound
 
     def _by_conclusion(self, run: dict, job: dict, end: outcome.RunEnd, hit_bound: bool) -> outcome.RunEnd:
         conclusion = job.get("conclusion")
