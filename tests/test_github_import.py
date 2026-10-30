@@ -71,7 +71,8 @@ class FakeGh:
                 return self.first_page(args[-1].partition("?")[2])
             return self.pages("workflow_runs", self.runs)
         run_id = int(parts[5])
-        if len(parts) == 6:  # the one run
+        is_one_run_path = len(parts) == 6
+        if is_one_run_path:
             return json.dumps(next(r for r in self.runs if r["id"] == run_id))
         if parts[-1] == "jobs":
             return self.pages("jobs", self.jobs[run_id])
@@ -1137,13 +1138,30 @@ def test_completed_before_keeps_the_runs_completed_before_the_moment_since_the_f
 
 
 # #462: a `gh` read that fails on the real service is no verdict on the importer. A judged run whose pairs are not
-# stored is read again this many times, `RETRY_WAIT_S` apart; one still failing is left out of the expectation.
+# stored is read again this many times, `RETRY_WAIT_S` apart after a failed read; one still failing is left out of
+# the expectation. Only these codes are such failures: any other code can be an importer bug and fails the test.
 READ_RETRIES, RETRY_WAIT_S = 2, 20
+READ_FAILURES = ("gh_failed", "gh_timeout")
 PULL_REQUEST_RUNS_LISTED = 10  # the newest pull request runs the log comparison may pick from
-LOGS_COMPARED_RUNS = 3  # how many of them it compares
+LOGS_COMPARED_RUNS = 3  # how many of them it compares (and reads: it stops reading at that many)
 
 
-def required_jobs(gh, repo, run):
+def pair_key(run_id, job):
+    return f"github:{run_id}/{job['id']}/{job['run_attempt']}"
+
+
+def human_duration(seconds):
+    """Seconds under ~90 s, then minutes, then hours and minutes past ~90 min."""
+
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    minutes = seconds / 60
+    if minutes < 90:
+        return f"{minutes:.0f} min"
+    return f"{minutes // 60:.0f} h {minutes % 60:.0f} min"
+
+
+def required_jobs(repo, gh, run):
     jobs = github._items(gh(["api", "--paginate", f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=all&per_page=100"]),
                          "jobs")
     return [j for j in jobs if j["name"] in (LINUX_CHECK, WINDOWS_CHECK) and j["conclusion"] != "skipped"]
@@ -1151,25 +1169,27 @@ def required_jobs(gh, repo, run):
 
 def read_judged(store, repo, gh, judged, *, wait=RETRY_WAIT_S):
     """(jobs_of, unreadable): each judged run's required jobs by run id, and the runs `gh` would not serve by run id ->
-    code. A run whose jobs have no stored pair is imported again (`import_one_run` writes only what is missing)
-    up to `READ_RETRIES` times; a run that fails with a `gh` error on the last try is unreadable, never judged short.
-    A run read whole whose pairs are still missing stays in `jobs_of`: that is the importer's fault."""
+    code. A run whose jobs have no stored pair is imported again (`import_one_run` writes only what is missing);
+    after a failed read the next try comes `wait` s later, up to `READ_RETRIES` times, and a run still failing with a
+    code of `READ_FAILURES` is unreadable, never judged short. Any other `GithubError` raises. A run read whole whose
+    pairs are still missing stays in `jobs_of`: that is the importer's fault."""
 
     jobs_of, unreadable = {}, {}
     for run in judged:
         targets, error = None, None
-        for attempt in range(READ_RETRIES + 1):
-            if attempt:
+        for _ in range(READ_RETRIES + 1):
+            if error is not None:
                 time.sleep(wait)
             try:
-                targets = required_jobs(gh, repo, run)
+                targets = required_jobs(repo, gh, run)
                 held = pairs(store)
-                if all(f"github:{run['id']}/{j['id']}/{j['run_attempt']}" in held for j in targets):
-                    error = None
-                    break
-                github.import_one_run(store, repo, run["id"], gh=gh)
+                if not all(pair_key(run["id"], j) in held for j in targets):
+                    github.import_one_run(store, repo, run["id"], gh=gh)
                 error = None
+                break
             except GithubError as e:
+                if e.code not in READ_FAILURES:
+                    raise
                 error = e
         if error is not None:
             unreadable[run["id"]] = error.code
@@ -1178,7 +1198,7 @@ def read_judged(store, repo, gh, judged, *, wait=RETRY_WAIT_S):
     return jobs_of, unreadable
 
 
-def pull_request_runs(gh, repo, moment, since, count=PULL_REQUEST_RUNS_LISTED):
+def pull_request_runs(repo, gh, moment, since, count=PULL_REQUEST_RUNS_LISTED):
     """The newest `count` completed pull request runs of the workflow completed before `moment`: their own listing,
     so the runs of other events that filled the newest judged ones leave them in place."""
 
@@ -1187,20 +1207,27 @@ def pull_request_runs(gh, repo, moment, since, count=PULL_REQUEST_RUNS_LISTED):
     return completed_before(listing["workflow_runs"], moment, since)[:count]
 
 
-def compare_logs(store, repo, gh, runs, jobs_of, *, runs_wanted=LOGS_COMPARED_RUNS):
-    """How many runs (newest first, at most `runs_wanted`) had a job whose stored test count was compared with the
-    count its log gives; a job without a report, or whose log `gh` will not serve, is left out. A count that differs
-    raises AssertionError."""
+def compare_logs(store, repo, gh, runs, jobs_of, *, wait=RETRY_WAIT_S):
+    """(compared, unreadable): how many runs (newest first, until `LOGS_COMPARED_RUNS`) had a job whose stored test
+    count was compared with the count its log gives, and the runs `gh` would not serve by run id -> code. A run not in
+    `jobs_of` is read with `read_judged` when its turn comes, so no more runs are read than the comparison needs. A job
+    without a report, or whose log `gh` will not serve, is left out. A count that differs, or pairs missing for a run
+    that was read, raises AssertionError."""
 
-    compared = 0
+    compared, unreadable, jobs_of = 0, {}, dict(jobs_of)
     for run in runs:
-        if compared == runs_wanted:
+        if compared == LOGS_COMPARED_RUNS:
             break
+        if run["id"] not in jobs_of:
+            read, left_out = read_judged(store, repo, gh, [run], wait=wait)
+            jobs_of |= read
+            unreadable |= left_out
         counted = False
         for job in jobs_of.get(run["id"], []):
-            key = f"github:{run['id']}/{job['id']}/{job['run_attempt']}"
-            ended = pairs(store)[key][1]
-            if job["conclusion"] not in ("success", "failure") or not ended["summary_seen"]:
+            key = pair_key(run["id"], job)
+            held = pairs(store)
+            assert key in held, f"run {run['id']}: no pair stored for {key} although the run was read"
+            if job["conclusion"] not in ("success", "failure") or not held[key][1]["summary_seen"]:
                 continue
             try:
                 log = gh(["run", "view", str(run["id"]), "-R", repo, "--log", "--job", str(job["id"])])
@@ -1210,44 +1237,76 @@ def compare_logs(store, repo, gh, runs, jobs_of, *, runs_wanted=LOGS_COMPARED_RU
             assert logged_count_matches(rows, log), key
             counted = True
         compared += counted
-    return compared
+    return compared, unreadable
 
 
-MOMENT, SINCE = "2026-10-27T00:00:00Z","2026-10-26T00:00:00Z"  # after BASE's runs: the fake runs all completed before
+MOMENT, SINCE = "2026-10-27T00:00:00Z", "2026-10-26T00:00:00Z"  # after BASE's runs: the fake runs all completed before
 
 
-def judged_of(gh):
-    return completed_before(gh.runs, MOMENT, SINCE)
+def stored_jobs(jobs_of):
+    return {pair_key(run_id, job) for run_id, jobs in jobs_of.items() for job in jobs}
 
 
-def stored_jobs(store, jobs_of):
-    return {f"github:{run_id}/{job['id']}/{job['run_attempt']}" for run_id, jobs in jobs_of.items() for job in jobs}
-
-
-def test_a_run_whose_read_failed_just_after_it_finished_is_read_again_and_judged(gh, store):
-    """#462 shape A: the first import of a run fails with gh_failed (a read GitHub did not serve yet); the old check
-    asserted the run's pairs after that one import and failed. The run is read again and its pairs are checked."""
+def test_a_run_whose_first_gh_read_failed_is_read_again_and_judged(gh, store):
+    """#462 shape A: a `gh` read about a judged run fails (a transient failure of the service, not a run that just
+    finished: the failed runs had finished hours before), the importer counts the run gh_failed and skips it, and the
+    old check asserted the run's pairs after that one import with no re-read. The run is read again and judged."""
 
     gh.add_run(101, created=0)
     gh.add_run(102, created=3600)
     refused = []
 
-    def not_served_yet(args):
+    def transient(args):
         if args[0] == "run" and args[2] == "102" and not refused:
             refused.append(args)
             return True
         return False
 
-    gh.fail_when = not_served_yet
+    gh.fail_when = transient
     first = run_import(store, gh, newest=5)
     assert (first.runs_failed, first.failure_codes) == (1, ["gh_failed"])  # what the old check met
     assert not any(run.startswith("github:102/") for run in pairs(store))
 
-    jobs_of, unreadable = read_judged(store, REPO, gh, judged_of(gh), wait=0)
+    jobs_of, unreadable = read_judged(store, REPO, gh, completed_before(gh.runs, MOMENT, SINCE), wait=0)
     assert unreadable == {}
     assert sorted(jobs_of) == [101, 102]
-    assert stored_jobs(store, jobs_of) <= set(pairs(store))
-    assert len(stored_jobs(store, jobs_of)) == 4
+    assert stored_jobs(jobs_of) <= set(pairs(store))
+    assert len(stored_jobs(jobs_of)) == 4
+
+
+def test_a_failed_read_is_waited_on_but_a_read_that_worked_is_not(gh, store, monkeypatch):
+    gh.add_run(101, created=0)
+    gh.add_run(102, created=3600)
+    gh.fail_when = lambda args: args[0] == "run" and args[2] == "102"
+    run_import(store, gh, newest=5)
+    waits = []
+    monkeypatch.setattr(time, "sleep", waits.append)
+    read_judged(store, REPO, gh, completed_before(gh.runs, MOMENT, SINCE), wait=7)
+    assert waits == [7] * READ_RETRIES  # run 102 failed every try; run 101 was stored and cost no wait
+
+    gh.fail_when = None
+    waits.clear()
+    read_judged(store, REPO, gh, completed_before(gh.runs, MOMENT, SINCE), wait=7)
+    assert waits == []  # run 102 read and imported at once: no sleep after a read that worked
+
+
+def test_a_gh_error_that_is_no_failed_read_raises_through_the_judged_read(gh, store):
+    """Only gh_failed and gh_timeout are a read the service did not serve; gh_bad_output can be an importer bug."""
+
+    gh.add_run(101, created=0)
+    run_import(store, gh, newest=5)
+
+    def garbled(args):
+        return "{not json" if "/jobs" in args[-1] else gh(args)
+
+    with pytest.raises(GithubError) as raised:
+        read_judged(store, REPO, garbled, completed_before(gh.runs, MOMENT, SINCE), wait=0)
+    assert raised.value.code == "gh_bad_output"
+
+
+def test_human_duration_is_seconds_under_90_then_minutes_then_hours_and_minutes():
+    assert [human_duration(s) for s in (45, 89, 396, 5399, 5400, 7500)] == [
+        "45 s", "89 s", "7 min", "90 min", "1 h 30 min", "2 h 5 min"]
 
 
 def test_a_run_that_cannot_be_read_is_left_out_and_not_counted_as_failed(gh, store):
@@ -1256,17 +1315,17 @@ def test_a_run_that_cannot_be_read_is_left_out_and_not_counted_as_failed(gh, sto
     gh.fail_when = lambda args: args[0] == "run" and args[2] == "102"  # every read of run 102 fails
 
     run_import(store, gh, newest=5)
-    jobs_of, unreadable = read_judged(store, REPO, gh, judged_of(gh), wait=0)
+    jobs_of, unreadable = read_judged(store, REPO, gh, completed_before(gh.runs, MOMENT, SINCE), wait=0)
     assert unreadable == {102: "gh_failed"}
     assert sorted(jobs_of) == [101]
-    assert stored_jobs(store, jobs_of) <= set(pairs(store))
+    assert stored_jobs(jobs_of) <= set(pairs(store))
 
 
 def test_a_log_that_cannot_be_read_is_left_out_of_the_count_comparison(gh, store):
     gh.add_run(101, created=0)
     gh.add_run(102, created=3600)
     run_import(store, gh, newest=5)
-    jobs_of, unreadable = read_judged(store, REPO, gh, judged_of(gh), wait=0)
+    jobs_of, unreadable = read_judged(store, REPO, gh, completed_before(gh.runs, MOMENT, SINCE), wait=0)
     assert unreadable == {}
 
     def logs(args):
@@ -1275,7 +1334,8 @@ def test_a_log_that_cannot_be_read_is_left_out_of_the_count_comparison(gh, store
         return "linux\tpytest\t2026-10-26T10:03:00Z 2 passed, 1 skipped in 1.00s\n"
 
     runs = {r["id"]: r for r in gh.runs}
-    assert compare_logs(store, REPO, logs, [runs[102], runs[101]], jobs_of) == 1  # run 101 compared, run 102 left out
+    compared, left_out = compare_logs(store, REPO, logs, [runs[102], runs[101]], jobs_of)
+    assert (compared, left_out) == (1, {})  # run 101 compared, run 102's log left out
 
     def wrong(args):
         return "linux\tpytest\t2026-10-26T10:03:00Z 5 passed in 1.00s\n"
@@ -1294,8 +1354,33 @@ def test_the_pull_request_runs_are_listed_whatever_newer_runs_filled_the_judged_
     judged = newest_judged(gh.runs, MOMENT, SINCE, 3)
     assert [r["event"] for r in judged] == ["workflow_dispatch"] * 3  # the old window held no pull request run
 
-    found = pull_request_runs(gh, REPO, MOMENT, SINCE)
+    found = pull_request_runs(REPO, gh, MOMENT, SINCE)
     assert [r["id"] for r in found] == [101]
+
+
+def test_a_pull_request_run_is_read_when_its_turn_comes_and_no_more_runs_than_the_comparison_needs(gh, store):
+    for n in range(1, 6):
+        gh.add_run(100 + n, created=3600 * n)
+    run_import(store, gh, newest=2)  # the two newest are stored; the rest are read by the comparison itself
+    stored_before = {run.split("/")[0] for run in pairs(store)}
+    assert stored_before == {"github:105", "github:104"}
+    runs = pull_request_runs(REPO, gh, MOMENT, SINCE)
+    gh.calls.clear()
+
+    log = "linux\tpytest\t2026-10-26T10:03:00Z 2 passed, 1 skipped in 1.00s\n"
+    compared, left_out = compare_logs(store, REPO, lambda args: log if args[:2] == ["run", "view"] else gh(args), runs, {},
+                                      wait=0)
+    assert (compared, left_out) == (LOGS_COMPARED_RUNS, {})
+    read = {c[-1].split("/")[5] for c in gh.calls if c[0] == "api" and c[-1].endswith("/jobs?filter=all&per_page=100")}
+    assert len(read) == 3  # runs 105, 104 and 103; run 102 and 101 were never asked for
+
+
+def test_a_run_read_through_the_comparison_whose_pairs_were_not_stored_fails_naming_the_run(gh, store):
+    gh.add_run(101, created=0)
+    jobs = required_jobs(REPO, gh, gh.runs[0])
+    assert pairs(store) == {}
+    with pytest.raises(AssertionError, match="run 101"):
+        compare_logs(store, REPO, gh, gh.runs, {101: jobs})
 
 
 @pytest.mark.live
@@ -1305,8 +1390,9 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     same number whatever the history holds: each required
     job of each run completed before a moment 60 s before the first import has a pair with the
     outcome its conclusion maps to and a queue wait when it started; the test rows of the newest
-    3 pull request runs among them equal the counts of their pytest logs; and a second import
-    writes no row of those runs (a run completed later is not judged)."""
+    3 pull request runs completed before that moment (listed apart from the judged runs: the judged ones may hold
+    none, #462) equal the counts of their pytest logs; and a second import writes no row of the judged runs (a run
+    completed later is not judged). A run `gh` would not serve (gh_failed, gh_timeout) is read again, then left out."""
 
     if shutil.which("gh") is None:
         pytest.skip("no gh")
@@ -1347,7 +1433,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     run_pairs, waits = pairs(store), pairs(store, "wait")
     for run_id, jobs in jobs_of.items():
         for job in jobs:
-            key = f"github:{run_id}/{job['id']}/{job['run_attempt']}"
+            key = pair_key(run_id, job)
             assert key in run_pairs, (f"{key}: first import runs_failed={first_import.runs_failed}, "
                                       f"failure_codes={first_import.failure_codes}")
             assert run_pairs[key][1]["outcome"] in MAPPED.get(job["conclusion"], {"no_result"}), key
@@ -1358,10 +1444,9 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
 
     # the newest pull request runs come from their own listing: what else ran on the repo decides what the newest
     # judged runs are (#462), and none of them need be a pull request run
-    pull_requests = pull_request_runs(counted_gh, live_repo, moment, since)
-    extra = [r for r in pull_requests if r["id"] not in jobs_of and r["id"] not in unreadable]
-    pull_jobs_of, pull_unreadable = read_judged(store, live_repo, counted_gh, extra)
-    compared = compare_logs(store, live_repo, counted_gh, pull_requests, jobs_of | pull_jobs_of)
+    pull_requests = pull_request_runs(live_repo, counted_gh, moment, since)
+    readable_pull_requests = [r for r in pull_requests if r["id"] not in unreadable]
+    compared, pull_unreadable = compare_logs(store, live_repo, counted_gh, readable_pull_requests, jobs_of)
     assert compared, f"no pull request job with a report to count (runs unreadable: {unreadable | pull_unreadable})"
     judged_ids = list(jobs_of)  # a run left out as unreadable may be read by the second import: it is not judged
     before = rows_per_run(store)
@@ -1370,7 +1455,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
     changed = {i: (before.get(i, 0), after.get(i, 0)) for i in judged_ids
                if before.get(i, 0) != after.get(i, 0)}
     assert not changed, f"a second import wrote rows of judged runs (run id: before, after): {changed}"
-    line = (f"live import test: duration {time.monotonic() - started_at:.0f} s;"
+    line = (f"live import test: duration {human_duration(time.monotonic() - started_at)};"
             f" runs judged {len(jobs_of)} of {len(judged)} (unreadable: {len(unreadable)}); setting {newest}; slack {LIVE_SLACK};"
             f" completed tests runs since {since}: {completed_since};"
             f" gh API calls: {len(calls)}")
