@@ -146,6 +146,8 @@ def pytest_runtest_makereport(item, call):
 # Progress (#406 decision 2): with `ORCH_IT_PROGRESS_FILE` set, the controller process appends one line `total done
 # failed` to that file when collection ends (done 0, failed 0) and after each finished test (its phases all reported);
 # a test failed when one of its phases failed. xdist workers write nothing: the controller's hooks see every test.
+# Under xdist the controller collects nothing (xdist's `pytest_collection` returns True, so `pytest_collection_finish`
+# never runs there): the total then comes from the first worker's collected ids, every worker collects the same set.
 ENV_PROGRESS = "ORCH_IT_PROGRESS_FILE"  # the same word as `places.PROGRESS_ENV`: this file imports nothing of orch_it
 _PROGRESS = {"on": False, "total": None, "done": 0, "failed": 0, "red": False}
 
@@ -160,10 +162,19 @@ def _progress_line(*counts: int) -> None:
         f.write(" ".join(str(c) for c in counts) + "\n")
 
 
+def _start_progress(total: int) -> None:
+    if _PROGRESS["on"] and _PROGRESS["total"] is None:
+        _PROGRESS["total"] = total
+        _progress_line(total, 0, 0)
+
+
 def pytest_collection_finish(session):
-    if _PROGRESS["on"]:
-        _PROGRESS["total"] = len(session.items)
-        _progress_line(_PROGRESS["total"], 0, 0)
+    _start_progress(len(session.items))
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_node_collection_finished(node, ids):
+    _start_progress(len(ids))
 
 
 def pytest_runtest_logreport(report):

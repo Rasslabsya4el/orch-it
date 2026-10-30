@@ -141,7 +141,7 @@ class MachinePlace:
         threading.Thread(target=_send, args=(ssh.stdin, [bootstrap_line(), request_line], sent),
                          daemon=True).start()
         try:
-            return self._read(lines, stderr, ssh, scratch, started, request.bound_seconds)
+            return self._read(lines, stderr, ssh, scratch, started, request.bound_seconds, request.progress)
         finally:
             self._close(ssh, sent)
 
@@ -154,7 +154,7 @@ class MachinePlace:
             "ids": request.ids, "identity": _identity_of(origin),
             "workers_max": self.machine.workers_max}) + "\n").encode("utf-8")
 
-    def _read(self, lines, stderr, ssh, scratch, started, bound_seconds) -> PlaceEnd:
+    def _read(self, lines, stderr, ssh, scratch, started, bound_seconds, progress=None) -> PlaceEnd:
         host = self.machine.host
         start = end = None
         deadline = started + self.setup_seconds
@@ -192,6 +192,8 @@ class MachinePlace:
                     end = None
                 if not isinstance(end, dict):
                     raise PlaceVanished(f"{host}: an END line that cannot be read")
+            elif kind == b"PROGRESS" and start is not None and progress is not None:
+                _hand_progress(progress, payload)
             elif kind == b"REPORT" and end is not None:
                 return self._place_end(payload, end, start, scratch)
 
@@ -234,6 +236,15 @@ def _json_or_empty(payload: bytes) -> dict:
     except ValueError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _hand_progress(progress, payload: bytes) -> None:
+    """A PROGRESS line's counts to the run's reader (#406 decision 2). Progress is no result: a line that does not
+    read as three whole numbers is skipped, and the run goes on."""
+    counts = _json_or_empty(payload)
+    values = [counts.get(key) for key in ("total", "done", "failed")]
+    if all(type(value) is int for value in values):
+        progress(*values)
 
 
 def _exit_of(ssh: subprocess.Popen) -> int | None:

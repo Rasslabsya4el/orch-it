@@ -12,10 +12,15 @@ import textwrap
 
 import pytest
 
+from pathlib import Path
+
+from machine_repos import GREEN, Repos
+
 from orch_it.events.store import Store
 from orch_it.settings import SettingsError
 from orch_it.testruns import environment
-from orch_it.testruns.config import TestSettings
+from orch_it.testruns.config import Machine, TestSettings
+from orch_it.testruns.machine import MachinePlace
 from orch_it.testruns.places import PROGRESS_ENV, PlaceEnd, Request, read_progress
 from orch_it.testruns.pytest_plugin import FOLDER as PLUGIN_FOLDER
 from orch_it.testruns.pytest_plugin import orch_it_ids
@@ -158,3 +163,37 @@ def test_a_real_own_run_ends_on_its_counts(tmp_path):
     assert (done.outcome, done.collected, done.failed) == ("failed", 2, 1)
     points = progressed(store)
     assert points and points[-1] == {"done": 2, "total": 2, "failed": 1}
+
+
+#: the far side's command: the bundle carries the plugin, and `-p orch_it_ids` loads it there (#406 decision 2)
+MACHINE_COMMAND = ("{python}", "-m", "pytest", "-q", "-p", "orch_it_ids", "--junitxml={report}")
+FAKE_SSH = (sys.executable, str(Path(__file__).with_name("fake_ssh.py")))
+
+
+def test_a_machine_run_hands_the_far_sides_progress_to_the_reader(tmp_path):
+    repos = Repos(tmp_path, GREEN)  # one passing test
+    box = Machine("box", "fakehost", environment.this_os(), str(tmp_path / "box-checkout"), python=sys.executable)
+    place = MachinePlace(box, origin_url=str(repos.origin), ssh=FAKE_SSH)
+    points = []
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    done = place.run(Request(repos.caller, repos.old, MACHINE_COMMAND, {}, 120.0,
+                             progress=lambda total, d, f: points.append((total, d, f))), scratch)
+    assert done.rc == 0
+    assert points and points[-1] == (1, 1, 0)  # the far side's end point, as its PROGRESS line carried it
+
+
+def test_an_unreadable_progress_line_is_skipped_and_the_run_still_ends(tmp_path):
+    repos = Repos(tmp_path, GREEN)
+    code = ("import sys\n"
+            "print('ORCH-IT START {}', flush=True)\n"
+            "print('ORCH-IT PROGRESS {not json', flush=True)\n"
+            "print('ORCH-IT PROGRESS {\"total\": \"x\", \"done\": 1, \"failed\": 0}', flush=True)\n"
+            "print('ORCH-IT END {\"rc\": 0}', flush=True)\n"
+            "print('ORCH-IT REPORT ', flush=True)\n")
+    place = MachinePlace(Machine("box", "fakehost", "linux", "/srv/x"), origin_url=str(repos.origin),
+                         ssh=(sys.executable, "-c", code))
+    points = []
+    done = place.run(Request(repos.caller, repos.old, MACHINE_COMMAND, {}, 60.0,
+                             progress=lambda *counts: points.append(counts)), tmp_path)
+    assert points == [] and done.rc == 0
