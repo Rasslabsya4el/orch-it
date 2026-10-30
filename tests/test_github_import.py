@@ -964,24 +964,34 @@ def test_the_command_turns_a_gh_failure_into_error_gh_failed_and_exit_2(tmp_path
 
 COUNTED_IN_SUMMARY = ("passed", "failed", "skipped", "error", "errors", "xfailed", "xpassed")
 SUMMARY_LINE = re.compile(r"((?:\d+ [a-z]+(?:, )?)+) in \d+(?:\.\d+)?s")
+GH_UNKNOWN_STEP = "UNKNOWN STEP"  # the step column gh prints on the lines of a job log whose step it cannot name (#462)
 
 
 def summary_count(log: str) -> int | None:
     """The tests a pytest log says it ran: the sum of the counts in every summary line of the log
     (`==== 312 passed, 1 skipped, 1 deselected in 82.07s ====`), deselected ones left out. A job that runs
     pytest in two phases (the parallel one, then the `serial` one) prints one summary line per phase,
-    and the report holds the tests of both."""
+    and the report holds the tests of both. The lines of the test step are those in the `pytest` step
+    column, or in gh's `UNKNOWN STEP` column (#462: gh prints that on every line of some job logs)."""
 
     total, seen = 0, False
     for line in log.splitlines():
         columns = line.split("\t", 2)
-        if len(columns) == 3 and columns[1] != github.TEST_STEP:
-            continue  # only the test step's lines: a pull request body printed by another step says "143 passed in 2.03s" too
+        if len(columns) == 3 and columns[1] not in (github.TEST_STEP, GH_UNKNOWN_STEP):
+            continue  # only the test step's lines (named `pytest`, or gh's `UNKNOWN STEP`): a pull request body printed by another named step says "143 passed in 2.03s" too
         found = SUMMARY_LINE.search(line)
         if found:
             seen = True
             total += sum(int(n) for n, word in re.findall(r"(\d+) ([a-z]+)", found.group(1)) if word in COUNTED_IN_SUMMARY)
     return total if seen else None
+
+
+def logged_count_matches(rows: int, log: str) -> bool:
+    """Whether a job's stored test count agrees with its log: the count the log's summary lines give when it
+    has one, else count None, which the check passes (#462: a log with or without the summary line both pass)."""
+
+    expected = summary_count(log)
+    return expected is None or rows == expected
 
 
 def test_the_summary_count_sums_the_summary_lines_of_both_phases_of_a_job():
@@ -1002,6 +1012,30 @@ def test_the_summary_count_sums_what_ran_and_leaves_deselected_out():
     assert summary_count("linux\tpytest\t2026-10-25T20:50:01.1Z 1 failed, 2 passed, 1 error, 3 warnings"
                          " in 3.00s (0:00:03)") == 4
     assert summary_count("no summary here") is None
+
+
+def test_the_summary_count_reads_the_summary_lines_gh_labels_unknown_step():
+    """#462: gh prints `UNKNOWN STEP` in the step column of every line of a job log whose step it cannot name
+    (the nightly's Windows job 123897445897 of run 41004891487 and its Linux job alike); the pytest summary
+    lines of such a log still count, as the lines of the test step do."""
+
+    log = ("windows\tUNKNOWN STEP\t2026-10-30T04:50:55.7445339Z 1581 passed, 6 skipped in 133.99s (0:02:13)\n"
+           "windows\tUNKNOWN STEP\t2026-10-30T04:50:57.0265820Z 4253 deselected in 0.95s\n")
+    assert summary_count(log) == 1587
+    assert logged_count_matches(1587, log)
+    assert not logged_count_matches(1586, log)
+
+
+def test_a_planted_log_without_a_summary_line_is_count_none_and_passes_the_check():
+    """#462 row 2, the outside case: a job log with no test summary line (pytest did not finish) reads as
+    count None, and the live check passes it whatever the stored rows are."""
+
+    log = ("windows\tUNKNOWN STEP\t2026-10-30T04:49:48.5251817Z ........................ [ 63%]\n"
+           "windows\tUNKNOWN STEP\t2026-10-30T04:50:52.8920894Z ........................ [ 99%]\n"
+           "windows\tUNKNOWN STEP\t2026-10-30T04:50:57.1905058Z merged report: 1587 test cases\n")
+    assert summary_count(log) is None
+    assert logged_count_matches(1587, log)
+    assert logged_count_matches(0, log)
 
 
 # the margin the live test leaves for skew between the runner's clock and GitHub's
@@ -1161,7 +1195,7 @@ def test_every_completed_tests_run_since_the_first_pull_request_run_is_stored_as
             log = counted_gh(["run", "view", str(run["id"]), "-R", live_repo, "--log", "--job", str(job["id"])])
             rows = store.query("SELECT count(*) FROM events WHERE kind = 'test.result' AND run = ?",
                                (key,)).rows[0][0]
-            assert rows == summary_count(log), key
+            assert logged_count_matches(rows, log), key
             compared += 1
     assert compared, "no pull request job with a report to count"
     judged_ids = [r["id"] for r in judged]
