@@ -41,7 +41,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from orch_it import language, settings
@@ -93,11 +93,12 @@ def judge(payload: dict, *, hub, repo_of, values=None) -> Refusal | None:
         return None
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
     dialect = "windows" if payload["tool_name"] == "PowerShell" else "posix"
-    judged = [call for argv, here in _commands(command, dialect, cwd, 0)
-              if (call := _Call.of(argv, here)) is not None]
+    judged = [call for argv, here, env in _commands(command, dialect, cwd, 0)
+              if (call := _Call.of(argv, here, env)) is not None]
     if not judged:  # a substitution the splitter drops (`x=$(gh ...)`) is read from its text
-        judged = [call for inner in _substitution_texts(command) for argv, here in _commands(inner, dialect, cwd, 1)
-                  if (call := _Call.of(argv, here)) is not None]
+        judged = [call for inner in _substitution_texts(command)
+                  for argv, here, env in _commands(inner, dialect, cwd, 1)
+                  if (call := _Call.of(argv, here, env)) is not None]
     if not judged:
         return None
     codes: list[str] = []
@@ -131,10 +132,11 @@ _PS_LEAD = re.compile(r"\$[\w:]+=?|[({]+")
 _PS_WORDS = {"try", "foreach-object", "%", "where-object", "?", "&"}
 
 
-def _commands(command: str, dialect: str, cwd: str | None, depth: int):
-    """(argv, cwd) of every simple command `command` runs, through command substitutions and
+def _commands(command: str, dialect: str, cwd: str | None, depth: int, inherited: dict | None = None):
+    """(argv, cwd, env) of every simple command `command` runs, through command substitutions and
     wrappers (`env`, `sudo`, `timeout 5`, `xargs`, `bash -c '...'`, `cmd /c`, `pwsh -Command`,
-    `eval`), each inner command line read again by part 3's splitter."""
+    `eval`), each inner command line read again by part 3's splitter. `env` is the assignments the
+    command is run with in front of it (`GH_REPO=x gh ...`, `env GH_REPO=x gh ...`), over `inherited`."""
 
     from orch_it.guards.shell import simple_commands
 
@@ -142,13 +144,14 @@ def _commands(command: str, dialect: str, cwd: str | None, depth: int):
         return
     tool = "PowerShell" if dialect == "windows" else "Bash"
     for simple in simple_commands(command, tool=tool, cwd=cwd, env=os.environ, windows=sys.platform == "win32"):
-        yield from _peeled(simple, depth)
+        yield from _peeled(simple, depth, inherited or {})
 
 
-def _peeled(simple, depth: int):
+def _peeled(simple, depth: int, inherited: dict):
     for sub in simple.subs:
-        yield from _peeled(sub, depth + 1)
+        yield from _peeled(sub, depth + 1, inherited)
     words = list(simple.argv)
+    env = {**inherited, **simple.inline_env}
     while words:
         if simple.dialect == "windows" and len(words) > 1 and words[1] == "=":
             words = words[2:]  # `$url = gh ...`: the variable, read or not, is no command
@@ -169,7 +172,8 @@ def _peeled(simple, depth: int):
         if words[0] in _LEAD or name in _PASS:
             words = _past_options(words[1:]) if name in _PASS else words[1:]
             while words and words[0] is not None and re.fullmatch(r"\w+=.*", words[0]):
-                words = words[1:]  # `env GH_REPO=x gh ...`
+                env[words[0].split("=", 1)[0]] = words[0].split("=", 1)[1]  # `env GH_REPO=x gh ...`
+                words = words[1:]
         elif name == "timeout":
             words = _past_options(words[1:])[1:]  # the duration
         elif name == "xargs":
@@ -178,11 +182,11 @@ def _peeled(simple, depth: int):
             inner = _inner_line(words[1:]) if name not in _EVALS else " ".join(w or "" for w in words[1:])
             if inner:
                 dialect = "windows" if name in ("pwsh", "powershell", "cmd", "iex", "invoke-expression") else "posix"
-                yield from _commands(inner, dialect, simple.cwd, depth + 1)
+                yield from _commands(inner, dialect, simple.cwd, depth + 1, env)
             return
         else:
             break
-    yield words, simple.cwd
+    yield words, simple.cwd, env
 
 
 def _substitution_texts(command: str) -> list[str]:
@@ -226,9 +230,10 @@ class _Call:
     action: str  # create | edit
     words: list[str | None]
     cwd: str | None
+    env: dict = field(default_factory=dict)  # the assignments the call is run with in front of it (`GH_REPO=x gh ...`)
 
     @classmethod
-    def of(cls, argv: list, cwd: str | None) -> _Call | None:
+    def of(cls, argv: list, cwd: str | None, env: dict | None = None) -> _Call | None:
         if len(argv) < 3 or not isinstance(argv[0], str):
             return None
         if re.split(r"[\\/]", argv[0])[-1].lower() not in ("gh", "gh.exe") or argv[1] != "issue":
@@ -238,7 +243,7 @@ class _Call:
             taken = 1 if "=" in rest[0] else 2
             before, rest = before + rest[:taken], rest[taken:]
         action = {"create": "create", "new": "create", "edit": "edit"}.get(rest[0] if rest and rest[0] else "")
-        return cls(action, before + rest[1:], cwd) if action else None
+        return cls(action, before + rest[1:], cwd, dict(env or {})) if action else None
 
     def judge(self, payload: dict, hub, repo_of, cwd: str | None, values, memo: dict
               ) -> tuple[list[str], list[str], str | None]:
@@ -249,8 +254,8 @@ class _Call:
 
         flags, targets, unreadable = self._read()
         here = self.cwd or cwd
-        repo = (flags.get("repo", [None])[-1] or next((t[0] for t in targets if t and t[0]), None)
-                or os.environ.get("GH_REPO") or None)  # as gh itself picks the repo
+        repo = _slug(flags.get("repo", [None])[-1] or next((t[0] for t in targets if t and t[0]), None)
+                     or self.env.get("GH_REPO") or os.environ.get("GH_REPO") or None)  # as gh itself picks the repo
         with _target_of(repo, here, hub, repo_of, memo):
             return self._judge(payload, hub, repo_of, here, values, memo, (flags, targets, unreadable, repo))
 
@@ -300,20 +305,20 @@ class _Call:
         if not targets:
             refuse("issue_unreadable", language.text_or_refusal("ticket_no_ticket"))
         for target_repo, number in targets:
-            current = _current(hub, target_repo or repo, number)
-            if current is None:
-                refuse("issue_unreadable", language.text_or_refusal("ticket_not_read", number=number))
-                continue
-            if body is not None and parse(body).park_lines != parse(current.body).park_lines:
-                refuse("park_by_hand", language.text_or_refusal("ticket_parked_line"))
-            if problem:
-                continue
-            text = body if body is not None else current.body
             with _target_of(target_repo or repo, here, hub, repo_of, memo):  # each ticket in its own repo's language
+                current = _current(hub, target_repo or repo, number)
+                if current is None:
+                    refuse("issue_unreadable", language.text_or_refusal("ticket_not_read", number=number))
+                    continue
+                if body is not None and parse(body).park_lines != parse(current.body).park_lines:
+                    refuse("park_by_hand", language.text_or_refusal("ticket_parked_line"))
+                if problem:
+                    continue
+                text = body if body is not None else current.body
                 found = shape.violations(parse(text, title=title if title is not None else current.title))
-            found += shape.literal_violations(text, values=_values_of(values, memo), checks=_checks(here, memo))
-            for violation in found:
-                refuse(violation.code, violation.rule)
+                found += shape.literal_violations(text, values=_values_of(values, memo), checks=_checks(here, memo))
+                for violation in found:
+                    refuse(violation.code, violation.rule)  # the rule's words are read here, in this repo's language
         return list(dict.fromkeys(codes)), list(dict.fromkeys(lines)), repo
 
     def _read(self) -> tuple[dict[str, list[str]], list[tuple[str | None, int]], str | None]:
@@ -388,6 +393,16 @@ class _Files:
         if key not in self._kept:
             self._kept[key] = self._hub.file(repo, path)
         return self._kept[key]
+
+
+_REPO_FORM = re.compile(r"^(?:https?://)?(?:[^/\s]+/)?([A-Za-z0-9-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$", re.IGNORECASE)
+
+
+def _slug(repo: str | None) -> str | None:
+    """`owner/name` of a repo as gh takes it: `[HOST/]OWNER/REPO` or a URL; any other form as written."""
+
+    found = _REPO_FORM.match(repo) if repo else None
+    return found.group(1) if found else repo
 
 
 def _target_of(repo: str | None, here: str | None, hub, repo_of, memo: dict):
