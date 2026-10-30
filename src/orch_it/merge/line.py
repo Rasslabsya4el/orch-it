@@ -33,7 +33,7 @@ merged), which the base's own protection accepts or refuses and the line never p
 passed at another place, the line posts PASSED for each required name that run covered (the test jobs on its OS) and
 nobody posted on that sha; a name it did not cover (a scan, a test job of another OS) stays unposted and holds the
 batch, as does any name nobody posted with GitHub on. A repo whose base
-protects nothing is held by this same wait and refusal: the line alone holds the gate. A name still not green when the wait ends (note `required
+protects nothing is held by this same wait and refusal: the line alone holds the required checks. A name still not green when the wait ends (note `required
 checks not green on <sha>: <names>`) lands nothing and stops the run: every member not landed stays for the next run.
 A red test or a red required name splits the batch in halves, each half is combined again from the base as it then is
 and checked, down to the one red pull request, which goes back to its ticket by the follow's red rule while the others
