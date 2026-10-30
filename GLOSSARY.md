@@ -80,6 +80,12 @@ The time a GitHub job waits from its queued to its started, the wait for a machi
 from the run's status.
 _Avoid_: queue time, pending time, waiting time
 
+**Busy GitHub machines**:
+The account's GitHub machines in use: the jobs in progress and queued on GitHub's Linux and Windows runners, every repo of
+the account and every trigger, read from GitHub's own lists and written as one `github.busy` point; the limit they are
+counted against is the account's capacity (the setting `github_capacity`, or the running count while a queued job has waited).
+_Avoid_: GitHub load, runners busy, machines in use
+
 **Poll**:
 The layer's repeated read of GitHub or a machine until a result appears. The polls that go through the request budget (the
 merge line's waits for a head's required checks, for a turn behind a higher-priority repo and for a member's run, and a

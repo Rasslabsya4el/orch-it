@@ -496,3 +496,25 @@ def test_the_github_poll_grows_while_the_budget_is_under_the_threshold(world):
     sleeps, sleep = sleeping(world)
     run(world, github(world, sleep=sleep), forced="github")
     assert sleeps[0] == 80.0  # the first pause is the grown interval, then the bound's rest
+
+
+# --- the account's busy machines read at the pace (#406 decision 5) -----------------------------------
+
+def test_a_spent_budget_with_no_earlier_reading_holds_the_busy_count_and_says_so(world):
+    world.actions.hold(OTHER, 3)
+    world.actions.core = (0, 5000)  # the core budget is spent: no account read is due
+    availability = GithubPlace(REPO, world.store, DEFAULTS, world.actions).availability(NOW)
+    assert (availability.on, availability.note) == (False, "held by the budget")
+    assert world.store.query("SELECT COUNT(*) FROM events WHERE kind = 'github.busy'").rows == [(0,)]
+
+
+def test_a_paced_out_read_gives_the_load_of_the_earlier_read_of_the_same_place(world):
+    world.actions.hold(OTHER, 3)
+    place = GithubPlace(REPO, world.store, DEFAULTS, world.actions)
+    first = place.availability(NOW)
+    assert (first.on, first.busy, first.note) == (True, 3, "3 busy of 20")
+    world.actions.core = (0, 5000)  # spent: the next read is held, and the earlier load stands
+    later = place.availability(NOW + timedelta(hours=2))  # past the cache: the pace decides
+    assert (later.on, later.busy, later.note) == (True, 3, "3 busy of 20")
+    assert world.store.query("SELECT COUNT(*) FROM events WHERE kind = 'github.busy'").rows == [(1,)]
+

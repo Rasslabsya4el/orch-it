@@ -16,6 +16,13 @@ def test_no_settings_give_the_defaults():
     assert (settings.machines, settings.own_capacity, settings.github_capacity) == ((), 1, 20)
 
 
+def test_the_busy_reader_keys_default_to_30_seconds_and_1000_reads_and_read_their_values():
+    settings = TestSettings.from_settings({}, REPO)
+    assert (settings.github_poll_seconds, settings.github_reads_reserve) == (30.0, 1000)
+    tuned = TestSettings.from_settings({"github_poll_seconds": 45, "github_reads_reserve": 0}, REPO)
+    assert (tuned.github_poll_seconds, tuned.github_reads_reserve) == (45.0, 0)
+
+
 def test_github_tests_set_false_is_the_opt_out():
     assert TestSettings.from_settings({"github_tests": False}, REPO).github_tests is False
 
@@ -56,6 +63,13 @@ def test_a_machine_may_name_its_origin_and_extra_ssh_options():
     ({"test_env": {"BAD NAME": "x"}}, "test_env"),
     ({"github_tests": "yes"}, "github_tests"),
     ({"own_capacity": -1}, "own_capacity"),
+    ({"github_poll_seconds": 0}, "github_poll_seconds"),
+    ({"github_poll_seconds": 3601}, "github_poll_seconds"),
+    ({"github_poll_seconds": True}, "github_poll_seconds"),
+    ({"github_poll_seconds": "30"}, "github_poll_seconds"),
+    ({"github_poll_seconds": float("nan")}, "github_poll_seconds"),
+    ({"github_reads_reserve": -1}, "github_reads_reserve"),
+    ({"github_reads_reserve": 2.5}, "github_reads_reserve"),
     ({"repos": []}, "repos"),
     ({"test_machines": {}}, "test_machines"),
     ({"test_machines": [{"id": "a", "host": "-oProxyCommand=x", "os": "linux", "checkout": "/x"}]},

@@ -226,6 +226,7 @@
     "value.measured": {"name": {}, "value": {}, "unit": {}, "source": {}},
     "view.read": {"view": {}, "item": {}},
     "github.called": {"budget": {"codes": "github_budget"}, "account": {}, "budget_remaining": {}, "budget_limit": {}, "budget_reset": {}},
+    "github.busy": {"running": {}, "queued": {}, "capacity": {}},
     "step.progressed": {},
     "machine.resumed": {"gap_minutes": {}, "cause": {"codes": "resume_cause"}}
   }

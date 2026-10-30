@@ -8,7 +8,9 @@ entry per machine place: `id`, `host`, `os`, `checkout`, optional `capacity` (1)
 `ssh` arguments such as `["-p", "2222"]`), `workers_max`), `own_capacity` (1), `own_workers_max` and a machine's `workers_max`
 (the most workers of a pytest run at a PC place, #414 item 11; default unset: all the cores free there, see
 `workers.py`) and `github_capacity` (20, GitHub's
-concurrent job cap on a free account), `github_priority` (a whole number, 0 for every repo: between repos of one
+concurrent job cap on a free account), `github_poll_seconds` (30.0, #406 decision 5: the most often one account read
+of GitHub's busy machines is made, a number of seconds over 0 up to an hour), `github_reads_reserve` (1000, the remaining
+hourly GitHub count under which the reads wait longer; 0 never waits), `github_priority` (a whole number, 0 for every repo: between repos of one
 account a higher one starts first while the account is at its concurrency, #414 item 4; default in `defaults.json`, read
 by `github_priority`), `required_checks` (the names of the checks a merge is held to; default
 in `defaults.json` beside this module, read by `required_checks`), and the thin Windows job's four keys
@@ -144,6 +146,8 @@ class TestSettings:
     machines: tuple[Machine, ...] = ()
     own_capacity: int = 1
     github_capacity: int = 20
+    github_poll_seconds: float = 30.0  # #406 decision 5: the most often an account read of GitHub's busy machines is made
+    github_reads_reserve: int = 1000  # #406 decision 5: the remaining hourly GitHub count under which reads wait longer
     required_checks: tuple[str, ...] = DEFAULT_REQUIRED_CHECKS
     queue_bound_minutes: float = DEFAULT_QUEUE_BOUND_MINUTES
     own_workers_max: int | None = None  # the most pytest workers at the own place; None: all the cores free
@@ -179,9 +183,12 @@ class TestSettings:
             if not isinstance(merged["github_tests"], bool):
                 raise SettingsError("bad_setting", "github_tests")
             values["github_tests"] = merged["github_tests"]
-        for key, name in (("own_capacity", "own_capacity"), ("github_capacity", "github_capacity")):
+        for key, name in (("own_capacity", "own_capacity"), ("github_capacity", "github_capacity"),
+                          ("github_reads_reserve", "github_reads_reserve")):
             if key in merged:
                 values[name] = _count(key, merged[key])
+        if "github_poll_seconds" in merged:
+            values["github_poll_seconds"] = _seconds("github_poll_seconds", merged["github_poll_seconds"])
         if "own_workers_max" in merged:
             values["own_workers_max"] = _workers_max("own_workers_max", merged["own_workers_max"])
         if "test_machines" in merged:
@@ -208,6 +215,20 @@ def _positive(key: str, value: object) -> float:
     if not (math.isfinite(minutes) and 0 < minutes <= MAX_BOUND_MINUTES):
         raise SettingsError("bad_setting", key)
     return minutes
+
+
+def _seconds(key: str, value: object) -> float:
+    """A poll interval in seconds: more than 0, at most an hour."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SettingsError("bad_setting", key)
+    try:
+        seconds = float(value)
+    except OverflowError:
+        raise SettingsError("bad_setting", key) from None
+    if not (math.isfinite(seconds) and 0 < seconds <= 3600):
+        raise SettingsError("bad_setting", key)
+    return seconds
 
 
 def _count(key: str, value: object) -> int:

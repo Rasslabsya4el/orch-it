@@ -19,7 +19,7 @@ from typing import NamedTuple
 from orch_it.events import github_budget
 from orch_it.events.store import Store
 from orch_it.testruns.config import TestSettings
-from orch_it.testruns.github import Gh, items_of, json_values, moment_of, run_gh
+from orch_it.testruns.github import Gh, GithubError, items_of, json_values, moment_of, run_gh
 
 KIND = "github.busy"
 ROLE = "github"  # the events a GitHub reading writes name the GitHub role, as the importer's do
