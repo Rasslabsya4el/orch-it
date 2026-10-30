@@ -13,15 +13,26 @@ under it. A node id splits on `::` only before its first `[`, as pytest's JUnit 
 collected test that no id names is deselected; an id that names no test is no error here: the
 run's report then lacks it, and the layer reads that as `ids_not_collected` (#394 decision 2).
 With the variable unset, nothing is filtered.
+
+The plugin also tells which tests read a placeholder file (#414 row 15): a file of private data that the place does
+not have, stood in for by a stub. `ORCH_IT_PLACEHOLDERS` lists the stubs' paths (relative to the folder pytest runs
+in, or absolute) separated by `os.pathsep`; the step of a workflow that writes the stubs sets it. A test whose setup,
+call or teardown opens one of them through `open`, `io.open` or `Path.open` (so `read_text` and `read_bytes` too) gets
+a `reads_placeholder` property in the JUnit report, and the layer reruns that test where the real file is. A file read
+by another route (`os.open`, a library's own C reader) is not seen. With the variable unset, nothing is recorded.
 """
 
 from __future__ import annotations
 
+import builtins
+import io
 import os
 
 import pytest
 
 ENV_IDS = "ORCH_IT_IDS_FILE"
+ENV_PLACEHOLDERS = "ORCH_IT_PLACEHOLDERS"
+PLACEHOLDER_PROPERTY = "reads_placeholder"  # the same word as `junit.PLACEHOLDER_PROPERTY`: this file imports nothing of orch_it; a test holds the two equal
 
 
 def _ids() -> list[str] | None:
@@ -84,3 +95,49 @@ def pytest_collection_modifyitems(config, items):
     if drop:
         config.hook.pytest_deselected(items=drop)
     items[:] = keep
+
+
+def _placeholders() -> set[str]:
+    """The real paths of the placeholder files the environment lists."""
+
+    listed = os.environ.get(ENV_PLACEHOLDERS, "")
+    return {os.path.normcase(os.path.realpath(p.strip())) for p in listed.split(os.pathsep) if p.strip()}
+
+
+_PLACEHOLDERS_OPENED: list[str] = []  # the placeholder files the running test has opened so far
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    stubs = _placeholders()
+    if not stubs:
+        yield
+        return
+    _PLACEHOLDERS_OPENED.clear()
+    real_builtin, real_io = builtins.open, io.open
+
+    def watching(real):
+        def opened(file, *args, **kwargs):
+            if isinstance(file, (str, bytes, os.PathLike)):
+                name = os.path.normcase(os.path.realpath(os.fsdecode(file)))
+                if name in stubs and name not in _PLACEHOLDERS_OPENED:
+                    _PLACEHOLDERS_OPENED.append(name)
+            return real(file, *args, **kwargs)
+
+        return opened
+
+    builtins.open, io.open = watching(real_builtin), watching(real_io)
+    try:
+        yield
+    finally:
+        builtins.open, io.open = real_builtin, real_io
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    """The property goes on before the teardown report is made: that report carries the test's properties to the
+    JUnit file."""
+
+    if call.when == "teardown" and _PLACEHOLDERS_OPENED:
+        item.user_properties.append((PLACEHOLDER_PROPERTY, "1"))
+        _PLACEHOLDERS_OPENED.clear()

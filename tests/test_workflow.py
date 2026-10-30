@@ -308,6 +308,49 @@ def test_the_linux_job_requires_the_real_sshd_test_to_run_and_the_windows_job_do
     assert "ORCH_IT_REQUIRE_SSHD" not in windows
 
 
+def pytest_calls_of(script: str) -> list[str]:
+    """The lines of a step's script that start a pytest call."""
+
+    return [line.strip() for line in script.splitlines() if re.match(r"\s*pytest\s", line)]
+
+
+def test_every_pytest_call_of_the_test_jobs_loads_the_ids_plugin_which_flags_placeholder_reads():
+    for job, lines in pytest_job_lines().items():
+        script = run_script(step_named(steps_of(lines), "pytest"))
+        calls = pytest_calls_of(script)
+        assert len(calls) == 2, job  # the parallel and the serial phase
+        for call in calls:
+            assert re.search(r"(^|\s)-p orch_it_ids(\s|$)", call), (job, call)
+
+
+def test_the_pytest_step_of_each_test_job_sets_the_placeholder_list_from_a_repository_variable_and_the_plugin_path():
+    for job, lines in pytest_job_lines().items():
+        step = "\n".join(step_named(steps_of(lines), "pytest"))
+        assert re.search(r"^\s+ORCH_IT_PLACEHOLDERS: \$\{\{ vars\.ORCH_IT_PLACEHOLDERS \}\}$", step, re.M), job
+        assert re.search(r"^\s+PYTHONPATH: \$\{\{ github\.workspace \}\}/src/orch_it/testruns/pytest_plugin$", step, re.M), job
+
+
+def test_the_plugin_path_the_workflow_sets_loads_the_plugin_in_a_real_pytest(tmp_path):
+    step = "\n".join(step_named(steps_of(pytest_job_lines()[LINUX_CHECK]), "pytest"))
+    value = re.search(r"^\s+PYTHONPATH: (.*)$", step, re.M).group(1).replace("${{ github.workspace }}", str(ROOT))
+    (tmp_path / "test_x.py").write_text("def test_x():\n    pass\n", "utf-8")
+    done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "orch_it_ids", "-p", "no:cacheprovider"],
+                          capture_output=True, text=True, timeout=60, cwd=tmp_path, creationflags=NO_WINDOW,
+                          env={k: v for k, v in os.environ.items() if k != "ORCH_IT_PLACEHOLDERS"}
+                          | {"PYTHONPATH": value})
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+@pytest.mark.parametrize("job", PYTEST_JOBS)
+def test_the_stand_in_pytest_is_called_with_the_ids_plugin_in_both_phases(tmp_path, job):
+    done, calls = run_pytest_step(tmp_path, job, "false", ORCH_IT_PLACEHOLDERS="")
+    assert done.returncode == 0, done.stderr
+    assert len(calls) == 2
+    for call in calls:
+        args = call_args(call)
+        assert args[args.index("-p") + 1] == "orch_it_ids", (job, call)
+
+
 # --- the job bounds (#411 unit 4): 9 minutes per change and 16 for the night, each ceil(longest measured job x 1.5) (#421 rule 6) ---
 
 PER_CHANGE_BOUND = 9

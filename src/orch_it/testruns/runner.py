@@ -10,6 +10,7 @@ between the two events stays a live run in the store until its bound and a grace
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 import subprocess
@@ -56,6 +57,8 @@ class RunDone:
     collected: int
     failed: int
     missing_ids: tuple[str, ...] = ()
+    failed_tests: tuple[str, ...] = ()  # the ids of the red cases of this run
+    placeholder_tests: tuple[str, ...] = ()  # the tests that ran on placeholder files at GitHub (see `run_tests`)
 
 
 def read_ids(path: Path) -> list[str]:
@@ -141,7 +144,13 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     left. No place left writes a `wait` on `test_place`: while a place it can free is busy it
     lasts up to `wait_minutes` (default: the bound) on `clock`, re-deciding every poll interval
     (`WAIT_POLL_SECONDS`, longer under the GitHub request budget's threshold, the last one clamped to
-    the time left), else it ends at once; a wait that finds no place ends the run `refused`."""
+    the time left), else it ends at once; a wait that finds no place ends the run `refused`.
+
+    A run at the `github` place that passes does not settle while a test of it read a placeholder file (a stub for
+    private data GitHub does not have; the report marks the test, see `junit.Case.placeholder`): those tests rerun, as
+    a run of their own, at the rule's next place that is not `github`, and that rerun is the run's result, with
+    `placeholder_tests` naming them. A rerun that no place takes ends `refused`, so a placeholder's green lands
+    nothing. A red run, a run at another place or one with no marked test is not rerun."""
 
     work_tree = Path(work_tree)
     if not work_tree.is_dir():
@@ -157,22 +166,34 @@ def run_tests(store: Store, *, work_tree: Path, repo: str, settings: TestSetting
     with store.writer() as writer:
         if place is not None:  # a human's choice: taken as it is, the rule's view kept beside it
             decision = place_rule.Decision(place, "forced", run.decide({}).offered)
-            return run.attempt(writer, places[place], decision)
-        excluded: dict[str, str] = {}  # places that refused or vanished in this run
-        last = None
-        while True:
-            decision = run.decide(excluded)
-            if decision.chosen is None:  # no place left: a wait on test_place, polled only while
-                # a place it can free is busy, else ended at once
-                seconds = _wait_seconds(settings, wait_minutes) if run.may_free(decision, excluded) else 0.0
-                decision = run.wait(writer, excluded, seconds, sleep, clock)
-            if decision.chosen is None:
-                # after a lost or refused attempt, that attempt ends the run; else one refusal
-                return last if last is not None else run.refused(writer, decision)
-            last = run.attempt(writer, places[decision.chosen], decision)
-            if last.outcome not in ("lost", "refused"):
-                return last
-            excluded[last.place] = last.reason
+            done = run.attempt(writer, places[place], decision)
+        else:
+            done = _placed(run, writer, places, {}, wait_minutes, sleep, clock)
+        if done.place != "github" or done.outcome != "passed" or not done.placeholder_tests:
+            return done
+        rerun = _placed(run.with_ids(list(done.placeholder_tests)), writer, places,
+                        {"github": "placeholders"}, wait_minutes, sleep, clock)
+        return replace(rerun, placeholder_tests=done.placeholder_tests)
+
+
+def _placed(run: _Run, writer, places: dict, excluded: dict[str, str], wait_minutes, sleep, clock) -> RunDone:
+    """One run of `run` at the place the rule picks, `excluded` places left out from the start."""
+
+    excluded = dict(excluded)  # plus the places that refused or vanished in this run
+    last = None
+    while True:
+        decision = run.decide(excluded)
+        if decision.chosen is None:  # no place left: a wait on test_place, polled only while
+            # a place it can free is busy, else ended at once
+            seconds = _wait_seconds(run.settings, wait_minutes) if run.may_free(decision, excluded) else 0.0
+            decision = run.wait(writer, excluded, seconds, sleep, clock)
+        if decision.chosen is None:
+            # after a lost or refused attempt, that attempt ends the run; else one refusal
+            return last if last is not None else run.refused(writer, decision)
+        last = run.attempt(writer, places[decision.chosen], decision)
+        if last.outcome not in ("lost", "refused"):
+            return last
+        excluded[last.place] = last.reason
 
 
 def _wait_seconds(settings: TestSettings, wait_minutes: float | None) -> float:
@@ -198,6 +219,14 @@ class _Run:
         status = git_output(work_tree, "status", "--porcelain")
         self.dirty = None if status is None else bool(status)
         self.branch = _branch(work_tree)
+        self.reran: tuple[str, ...] = ()  # the placeholder tests this run reruns; empty: it is no rerun
+
+    def with_ids(self, ids: list[str]) -> _Run:
+        """This run's facts for a run of just `ids` (its own selection)."""
+
+        other = copy.copy(self)
+        other.ids, other.selection, other.reran = ids, selection_of(ids), tuple(ids)
+        return other
 
     def envelope(self, step: str) -> dict:
         return self.base | {"step": step, "run": live_id()}
@@ -298,10 +327,19 @@ class _Run:
                                     slept=place_end.slept)
             for detail in run_end.result_details():
                 writer.write(envelope | {"kind": "test.result", "detail": detail})
-        writer.write(envelope | {"kind": "step.ended",
-                                 "detail": run_end.ended_detail() | _timing(place_end, run_end)})
+        red = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.outcome in outcome.RED_OUTCOMES))
+        detail = run_end.ended_detail() | _timing(place_end, run_end)
+        if self.reran:  # the store says which tests were rerun for being on placeholders, and which failed
+            detail["placeholder_tests"] = list(self.reran)
+            if red:
+                detail["failed_tests"] = list(red)
+        writer.write(envelope | {"kind": "step.ended", "detail": detail})
+        # only GitHub has stubs in place of real files: a marked case at a place that has them is no placeholder
+        placeholder_tests = ()
+        if decision.chosen == "github":
+            placeholder_tests = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.placeholder))
         return RunDone(envelope["run"], decision.chosen, run_end.outcome, run_end.reason,
-                       run_end.collected, run_end.failed, run_end.missing_ids)
+                       run_end.collected, run_end.failed, run_end.missing_ids, red, placeholder_tests)
 
 
 def _unfinished(writer, envelope: dict, place: str | None, run_outcome: str, reason: str,

@@ -403,6 +403,8 @@ def _junit_text(cases: list[junit.Case]) -> str:
         child = {"failed": "<failure message='failed'/>", "error": "<error message='error'/>",
                  "skipped": f"<skipped message={quoteattr(case.skip_reason or '')}/>"}.get(case.outcome, "")
         seconds = "" if case.seconds is None else f" time={quoteattr(repr(case.seconds))}"
+        props = (f"<properties><property name='{junit.PLACEHOLDER_PROPERTY}' value='1'/></properties>"
+                 if case.placeholder else "")
         rows.append(f"<testcase classname={quoteattr(case.classname)} name={quoteattr(case.name)}{seconds}>"
-                    f"{child}</testcase>")
+                    f"{props}{child}</testcase>")
     return (f"<testsuites><testsuite name='github' tests='{len(cases)}'>{''.join(rows)}</testsuite></testsuites>")
