@@ -144,17 +144,19 @@ def pytest_runtest_makereport(item, call):
 
 
 # Progress (#406 decision 2): with `ORCH_IT_PROGRESS_FILE` set, the controller process appends one line `total done
-# failed` to that file when collection ends (done 0, failed 0) and after each finished test (its phases all reported);
-# a test failed when one of its phases failed. xdist workers write nothing: the controller's hooks see every test.
+# failed` to that file when collection ends (done 0, failed 0) and after each finished test. `done` is the number of
+# node ids finished and `failed` the number of node ids with a failed phase, each counted per node id, so the reports
+# of several xdist workers that interleave count each test once and none is credited to another test. xdist workers
+# write nothing: the controller's hooks see every test.
 # Under xdist the controller collects nothing (xdist's `pytest_collection` returns True, so `pytest_collection_finish`
 # never runs there): the total then comes from the first worker's collected ids, every worker collects the same set.
 ENV_PROGRESS = "ORCH_IT_PROGRESS_FILE"  # the same word as `places.PROGRESS_ENV`: this file imports nothing of orch_it
-_PROGRESS = {"on": False, "total": None, "done": 0, "failed": 0, "red": False}
+_PROGRESS = {"on": False, "total": None, "done": set(), "failed": set()}
 
 
 def pytest_configure(config):
     _PROGRESS.update(on=bool(os.environ.get(ENV_PROGRESS)) and not hasattr(config, "workerinput"),
-                     total=None, done=0, failed=0, red=False)
+                     total=None, done=set(), failed=set())
 
 
 def _progress_line(*counts: int) -> None:
@@ -179,14 +181,11 @@ def pytest_xdist_node_collection_finished(node, ids):
 
 def pytest_runtest_logreport(report):
     if _PROGRESS["on"] and report.failed:
-        _PROGRESS["red"] = True
+        _PROGRESS["failed"].add(report.nodeid)
 
 
 def pytest_runtest_logfinish(nodeid, location):
     if not _PROGRESS["on"] or _PROGRESS["total"] is None:
         return
-    _PROGRESS["done"] += 1
-    if _PROGRESS["red"]:
-        _PROGRESS["failed"] += 1
-        _PROGRESS["red"] = False
-    _progress_line(_PROGRESS["total"], _PROGRESS["done"], _PROGRESS["failed"])
+    _PROGRESS["done"].add(nodeid)
+    _progress_line(_PROGRESS["total"], len(_PROGRESS["done"]), len(_PROGRESS["failed"]))

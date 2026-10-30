@@ -216,7 +216,7 @@ class _Progress:
     """The `step.progressed` points of one attempt (#406 decision 2): a point when `done` rose and at least `interval`
     seconds of `clock` have passed since the last point, so points are at most that far apart; and the end's counts
     as the last point (`close`), whatever the time since the one before. A reading that comes while the interval is
-    still running is not kept: the next reading carries the same counts."""
+    still running is not kept: the next reading carries the same counts. The interval limits the mid-run points only."""
 
     def __init__(self, writer, envelope: dict, interval: float, clock):
         self.writer, self.envelope, self.interval, self.clock = writer, envelope, interval, clock
@@ -233,12 +233,12 @@ class _Progress:
         self._write(total, done, failed)
 
     def close(self, total: int, done: int, failed: int) -> None:
-        """The end's counts: the last point, unless the last point already holds them, or the run never got past
-        the last point's `done` (a run that reported nothing writes nothing)."""
+        """The end's counts (`done` the report's collected, `failed` its failed) as the last point. Written whatever the
+        time since the last point, and whatever the last point's `done`, a zero included: the end wins, so a count
+        that goes down (a report with fewer cases than the run streamed, or none) is written too. A last point that
+        already holds these counts is the end point, not written twice."""
 
-        if (total, done, failed) == self.point or done < (self.point[1] if self.point else 0):
-            return
-        if self.point is None and done == 0:
+        if (total, done, failed) == self.point:
             return
         self._write(total, done, failed)
 
@@ -388,7 +388,7 @@ class _Run:
                 writer.write(envelope | {"kind": "test.result", "detail": detail})
         if decision.chosen != "github":  # GitHub's progress is its jobs' steps, not this stream (#406 decision 2)
             progress.close(run_end.collected, run_end.collected, run_end.failed)
-        red =tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.outcome in outcome.RED_OUTCOMES))
+        red = tuple(dict.fromkeys(c.test_id for c in run_end.cases if c.outcome in outcome.RED_OUTCOMES))
         detail = run_end.ended_detail() | _timing(place_end, run_end)
         if place_end.workers is not None:
             detail["workers"] = place_end.workers

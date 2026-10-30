@@ -191,9 +191,139 @@ def test_an_unreadable_progress_line_is_skipped_and_the_run_still_ends(tmp_path)
             "print('ORCH-IT PROGRESS {\"total\": \"x\", \"done\": 1, \"failed\": 0}', flush=True)\n"
             "print('ORCH-IT END {\"rc\": 0}', flush=True)\n"
             "print('ORCH-IT REPORT ', flush=True)\n")
-    place = MachinePlace(Machine("box", "fakehost", "linux", "/srv/x"), origin_url=str(repos.origin),
+    place = MachinePlace(Machine("box", "fakehost", environment.this_os(), "/srv/x"), origin_url=str(repos.origin),
                          ssh=(sys.executable, "-c", code))
     points = []
     done = place.run(Request(repos.caller, repos.old, MACHINE_COMMAND, {}, 60.0,
                              progress=lambda *counts: points.append(counts)), tmp_path)
     assert points == [] and done.rc == 0
+
+
+#: a case of the real session sleeps this long, so the runner's poll (every 0.5 s) sees the run go on
+SESSION_CASE_SECONDS = 0.2
+SESSION_CASES = 36
+SESSION_RED = (5, 17, 30)  # the 1-based cases of the real session that fail
+
+
+def session_module() -> str:
+    cases = [f"def test_{i:02d}():\n    time.sleep({SESSION_CASE_SECONDS})\n    assert {i not in SESSION_RED}\n"
+             for i in range(1, SESSION_CASES + 1)]
+    return "import time\n\n\n" + "\n".join(cases)
+
+
+def test_a_real_pytest_session_through_the_own_place_writes_points_mid_run_and_ends_on_its_counts(tmp_path):
+    """#406 decision 2 on the real path (review finding 1): a real pytest session of 36 cases, three of them failing, the
+    layer's plugin loaded, run through `run_tests` at the own place (`run_command`, the progress file, `on_tick`) with
+    `test_progress_seconds` tiny: several points come before the end, `done` rises from each point to the next, every
+    point is of this run's total, `failed` never goes down, and the last point is the end's counts (36 and 3). The end
+    point is written whatever the time since the last point; the interval limits only the mid-run points."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "test_session.py").write_text(session_module(), "utf-8")
+    store = Store.open(tmp_path / "store")
+    # one worker (`own_workers_max` 1): the cases run one after another, so the poll sees the run go on
+    done = run_tests(store, work_tree=root, repo=REPO,
+                     settings=TestSettings(test_progress_seconds=0.01, own_workers_max=1))
+    assert (done.outcome, done.collected, done.failed) == ("failed", SESSION_CASES, len(SESSION_RED))
+    points = progressed(store)
+    assert len([p for p in points if p["done"] < SESSION_CASES]) >= 3, points  # several points before the end
+    assert all(a["done"] < b["done"] for a, b in zip(points, points[1:]))
+    assert all(p["total"] == SESSION_CASES for p in points)
+    assert all(a["failed"] <= b["failed"] for a, b in zip(points, points[1:]))
+    assert points[-1] == {"done": SESSION_CASES, "total": SESSION_CASES, "failed": len(SESSION_RED)}
+
+
+#: 12 cases; the first three cases to claim a slot fail. Each case's teardown sleeps 0.5 s, so a failing case's window stays
+#: open while the other worker's cases finish inside it. Every case first waits until both workers have started one
+#: (`rendezvous`), so the first two claims come one from each worker at the same time; a claim writes its worker's name.
+OVERLAP_RED = 3
+
+
+def overlap_module() -> str:
+    head = ("import os\nimport time\n\nimport pytest\n\n\n"
+            "@pytest.fixture(autouse=True)\ndef slow_teardown():\n    yield\n    time.sleep(0.5)\n\n\n"
+            "def rendezvous():\n"
+            "    os.makedirs('started', exist_ok=True)\n"
+            "    open(os.path.join('started', os.environ.get('PYTEST_XDIST_WORKER', '')), 'a').close()\n"
+            "    deadline = time.time() + 10\n"
+            "    while time.time() < deadline and not all(\n"
+            "            os.path.exists(os.path.join('started', w)) for w in ('gw0', 'gw1')):\n"
+            "        time.sleep(0.02)\n\n\n"
+            "def claim_red():\n"
+            f"    for k in range({OVERLAP_RED}):\n"
+            "        try:\n"
+            "            os.close(os.open(f'red-{k}', os.O_CREAT | os.O_EXCL))\n"
+            "        except FileExistsError:\n"
+            "            continue\n"
+            "        with open('workers.txt', 'a', encoding='utf-8') as f:\n"
+            "            f.write(os.environ.get('PYTEST_XDIST_WORKER', '') + '\\n')\n"
+            "        return True\n"
+            "    return False\n\n\n")
+    cases = [f"def test_{i:02d}():\n    rendezvous()\n    assert not claim_red()\n" for i in range(1, 13)]
+    return head + "\n\n".join(cases)
+
+
+def test_under_xdist_each_failing_test_counts_once_and_the_failed_count_never_goes_down(tmp_path):
+    """#406 decision 2, under xdist (review finding 2): `-n 2`, twelve cases, three failing ones spread over both workers,
+    their windows overlapping. The controller's progress file counts each failing case once, credited to its own node
+    id, so its last line is `12 12 3`, and neither `done` nor `failed` goes down from one line to the next."""
+    root = tmp_path / "suite"
+    root.mkdir()
+    (root / "test_overlap.py").write_text(overlap_module(), "utf-8")
+    progress = tmp_path / "progress.txt"
+    env = {**os.environ, "PYTHONPATH": str(PLUGIN_FOLDER), PROGRESS_ENV: str(progress)}
+    subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "orch_it_ids", "-p", "no:cacheprovider", "-n", "2"],
+                   cwd=root, env=env, capture_output=True, check=False)
+    lines = [tuple(int(n) for n in line.split()) for line in progress.read_text("utf-8").splitlines()]
+    assert lines[0] == (12, 0, 0) and len(lines) == 13
+    assert all(a[1] <= b[1] and a[2] <= b[2] for a, b in zip(lines, lines[1:]))
+    assert lines[-1] == (12, 12, OVERLAP_RED)
+    assert set((root / "workers.txt").read_text("utf-8").split()) == {"gw0", "gw1"}  # the failures ran on both workers
+
+
+class Scripted:
+    """An own place that streams `readings` (total, done, failed) to the runner, 0.5 s of the fake clock apart, then
+    writes a junit report of `cases` (one bool a case: True when it failed) as its end."""
+
+    id = "own"
+    os = environment.this_os()
+
+    def __init__(self, clock, readings, cases):
+        self.clock, self.readings, self.cases = clock, readings, cases
+
+    def run(self, request: Request, scratch):
+        for reading in self.readings:
+            self.clock.advance(0.5)
+            request.progress(*reading)
+        report = scratch / "junit.xml"
+        body = "".join(f'<testcase classname="test_scripted" name="test_{i}">'
+                       + ('<failure message="boom"/>' if red else "") + "</testcase>"
+                       for i, red in enumerate(self.cases, start=1))
+        report.write_text(f'<testsuites><testsuite name="scripted" tests="{len(self.cases)}" '
+                          f'failures="{sum(self.cases)}" errors="0">' + body + "</testsuite></testsuites>", "utf-8")
+        return PlaceEnd(report, False, False, 1, 0.0, 0.0)
+
+
+def test_a_run_that_collects_no_case_writes_a_zero_end_point(tmp_path):
+    """The end point is written whatever the counts and the time since the last point (review finding 3): a run whose
+    report has no case ends on `0 0 0`, the end's counts, though no mid-run point was ever written."""
+    store = Store.open(tmp_path / "store")
+    done = run_tests(store, work_tree=tmp_path, repo=REPO, settings=TestSettings(test_progress_seconds=10.0),
+                     places={"own": Scripted(Clock(), [], [])}, clock=Clock())
+    assert (done.collected, done.failed) == (0, 0)
+    assert progressed(store) == [{"done": 0, "total": 0, "failed": 0}]
+
+
+def test_the_end_point_wins_over_a_mid_run_point_that_is_larger_than_the_end(tmp_path):
+    """The end point is written whatever the counts and the time since the last point (review finding 3): the run
+    streamed 150 of 200 cases (its last point 141 done), then its report has 100 cases, all passed. The end point,
+    100 done of 100, is written although its `done` is below the last point's; the end wins."""
+    clock = Clock()
+    store = Store.open(tmp_path / "store")
+    readings = [(200, n, 0) for n in range(1, 151)]
+    done = run_tests(store, work_tree=tmp_path, repo=REPO, settings=TestSettings(test_progress_seconds=10.0),
+                     places={"own": Scripted(clock, readings, [False] * 100)}, clock=clock)
+    assert done.collected == 100
+    points = progressed(store)
+    assert points[-2]["done"] == 141  # the last mid-run point, larger than the end's 100
+    assert points[-1] == {"done": 100, "total": 100, "failed": 0}
