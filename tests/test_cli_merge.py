@@ -140,7 +140,9 @@ def test_merge_line_says_who_holds_the_line_and_gives_up(github, tmp_path, capsy
     (tmp_path / "settings.json").write_text('{"merge": {"lock_wait_minutes": 0.02, "poll_seconds": 1}}', "utf-8")
     with lock.hold(REPO, "merge line of another session", settings=MergeSettings()):
         code, out, err = run(capsys, "--store", str(tmp_path / "events"), "merge", "line", "--repo", REPO)
-    assert code == 2 and out.startswith("waits: the line of owner-x/repo-y is held by merge line of another session")
+    lines = out.splitlines()  # `batch off:` comes first (no clone here), then the wait
+    assert code == 2 and lines[0].startswith("batch off: ")
+    assert lines[1].startswith("waits: the line of owner-x/repo-y is held by merge line of another session")
     assert err.startswith("error: lock_busy")
 
 
