@@ -265,8 +265,11 @@ class GhHub:
         """The text of the file at `path` on the repo's default branch; None when the repo has no such file."""
 
         found = self._object(["api", f"repos/{repo}/contents/{path}"], missing_ok=True)
-        if found is None or found.get("encoding") != "base64":
+        if found is None:
             return None
+        if found.get("encoding") != "base64":  # a file over 1 MB comes with no content: not read, which is not absent
+            raise GithubError("gh_bad_output", f"{repo}:{path}: GitHub gave no text of the file "
+                                               f"(encoding {found.get('encoding')!r})")
         try:
             return base64.b64decode(found.get("content") or "").decode("utf-8")
         except (ValueError, UnicodeDecodeError):

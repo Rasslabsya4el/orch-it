@@ -465,9 +465,10 @@ def main(text: str | None = None) -> int:
 
     try:
         raw = sys.stdin.read() if text is None else text
-    except Exception:  # noqa: BLE001 - a payload that cannot be read is read as none: the hook then fails open
-        raw = ""
-    with settings.target(folder=settings.payload_folder(raw)):
+        folder = settings.payload_folder(raw)
+    except Exception:  # noqa: BLE001 - a payload or folder that cannot be read: the hook fails open, as for its own error
+        raw, folder = "", "."
+    with settings.target(folder=folder):
         return _main(raw)
 
 

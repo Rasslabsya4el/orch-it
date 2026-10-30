@@ -52,9 +52,8 @@ def configure(setting_file, **values):
     setting_file.write_text(json.dumps(values), "utf-8")
 
 
-def payload(command, cwd):
-    """The call's folder is the work tree the test runs in: the hook reads the language of the payload's folder (#464);
-    `cwd` is the folder the test gave before that and no longer says where the language file is."""
+def payload(command):
+    """The call runs in the work tree the test runs in: the hook reads the language of the payload's folder (#464)."""
     cwd = Path.cwd()
     return {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": command},
             "cwd": str(cwd), "transcript_path": str(WITH_SKILL)}
@@ -81,7 +80,7 @@ def said(capsys):
 def test_a_create_with_a_human_block_under_a_language_with_no_table_is_refused_naming_the_setting(
         tmp_path, capsys, setting_file):
     configure(setting_file, human_language="fr")
-    assert hook.main(json.dumps(payload(create_command(tmp_path), tmp_path))) == 0
+    assert hook.main(json.dumps(payload(create_command(tmp_path)))) == 0
     reason = said(capsys)
     assert reason is not None, "a refusal prints a deny"
     assert "human_language" in reason
@@ -91,7 +90,7 @@ def test_a_create_with_a_human_block_under_a_language_with_no_table_is_refused_n
 
 def test_a_body_edit_under_a_language_with_no_table_is_refused_naming_the_setting(tmp_path, capsys, setting_file):
     configure(setting_file, human_language="fr")
-    assert hook.main(json.dumps(payload(edit_command(tmp_path), tmp_path))) == 0
+    assert hook.main(json.dumps(payload(edit_command(tmp_path)))) == 0
     reason = said(capsys)
     assert reason is not None, "a refusal prints a deny"
     assert "human_language" in reason
@@ -101,13 +100,13 @@ def test_a_body_edit_under_a_language_with_no_table_is_refused_naming_the_settin
 
 def test_under_ru_the_same_create_is_judged_and_passes(tmp_path, capsys, setting_file):
     configure(setting_file, human_language="ru")
-    assert hook.main(json.dumps(payload(create_command(tmp_path), tmp_path))) == 0
+    assert hook.main(json.dumps(payload(create_command(tmp_path)))) == 0
     assert said(capsys) is None
 
 
 def test_unset_the_same_create_is_judged_as_today_english_refuses_the_russian_block(tmp_path, capsys, setting_file):
     configure(setting_file)
-    assert hook.main(json.dumps(payload(create_command(tmp_path), tmp_path))) == 0
+    assert hook.main(json.dumps(payload(create_command(tmp_path)))) == 0
     reason = said(capsys)
     assert reason is not None
     assert "human_field_wrong_language" in reason
@@ -123,7 +122,7 @@ def test_an_unexpected_error_still_fails_open_with_its_event(tmp_path, monkeypat
 
     monkeypatch.setattr(hook, "judge", broken)
     monkeypatch.setattr(hook, "_record", lambda *args, **kwargs: recorded.append(kwargs))
-    assert hook.main(json.dumps(payload(create_command(tmp_path), tmp_path))) == 0
+    assert hook.main(json.dumps(payload(create_command(tmp_path)))) == 0
     assert capsys.readouterr().out == ""
     assert recorded == [{"error": "RuntimeError"}]
 
@@ -132,7 +131,7 @@ def test_an_unreadable_settings_file_still_fails_open_with_its_event(tmp_path, m
     setting_file.write_text("[]", "utf-8")  # no JSON object of settings: settings_unreadable, not a bad setting
     recorded = []
     monkeypatch.setattr(hook, "_record", lambda *args, **kwargs: recorded.append(kwargs))
-    assert hook.main(json.dumps(payload(create_command(tmp_path), tmp_path))) == 0
+    assert hook.main(json.dumps(payload(create_command(tmp_path)))) == 0
     assert capsys.readouterr().out == ""
     assert recorded == [{"error": "SettingsError"}]
 
@@ -140,7 +139,7 @@ def test_an_unreadable_settings_file_still_fails_open_with_its_event(tmp_path, m
 def test_a_named_bad_setting_keeps_the_codes_of_the_calls_before_it(tmp_path, setting_file):
     configure(setting_file, human_language="fr")
     too_long = f"gh issue edit 10 --repo {REPO} --title '{'x' * 300}'"  # a title-only call: no human block read
-    refusal = hook.judge(payload(f"{too_long} && {edit_command(tmp_path)}", tmp_path), hub=hub(),
+    refusal = hook.judge(payload(f"{too_long} && {edit_command(tmp_path)}"), hub=hub(),
                          repo_of=lambda folder: REPO)
     assert "title_too_long" in refusal.codes
     assert refusal.codes[-1] == "bad_setting"

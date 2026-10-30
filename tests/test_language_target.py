@@ -171,3 +171,92 @@ def test_the_text_hook_and_the_command_line_name_a_target_of_their_own(trees, mo
     assert cli.main([]) == 0
     assert text_hook.main(json.dumps({"cwd": str(en)})) == 0
     assert seen == ["ru", "en"]
+
+
+def test_no_target_is_no_settings_error_and_no_refusal_text(monkeypatch):
+    """Row 6: the read fails in `text` and in `text_or_refusal` alike; a refusal helper never turns it into words."""
+    monkeypatch.setattr(settings, "_target", None)
+    assert not issubclass(settings.NoTargetError, settings.SettingsError)
+    with pytest.raises(settings.NoTargetError):
+        language.text_or_refusal(RU_KEY_SAMPLE, number=1)
+    with pytest.raises(settings.NoTargetError):
+        language.text(RU_KEY_SAMPLE, number=1)
+
+
+def test_the_hub_raises_a_file_it_cannot_read_as_text_naming_the_repo():
+    """A file GitHub returns with no base64 content (over 1 MB) is no `en`: the read failed, and says whose."""
+
+    def gh(args):
+        return json.dumps({"encoding": "none", "content": "", "size": 2_000_000})
+
+    with pytest.raises(GithubError) as refused:
+        GhHub(gh).file(REPO, "settings.json")
+    assert REPO in str(refused.value)
+    with settings.target(repo=REPO, hub=GhHub(gh)):
+        with pytest.raises(settings.SettingsFileError) as named:
+            settings.human_language()
+    assert REPO in named.value.file
+
+
+def test_a_hook_that_cannot_find_its_own_folder_still_fails_open(monkeypatch, capsys):
+    from orch_it.tickets import hook
+
+    def gone():
+        raise OSError("the folder is gone")
+
+    monkeypatch.setattr("os.getcwd", gone)
+    assert hook.main("not json") == 0  # no payload folder, no process folder: the hook passes the call, not crashes
+
+
+def _module_names_with_an_entry_point():
+    """Every module under src/orch_it with a top-level `main` or an `if __name__ == "__main__"` block."""
+    import ast
+
+    root = Path(settings.__file__).parent
+    found = set()
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text("utf-8"))
+        mains = any(isinstance(n, ast.FunctionDef) and n.name == "main" for n in tree.body)
+        guarded = any(isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                      and getattr(n.test.left, "id", "") == "__name__" for n in tree.body)
+        if mains or guarded:
+            found.add(".".join(path.relative_to(root.parent).with_suffix("").parts))
+    return found
+
+
+# the entry points that reach a language read, which name their target: each is run below; the one that writes no
+# human text is listed with why. A new entry point fails the first test until it is named here and run below.
+NAMING = {"orch_it.cli", "orch_it.tickets.hook", "orch_it.guards.text_hook"}
+WRITES_NO_HUMAN_TEXT = {"orch_it.__main__": "calls cli.main", "orch_it.testruns.remote": "the remote worker's JSON only"}
+
+
+def test_every_entry_point_is_listed_as_naming_its_target_or_as_writing_no_human_text():
+    assert _module_names_with_an_entry_point() == NAMING | set(WRITES_NO_HUMAN_TEXT)
+    source = (Path(settings.__file__).parent / "testruns" / "remote.py").read_text("utf-8")
+    assert "language" not in source
+
+
+def test_each_entry_point_names_a_target_before_a_language_read(trees, monkeypatch):
+    """Row 6, the drift guard: with the suite's target cleared, the inner work of each entry point reads the language;
+    the entry point must have named one, or `NoTargetError` escapes."""
+    from orch_it import cli
+    from orch_it.guards import text_hook
+    from orch_it.tickets import hook
+
+    ru, _ = trees
+    monkeypatch.setattr(settings, "_target", None)
+    monkeypatch.chdir(ru)
+    read = []
+
+    def reads_the_language(*args):
+        read.append(settings.human_language())
+        return 0
+
+    monkeypatch.setattr(cli, "_main", reads_the_language)
+    monkeypatch.setattr(text_hook, "_check", reads_the_language)
+    monkeypatch.setattr(hook, "_main", reads_the_language)
+    assert cli.main([]) == 0
+    assert text_hook.main("{}") == 0
+    assert hook.main("{}") == 0
+    assert read == ["ru", "ru", "ru"]
+    assert settings._target is None  # each left the process as it found it

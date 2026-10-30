@@ -39,12 +39,13 @@ class SettingsFileError(SettingsError):
         super().__init__("settings_unreadable", f"{file}: {detail}")
 
 
-class NoTargetError(SettingsError):
-    """`no_target`: the human language was read with no target named. Every entry point names the repo its text is
-    for (`target`); a read never falls back to the process's own folder (#464)."""
+class NoTargetError(RuntimeError):
+    """The human language was read with no target named: a defect of the entry point, not a setting. Every entry
+    point names the repo its text is for (`target`); a read never falls back to the process's own folder (#464). Not a
+    `SettingsError`, so no refusal helper turns it into words and no caller treats it as a bad setting."""
 
     def __init__(self):
-        super().__init__("no_target", "the human language was read with no target repo named by the entry point")
+        super().__init__("no_target: the human language was read with no target repo named by the entry point")
 
 
 class HumanLanguageError(SettingsError):
@@ -287,7 +288,12 @@ def payload_folder(raw: str) -> str:
     except ValueError:
         payload = None
     folder = payload.get("cwd") if isinstance(payload, dict) else None
-    return folder if isinstance(folder, str) and folder else os.getcwd()
+    if isinstance(folder, str) and folder:
+        return folder
+    try:
+        return os.getcwd()
+    except OSError:  # the folder was removed under the process: git then says no work tree, and the language is English
+        return "."
 
 
 def work_tree_of(folder: object) -> Path | None:
